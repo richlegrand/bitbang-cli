@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 	"github.com/richlegrand/bitbang/bitbangproxy/internal/signaling"
 )
 

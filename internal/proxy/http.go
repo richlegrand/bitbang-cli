@@ -11,8 +11,9 @@ import (
 	neturl "net/url"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 	"github.com/richlegrand/bitbang/bitbangproxy/internal/auth"
 	"github.com/richlegrand/bitbang/bitbangproxy/internal/protocol"
 )
@@ -380,18 +381,35 @@ func (h *Handler) proxyRequest(streamID uint32, req protocol.Request, body io.Re
 		return
 	}
 
-	// Stream DAT frames as chunks arrive from the local server
+	// Stream DAT frames as chunks arrive from the local server.
+	// Backpressure: cap data channel send buffer to prevent unbounded RAM
+	// growth and head-of-line blocking between concurrent streams. The cap
+	// also bounds bandwidth-delay product -- too low throttles WAN throughput.
+	const maxBuffered = 8 << 20 // 8MB
 	buf := make([]byte, protocol.MaxChunkSize)
 	totalBytes := 0
+	startTime := time.Now()
+	nextLogMB := 50
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			if err := h.sendFrame(streamID, protocol.FlagDAT, chunk); err != nil {
+			for h.DC.BufferedAmount() > maxBuffered {
+				time.Sleep(1 * time.Millisecond)
+			}
+			if err := h.sendFrame(streamID, protocol.FlagDAT, buf[:n]); err != nil {
+				log.Printf("sendFrame failed (stream %d, %d bytes sent so far): %v", streamID, totalBytes, err)
 				return
 			}
 			totalBytes += n
+			if h.Verbose {
+				mb := totalBytes / (1024 * 1024)
+				if mb >= nextLogMB {
+					elapsed := time.Since(startTime).Seconds()
+					speed := float64(mb) / elapsed
+					log.Printf("Upload (stream %d): %d MB (%.1f MB/s)", streamID, mb, speed)
+					nextLogMB += 50
+				}
+			}
 		}
 		if readErr != nil {
 			break // EOF or error

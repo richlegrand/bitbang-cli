@@ -21,7 +21,7 @@ const (
 	FlagFIN = 0x0004 // End of stream
 	FlagDAT = 0x0000 // Data chunk (no flags set)
 
-	MaxChunkSize = 16384 // 16KB max payload per frame
+	MaxChunkSize = 32768 // 32KB max payload per frame (frame stays under 64KB SCTP limit)
 	HeaderSize   = 8
 
 	// ProtocolVersion is sent in the register message. The signaling server

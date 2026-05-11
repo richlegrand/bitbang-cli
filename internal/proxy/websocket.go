@@ -2,9 +2,9 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 
 	"github.com/gorilla/websocket"
 	"github.com/richlegrand/bitbang/bitbangproxy/internal/protocol"
@@ -36,12 +36,12 @@ func (h *Handler) bridgeWebSocket(streamID uint32, pathname string, cookies stri
 	// Resolve target and path (same logic as HTTP)
 	target, wsPath := h.resolveTarget(pathname)
 	// Connect to local WebSocket server with cookies for session auth
-	u := url.URL{Scheme: "ws", Host: target, Path: wsPath}
+	wsURL := fmt.Sprintf("ws://%s%s", target, wsPath)
 	header := http.Header{}
 	if cookies != "" {
 		header.Set("Cookie", cookies)
 	}
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if err != nil {
 		log.Printf("WS connect failed: %s -> %v", pathname, err)
 		// Send FIN to close the browser-side WebSocket
