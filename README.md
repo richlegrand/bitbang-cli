@@ -3,9 +3,9 @@
 ![Tests](https://github.com/richlegrand/bitbangproxy/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/github/license/richlegrand/bitbangproxy)
 
-A WebRTC proxy that connects browsers to any web server on your local network. No port forwarding, no VPN, no software on the target machine.
+BitBangProxy enables full access to your NAS / Jellyfin / Plex / Open WebUI / Flask apps / Node-RED dashboard / etc. from outside your network. It's a single executable that runs on a machine on your local network. It doesn't require port forwarding, VPNs, accounts, or software to be installed on the target machine.
 
-BitBangProxy extends [BitBang](https://github.com/richlegrand/bitbang) with a standalone Go binary that proxies HTTP, WebSocket, and streaming connections through a WebRTC data channel.
+This is part of the [BitBang project](https://github.com/richlegrand/bitbang). 
 
 ## Quick start
 
@@ -33,6 +33,18 @@ https://bitba.ng/<proxy-id>/localhost:3000/admin
 - **PIN protection** -- optional `--pin` flag to restrict access
 - **Redirect handling** -- follows cross-host redirects, passes same-host redirects to the browser
 - **No installation on the target** -- proxy runs on any machine on the same network
+
+## Comparison
+
+| | ngrok | Cloudflare Tunnel | Tailscale | BitBang |
+|---|---|---|---|---|
+| Account required | Yes | Yes | Yes | No |
+| Free tunnels | 1 | Unlimited | Unlimited | Unlimited |
+| Data path | Their servers | Their servers | P2P | P2P |
+| Viewer needs install | No | No | Yes | No |
+| Configuration | CLI flags | Config file + DNS | Dashboard | None |
+
+BitBang's data path is direct between peers. The signaling server (`bitba.ng`) brokers the initial connection, then steps aside.
 
 ## Usage
 
@@ -105,11 +117,10 @@ internal/auth/pin.go           -- PIN verification
 
 See [implementation_notes.md](implementation_notes.md) for detailed design decisions.
 
-## Related
-
-- [BitBang](https://github.com/richlegrand/bitbang) -- Python library for building BitBang devices
-- [BitBang Server](https://github.com/richlegrand/bitbang-server) -- Signaling server and browser runtime
-
 ## License
 
-MIT
+MIT See [LICENSE](LICENSE).
+
+## Contributing
+
+This is a one-person project. Issues and PRs are welcome and genuinely appreciated. I'll do my best to respond promptly.
