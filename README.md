@@ -13,6 +13,7 @@ This is part of the [BitBang project](https://github.com/richlegrand/bitbang).
 # Download the binary for your platform from Releases, then:
 ./bitbangproxy
 ```
+![bitbangproxy screen](https://raw.githubusercontent.com/richlegrand/bitbangproxy/refs/heads/main/assets/bitbangproxy_screen.png)
 
 This prints a URL and waits for connections. Open the URL in a browser, enter a local server address (e.g. `nas.local`, `192.168.1.10:8080`), and you're connected.
 
@@ -88,7 +89,7 @@ The signaling server (`bitba.ng`) brokers the WebRTC handshake, then steps aside
 
 ## Building from source
 
-Requires Go 1.19+:
+Requires Go 1.24+:
 
 ```bash
 go build ./cmd/bitbangproxy/
@@ -106,6 +107,7 @@ GOOS=linux GOARCH=amd64 go build -o bitbangproxy ./cmd/bitbangproxy/
 
 ```
 cmd/bitbangproxy/main.go       -- entry point, CLI flags, connection management
+cmd/bitbangbench/main.go       -- throughput benchmark over SWSP/data-channel
 internal/identity/identity.go  -- RSA keypair, UID derivation, persistence
 internal/signaling/client.go   -- WebSocket signaling, challenge-response auth
 internal/peer/connection.go    -- WebRTC peer connection, ICE, SDP
@@ -115,6 +117,8 @@ internal/proxy/websocket.go    -- WebSocket bridging
 internal/auth/pin.go           -- PIN verification
 ```
 
+Packages under `internal/` are not exposed as a public Go API. To embed bitbang in another program, run `bitbangproxy` as a sidecar binary.
+
 See [implementation_notes.md](implementation_notes.md) for detailed design decisions.
 
 ## License
@@ -123,4 +127,4 @@ MIT See [LICENSE](LICENSE).
 
 ## Contributing
 
-This is a one-person project. Issues and PRs are welcome and genuinely appreciated. I'll do my best to respond promptly.
+Issues and PRs are welcome. 
