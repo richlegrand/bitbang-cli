@@ -24,9 +24,16 @@ const (
 	MaxChunkSize = 32768 // 32KB max payload per frame (frame stays under 64KB SCTP limit)
 	HeaderSize   = 8
 
-	// ProtocolVersion is sent in the register message. The signaling server
-	// rejects devices below its minimum. Bump only for breaking wire changes.
+	// ProtocolVersion is the registration-protocol version sent to the
+	// signaling server on device register. Independent of SWSPVersion
+	// below (which is the data-channel wire protocol).
 	ProtocolVersion = 2
+
+	// SWSPVersion is the data-channel wire protocol version. Sent in
+	// stream-0 `connect` (client → device) and `ready` (device → client).
+	// v3 adds typed SYN payloads and capability negotiation while keeping
+	// the byte-level frame format unchanged from v2.
+	SWSPVersion = 3
 )
 
 // Frame represents a single SWSP frame.
@@ -36,19 +43,40 @@ type Frame struct {
 	Payload  []byte
 }
 
-// Request is the JSON metadata from a SYN frame (browser -> device).
+// Request is the JSON metadata for an HTTP-stream SYN frame. The optional
+// `Type` field is SWSP v3 — it's "http" for new clients; v2 clients omit
+// it and the listener treats missing-type as "http" by default.
 type Request struct {
-	Method        string `json:"method"`
-	Pathname      string `json:"pathname"`
+	Type          string            `json:"type,omitempty"`
+	Method        string            `json:"method"`
+	Pathname      string            `json:"pathname"`
 	ContentType   string            `json:"contentType,omitempty"`
 	ContentLength int               `json:"contentLength,omitempty"`
 	Headers       map[string]string `json:"headers,omitempty"`
 }
 
-// Response is the JSON metadata for a SYN frame (device -> browser).
+// Response is the JSON metadata for an HTTP-stream response SYN frame.
 type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers"`
+}
+
+// WebSocketOpen is the JSON metadata for a WebSocket-stream SYN frame.
+type WebSocketOpen struct {
+	Type     string `json:"type"`
+	Pathname string `json:"pathname"`
+	Cookies  string `json:"cookies,omitempty"`
+}
+
+// FileOp is the JSON metadata for a file-stream SYN frame (SWSP v3).
+// `Op` is one of "get", "put", "list", "stat", "delete".
+type FileOp struct {
+	Type      string `json:"type"`
+	Op        string `json:"op"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size,omitempty"`      // for put: total bytes the client will send
+	Overwrite bool   `json:"overwrite,omitempty"` // for put
+	Range     []int64 `json:"range,omitempty"`    // for get: [start, end] inclusive byte range
 }
 
 // ParseFrame parses a raw SWSP frame from bytes.
@@ -93,8 +121,15 @@ func (f Frame) IsFIN() bool { return f.Flags&FlagFIN != 0 }
 
 // ParseRequest parses the JSON payload of a SYN frame as a Request.
 func (f Frame) ParseRequest() (Request, error) {
+	return ParseRequest(f.Payload)
+}
+
+// ParseRequest unmarshals a SYN payload as an HTTP-stream Request. Useful
+// when the caller has the payload directly (e.g. from a StreamHandler's
+// OnSYN callback) without a Frame wrapper.
+func ParseRequest(payload []byte) (Request, error) {
 	var req Request
-	if err := json.Unmarshal(f.Payload, &req); err != nil {
+	if err := json.Unmarshal(payload, &req); err != nil {
 		return req, fmt.Errorf("parse request: %w", err)
 	}
 	return req, nil

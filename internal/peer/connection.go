@@ -11,7 +11,7 @@ import (
 	"log"
 
 	"github.com/pion/webrtc/v4"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/signaling"
+	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
 // OnMessageFunc is called for each data channel message.

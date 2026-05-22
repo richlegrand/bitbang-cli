@@ -1,4 +1,4 @@
-module github.com/richlegrand/bitbang/bitbangproxy
+module github.com/richlegrand/bitbang
 
 go 1.24.0
 

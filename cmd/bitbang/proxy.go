@@ -1,7 +1,3 @@
-// BitBangProxy - WebRTC proxy for local web servers.
-//
-// Connects to the BitBang signaling server and proxies browser requests
-// to a local web server via WebRTC data channels.
 package main
 
 import (
@@ -15,32 +11,28 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/auth"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/identity"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/peer"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/proxy"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/signaling"
+	"github.com/richlegrand/bitbang/internal/auth"
+	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang/internal/peer"
+	"github.com/richlegrand/bitbang/internal/session"
+	"github.com/richlegrand/bitbang/internal/signaling"
+	"github.com/richlegrand/bitbang/internal/streamtype"
 )
 
-const version = "0.1.2"
-
-const banner = `   ___  _ __  ___                 ___
-  / _ )(_) /_/ _ )___ ____  ___ _/ _ \_______ __ ____ __
- / _  / / __/ _  / _ ` + "`" + `/ _ \/ _ ` + "`" + `/ ___/ __/ _ \\ \ / // /
-/____/_/\__/____/\_,_/_//_/\_, /_/  /_/  \___/_\_\\_, /
-                          /___/                  /___/ `
-
-func main() {
-	server := flag.String("server", "bitba.ng", "Signaling server hostname")
-	target := flag.String("target", "", "Local server to proxy (e.g. localhost:8080). If not set, target is extracted from the URL.")
-	pin := flag.String("pin", "", "PIN to protect proxy access")
-	ephemeral := flag.Bool("ephemeral", false, "Use a temporary identity (not saved to disk)")
-	verbose := flag.Bool("v", false, "Verbose logging")
-	flag.Parse()
+// runProxy implements `bitbang proxy`. Reproduces the old bitbangproxy
+// behavior — same flags, same wire protocol — but built on the new
+// session+streamtype dispatch.
+func runProxy(args []string) {
+	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
+	server := fs.String("server", "bitba.ng", "Signaling server hostname")
+	target := fs.String("target", "", "Local server to proxy (e.g. localhost:8080). If not set, target is extracted from the URL.")
+	pin := fs.String("pin", "", "PIN to protect proxy access")
+	ephemeral := fs.Bool("ephemeral", false, "Use a temporary identity (not saved to disk)")
+	verbose := fs.Bool("v", false, "Verbose logging")
+	fs.Parse(args)
 
 	pinAuth := auth.New(*pin)
 
-	// Load or create identity
 	id, err := identity.Load("bitbangproxy", *ephemeral)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Identity error: %v\n", err)
@@ -64,9 +56,7 @@ func main() {
 	}
 	fmt.Println()
 
-	// Print QR code
-	qr, err := qrcode.New(url, qrcode.Medium)
-	if err == nil {
+	if qr, err := qrcode.New(url, qrcode.Medium); err == nil {
 		fmt.Println(qr.ToSmallString(false))
 	}
 
@@ -81,11 +71,9 @@ func main() {
 	}
 	fmt.Println()
 
-	// Track active peer connections by client_id
 	var mu sync.Mutex
 	connections := make(map[string]*peer.Connection)
 
-	// Connect to signaling server
 	client := signaling.NewClient(*server, id)
 	client.Verbose = *verbose
 
@@ -97,12 +85,17 @@ func main() {
 			clientID, _ := msg["client_id"].(string)
 			log.Printf("Connection request from %s", clientID)
 
-			// Create a proxy handler that will be wired to the data channel
-			var handler *proxy.Handler
+			// Build the per-session handler set. HTTP and WS share state
+			// via the HTTPHandler's ResolveTarget (so WS streams use the
+			// same dynamic-target logic).
+			httpHandler := streamtype.NewHTTPProxy(*target, id.UID, *server, *verbose)
+			wsHandler := streamtype.NewWebSocket(httpHandler, *verbose)
+
+			var sess *session.Session
 
 			conn, err := peer.HandleRequest(msg, client, func(data []byte) {
-				if handler != nil {
-					handler.HandleMessage(data)
+				if sess != nil {
+					sess.HandleMessage(data)
 				}
 			}, *verbose)
 			if err != nil {
@@ -110,15 +103,7 @@ func main() {
 				return
 			}
 
-			// Wire the handler to the data channel
-			handler = &proxy.Handler{
-				Target:  *target,
-				UID:     id.UID,
-				Server:  *server,
-				PIN:     pinAuth,
-				Verbose: *verbose,
-				DC:      conn.DC,
-			}
+			sess = session.New(conn.DC, pinAuth, *verbose, httpHandler, wsHandler)
 
 			mu.Lock()
 			connections[clientID] = conn
@@ -131,14 +116,12 @@ func main() {
 			mu.Lock()
 			conn := connections[clientID]
 			mu.Unlock()
-
 			if conn == nil {
 				if *verbose {
 					log.Printf("Answer for unknown client: %s", clientID)
 				}
 				return
 			}
-
 			if err := conn.HandleAnswer(sdp); err != nil {
 				log.Printf("Failed to handle answer for %s: %v", clientID, err)
 			}
@@ -150,14 +133,12 @@ func main() {
 			mu.Lock()
 			conn := connections[clientID]
 			mu.Unlock()
-
 			if conn == nil {
 				if *verbose {
 					log.Printf("Candidate for unknown client: %s", clientID)
 				}
 				return
 			}
-
 			if err := conn.AddICECandidate(candidateData); err != nil {
 				if *verbose {
 					log.Printf("Failed to add candidate for %s: %v", clientID, err)

@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 1rem;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .breadcrumb-path {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .breadcrumb-icon {
+            font-size: 1.25rem;
+            flex-shrink: 0;
+        }
+
+        .breadcrumb a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+
+        .breadcrumb .separator {
+            color: #666;
+            margin: 0 0.25rem;
+        }
+
+        .breadcrumb .current {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .upload-area {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-shrink: 0;
+        }
+
+        .upload-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .upload-btn:hover {
+            background: #218838;
+        }
+
+        .upload-hint {
+            color: #888;
+            font-size: 0.8rem;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 600px) {
+            .upload-hint {
+                display: none;
+            }
+        }
+
+        .file-list-container {
+            position: relative;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .file-list-container.drag-over {
+            outline: 3px dashed #007bff;
+            outline-offset: -3px;
+            background: rgba(0, 123, 255, 0.05);
+        }
+
+        .file-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 0.875rem 1rem;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .file-item:last-child {
+            border-bottom: none;
+        }
+
+        .file-item:hover {
+            background: #f8f9fa;
+        }
+
+        .file-item:active {
+            background: #e9ecef;
+        }
+
+        .file-icon {
+            width: 2rem;
+            font-size: 1.25rem;
+            flex-shrink: 0;
+        }
+
+        .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-name.directory {
+            font-weight: 500;
+        }
+
+        .file-size {
+            color: #888;
+            font-size: 0.875rem;
+            margin-left: 1rem;
+            flex-shrink: 0;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+
+        .error {
+            background: #fee;
+            color: #c00;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 2rem 1rem;
+            color: #999;
+            font-size: 0.875rem;
+        }
+
+        .footer a {
+            color: #666;
+        }
+
+        /* Download progress overlay */
+        .progress-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .progress-modal {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            min-width: 300px;
+            max-width: 90%;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .progress-title {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .progress-bar-container {
+            background: #e9ecef;
+            border-radius: 8px;
+            height: 8px;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-bar {
+            background: #007bff;
+            height: 100%;
+            width: 0%;
+            transition: width 0.1s ease-out;
+        }
+
+        .progress-stats {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.875rem;
+            color: #666;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 0.5rem;
+            }
+
+            .file-item {
+                padding: 1rem;
+            }
+
+            .file-size {
+                font-size: 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="breadcrumb" class="breadcrumb"></div>
+
+        <input type="file" id="file-input" multiple style="display: none;">
+
+        <div id="error" class="error" style="display: none;"></div>
+
+        <div id="loading" class="loading">Loading...</div>
+
+        <div id="file-list-container" class="file-list-container">
+            <ul id="file-list" class="file-list" style="display: none;"></ul>
+
+            <div id="empty" class="empty-state" style="display: none;">
+                <div class="empty-state-icon">&#128194;</div>
+                <div>This folder is empty</div>
+                <div style="margin-top: 0.5rem; color: #888; font-size: 0.875rem;">Drop files here to upload</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            Shared via <a href="https://bitba.ng">BitBang</a><br>
+            P2P &middot; Encrypted &middot; No account
+        </div>
+    </div>
+
+    <!-- Download progress overlay -->
+    <div id="progress-overlay" class="progress-overlay" style="display: none;">
+        <div class="progress-modal">
+            <div class="progress-title" id="progress-filename">Downloading...</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <div class="progress-stats">
+                <span id="progress-size">0 B / 0 B</span>
+                <span id="progress-speed">-- MB/s</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPath = '';
+        let rootName = 'Files';
+
+        const fileIcons = {
+            // Documents
+            pdf: '\ud83d\udcd5',
+            doc: '\ud83d\udcd8', docx: '\ud83d\udcd8',
+            xls: '\ud83d\udcd7', xlsx: '\ud83d\udcd7',
+            ppt: '\ud83d\udcd9', pptx: '\ud83d\udcd9',
+            txt: '\ud83d\udcc4',
+            md: '\ud83d\udcdd',
+            // Images
+            jpg: '\ud83d\uddbc\ufe0f', jpeg: '\ud83d\uddbc\ufe0f',
+            png: '\ud83d\uddbc\ufe0f', gif: '\ud83d\uddbc\ufe0f',
+            webp: '\ud83d\uddbc\ufe0f', svg: '\ud83d\uddbc\ufe0f',
+            // Media
+            mp4: '\ud83c\udfac', mov: '\ud83c\udfac', avi: '\ud83c\udfac',
+            mkv: '\ud83c\udfac', webm: '\ud83c\udfac',
+            mp3: '\ud83c\udfb5', wav: '\ud83c\udfb5',
+            flac: '\ud83c\udfb5', ogg: '\ud83c\udfb5',
+            // Archives
+            zip: '\ud83d\udce6', tar: '\ud83d\udce6',
+            gz: '\ud83d\udce6', rar: '\ud83d\udce6', '7z': '\ud83d\udce6',
+            // Code
+            py: '\ud83d\udc0d',
+            js: '\ud83d\udcdc', ts: '\ud83d\udcdc',
+            html: '\ud83c\udf10', css: '\ud83c\udfa8',
+            json: '\ud83d\udcc4', yaml: '\ud83d\udcc4', yml: '\ud83d\udcc4',
+            // Default
+            default: '\ud83d\udcc4'
+        };
+
+        function getIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            return fileIcons[ext] || fileIcons.default;
+        }
+
+        function formatSize(bytes) {
+            if (bytes === undefined || bytes === null) return '\u2014';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0;
+            while (bytes >= 1024 && i < units.length - 1) {
+                bytes /= 1024;
+                i++;
+            }
+            return (i > 0 ? bytes.toFixed(1) : bytes) + ' ' + units[i];
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function downloadFile(path, filename) {
+            const overlay = document.getElementById('progress-overlay');
+            const progressBar = document.getElementById('progress-bar');
+            const progressFilename = document.getElementById('progress-filename');
+            const progressSize = document.getElementById('progress-size');
+            const progressSpeed = document.getElementById('progress-speed');
+
+            try {
+                const res = await fetch('api/download?path=' + encodeURIComponent(path));
+                if (!res.ok) {
+                    throw new Error('Download failed');
+                }
+
+                // Get total size from Content-Length header
+                const totalSize = parseInt(res.headers.get('Content-Length') || '0', 10);
+
+                // Show progress overlay
+                progressFilename.textContent = filename;
+                progressBar.style.width = '0%';
+                progressSize.textContent = formatSize(0) + ' / ' + formatSize(totalSize);
+                progressSpeed.textContent = '-- MB/s';
+                overlay.style.display = 'flex';
+
+                // Stream the response with progress tracking
+                const reader = res.body.getReader();
+                const chunks = [];
+                let receivedSize = 0;
+                const startTime = Date.now();
+                let lastUpdate = 0;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    chunks.push(value);
+                    receivedSize += value.length;
+
+                    // Update progress (throttle to every 50ms for smoothness)
+                    const now = Date.now();
+                    if (now - lastUpdate > 50 || done) {
+                        lastUpdate = now;
+                        const elapsed = (now - startTime) / 1000;
+                        const speed = elapsed > 0 ? receivedSize / elapsed : 0;
+
+                        if (totalSize > 0) {
+                            const pct = (receivedSize / totalSize) * 100;
+                            progressBar.style.width = pct.toFixed(1) + '%';
+                        } else {
+                            // Unknown size - show indeterminate
+                            progressBar.style.width = '100%';
+                        }
+
+                        progressSize.textContent = formatSize(receivedSize) + ' / ' + (totalSize > 0 ? formatSize(totalSize) : '?');
+                        progressSpeed.textContent = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
+                    }
+                }
+
+                // Assemble blob and trigger download
+                const blob = new Blob(chunks);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+            } catch (e) {
+                console.error('Download error:', e);
+                alert('Failed to download file');
+            } finally {
+                overlay.style.display = 'none';
+            }
+        }
+
+        async function loadInfo() {
+            try {
+                const res = await fetch('api/info');
+                if (res.ok) {
+                    const data = await res.json();
+                    rootName = data.root || 'Files';
+                    updateBreadcrumb(currentPath);
+                }
+            } catch (e) {
+                console.error('Failed to load info:', e);
+            }
+        }
+
+        async function loadDirectory(path) {
+            currentPath = path || '';
+
+            const loading = document.getElementById('loading');
+            const fileList = document.getElementById('file-list');
+            const empty = document.getElementById('empty');
+            const error = document.getElementById('error');
+
+            loading.style.display = 'block';
+            fileList.style.display = 'none';
+            empty.style.display = 'none';
+            error.style.display = 'none';
+
+            try {
+                const res = await fetch('api/list?path=' + encodeURIComponent(path));
+
+                if (!res.ok) {
+                    if (res.status === 403) {
+                        throw new Error('Access denied');
+                    } else if (res.status === 400) {
+                        throw new Error('Invalid path');
+                    } else {
+                        throw new Error('Failed to load directory');
+                    }
+                }
+
+                const data = await res.json();
+
+                // Update breadcrumb
+                updateBreadcrumb(path);
+
+                // Update file list
+                fileList.innerHTML = '';
+
+                if (data.entries.length === 0) {
+                    loading.style.display = 'none';
+                    empty.style.display = 'block';
+                    return;
+                }
+
+                data.entries.forEach(function(entry) {
+                    const li = document.createElement('li');
+                    li.className = 'file-item';
+
+                    const icon = entry.type === 'directory' ? '\ud83d\udcc1' : getIcon(entry.name);
+                    const size = entry.type === 'file' ? formatSize(entry.size) : '\u2014';
+                    const nameClass = entry.type === 'directory' ? 'file-name directory' : 'file-name';
+
+                    li.innerHTML =
+                        '<span class="file-icon">' + icon + '</span>' +
+                        '<span class="' + nameClass + '">' + escapeHtml(entry.name) + '</span>' +
+                        '<span class="file-size">' + size + '</span>';
+
+                    li.onclick = function() {
+                        const entryPath = path ? path + '/' + entry.name : entry.name;
+                        if (entry.type === 'directory') {
+                            loadDirectory(entryPath);
+                        } else {
+                            downloadFile(entryPath, entry.name);
+                        }
+                    };
+
+                    fileList.appendChild(li);
+                });
+
+                loading.style.display = 'none';
+                fileList.style.display = 'block';
+
+            } catch (e) {
+                loading.style.display = 'none';
+                error.textContent = e.message;
+                error.style.display = 'block';
+            }
+        }
+
+        function updateBreadcrumb(path) {
+            const bc = document.getElementById('breadcrumb');
+            const parts = path ? path.split('/').filter(Boolean) : [];
+
+            let html = '<div class="breadcrumb-path"><span class="breadcrumb-icon">\ud83d\udcc1</span>';
+
+            if (parts.length === 0) {
+                // At root - show root name as plain text (not clickable)
+                html += '<span class="current">' + escapeHtml(rootName) + '</span>';
+            } else {
+                // In subdirectory - root is clickable
+                html += '<a href="#" onclick="loadDirectory(\'\'); return false;">' + escapeHtml(rootName) + '</a>';
+
+                let accum = '';
+                parts.forEach(function(part, index) {
+                    accum += (accum ? '/' : '') + part;
+                    html += '<span class="separator">/</span>';
+
+                    if (index === parts.length - 1) {
+                        // Current directory - not clickable
+                        html += '<span class="current">' + escapeHtml(part) + '</span>';
+                    } else {
+                        // Parent directory - clickable
+                        const pathStr = accum;
+                        html += '<a href="#" onclick="loadDirectory(\'' +
+                                escapeHtml(pathStr).replace(/'/g, "\\'") +
+                                '\'); return false;">' + escapeHtml(part) + '</a>';
+                    }
+                });
+            }
+
+            html += '</div>';
+            html += '<div class="upload-area">';
+            html += '<span class="upload-hint">To upload, drag and drop, or click➔</span>';
+            html += '<button class="upload-btn" onclick="document.getElementById(\'file-input\').click()">Upload</button>';
+            html += '</div>';
+
+            bc.innerHTML = html;
+        }
+
+        // Handle browser back/forward
+        window.addEventListener('popstate', function(e) {
+            if (e.state && e.state.path !== undefined) {
+                loadDirectory(e.state.path);
+            }
+        });
+
+        // Listen for upload progress from bootstrap.js
+        const progressChannel = new BroadcastChannel('bitbang-progress');
+        let uploadStartTime = null;
+        let uploadSuccess = false;
+
+        progressChannel.onmessage = (event) => {
+            const { type, loaded, total } = event.data;
+            const overlay = document.getElementById('progress-overlay');
+            const progressBar = document.getElementById('progress-bar');
+            const progressSize = document.getElementById('progress-size');
+            const progressSpeed = document.getElementById('progress-speed');
+
+            if (type === 'uploadProgress' && overlay.style.display !== 'none') {
+                if (!uploadStartTime) uploadStartTime = Date.now();
+
+                const pct = (loaded / total) * 100;
+                progressBar.style.width = pct.toFixed(1) + '%';
+                progressSize.textContent = formatSize(loaded) + ' / ' + formatSize(total);
+
+                const elapsed = (Date.now() - uploadStartTime) / 1000;
+                const speed = elapsed > 0 ? loaded / elapsed : 0;
+                progressSpeed.textContent = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
+            } else if (type === 'uploadComplete') {
+                // All chunks sent to device, waiting for response
+                uploadStartTime = null;
+            } else if (type === 'uploadSuccess') {
+                // Device confirmed upload success
+                uploadSuccess = true;
+            }
+        };
+
+        // Upload functionality
+        async function uploadFiles(files) {
+            if (files.length === 0) return;
+
+            const overlay = document.getElementById('progress-overlay');
+            const progressBar = document.getElementById('progress-bar');
+            const progressFilename = document.getElementById('progress-filename');
+            const progressSize = document.getElementById('progress-size');
+            const progressSpeed = document.getElementById('progress-speed');
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const fileNum = files.length > 1 ? ' (' + (i + 1) + '/' + files.length + ')' : '';
+
+                progressFilename.textContent = 'Uploading ' + file.name + fileNum;
+                progressBar.style.width = '0%';
+                progressSize.textContent = '0 B / ' + formatSize(file.size);
+                progressSpeed.textContent = '-- MB/s';
+                overlay.style.display = 'flex';
+                uploadSuccess = false;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('path', currentPath);
+
+                    const xhr = new XMLHttpRequest();
+
+                    await new Promise(function(resolve, reject) {
+                        // Poll for uploadSuccess for up to 5 minutes after XHR completes
+                        function waitForSuccess(maxWait, onTimeout) {
+                            const start = Date.now();
+                            const check = function() {
+                                if (uploadSuccess) {
+                                    resolve();
+                                } else if (Date.now() - start > maxWait) {
+                                    onTimeout();
+                                } else {
+                                    setTimeout(check, 200);
+                                }
+                            };
+                            check();
+                        }
+
+                        xhr.addEventListener('load', function() {
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                resolve();
+                            } else {
+                                // XHR failed, poll for broadcast success
+                                waitForSuccess(60000, function() {
+                                    reject(new Error('Upload failed: ' + xhr.statusText));
+                                });
+                            }
+                        });
+
+                        xhr.addEventListener('error', function() {
+                            // XHR failed, poll for broadcast success
+                            waitForSuccess(60000, function() {
+                                reject(new Error('Upload failed'));
+                            });
+                        });
+
+                        xhr.open('POST', 'api/upload');
+                        // Set custom header with file size (SW may not see Content-Length)
+                        xhr.setRequestHeader('X-File-Size', file.size);
+                        xhr.send(formData);
+                    });
+
+                } catch (e) {
+                    console.error('Upload error:', e);
+                    alert('Failed to upload ' + file.name + ': ' + e.message);
+                    overlay.style.display = 'none';
+                    uploadSuccess = false;
+                    return;
+                }
+            }
+
+            overlay.style.display = 'none';
+            loadDirectory(currentPath);
+        }
+
+        // File input handler
+        document.getElementById('file-input').addEventListener('change', function(e) {
+            uploadFiles(e.target.files);
+            e.target.value = '';
+        });
+
+        // Drag and drop handlers
+        const dropZone = document.getElementById('file-list-container');
+        let dragCounter = 0;
+
+        dropZone.addEventListener('dragenter', function(e) {
+            e.preventDefault();
+            dragCounter++;
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter === 0) {
+                dropZone.classList.remove('drag-over');
+            }
+        });
+
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+        });
+
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dragCounter = 0;
+            dropZone.classList.remove('drag-over');
+            uploadFiles(e.dataTransfer.files);
+        });
+
+        // Initial load
+        loadInfo();
+        loadDirectory('');
+    </script>
+</body>
+</html>

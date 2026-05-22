@@ -1,4 +1,4 @@
-package proxy
+package streamtype
 
 import (
 	"testing"
@@ -121,8 +121,8 @@ func TestParseTargetStripHTTPBare(t *testing.T) {
 
 // -- resolveTarget tests -----------------------------------------------------
 
-func newHandler(target, connTarget, targetPrefix, connectPrefix string) *Handler {
-	return &Handler{
+func newHandler(target, connTarget, targetPrefix, connectPrefix string) *HTTPHandler {
+	return &HTTPHandler{
 		Target:        target,
 		connTarget:    connTarget,
 		targetPrefix:  targetPrefix,
@@ -164,7 +164,6 @@ func TestResolveTargetEmptyRemainder(t *testing.T) {
 }
 
 func TestResolveTargetCrossHostRedirect(t *testing.T) {
-	// State AFTER probe detected redirect: connTarget and targetPrefix updated.
 	h := newHandler("", "nas.example:5000", "/nas.example:5000", "/nas.example")
 	target, path := h.resolveTarget("/nas.example:5000/admin")
 	if target != "nas.example:5000" {
@@ -176,10 +175,6 @@ func TestResolveTargetCrossHostRedirect(t *testing.T) {
 }
 
 func TestResolveTargetCrossHostRedirectReparse(t *testing.T) {
-	// Before redirect detected: connTarget still original. A request arrives
-	// with host:port in the path. The prefix /nas.example partially matches,
-	// so the colon-reparse won't trigger. The probe on connect normally
-	// resolves this. We just verify no panic.
 	h := newHandler("", "nas.example", "/nas.example", "/nas.example")
 	target, _ := h.resolveTarget("/nas.example:5000/admin")
 	if target == "" {
@@ -188,7 +183,6 @@ func TestResolveTargetCrossHostRedirectReparse(t *testing.T) {
 }
 
 func TestResolveTargetConnectPrefixFallback(t *testing.T) {
-	// After redirect: targetPrefix updated but iframe still uses original prefix.
 	h := newHandler("", "nas.example:5000", "/nas.example:5000", "/nas.example")
 	target, path := h.resolveTarget("/nas.example/admin")
 	if target != "nas.example:5000" {

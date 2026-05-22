@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/identity"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/protocol"
+	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
 // Message is a generic signaling message.

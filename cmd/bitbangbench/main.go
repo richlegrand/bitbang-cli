@@ -17,10 +17,10 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/identity"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/peer"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/protocol"
-	"github.com/richlegrand/bitbang/bitbangproxy/internal/signaling"
+	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang/internal/peer"
+	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
 type benchHandler struct {
