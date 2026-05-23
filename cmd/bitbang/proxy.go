@@ -93,7 +93,7 @@ func runProxy(args []string) {
 
 			var sess *session.Session
 
-			conn, err := peer.HandleRequest(msg, client, func(data []byte) {
+			conn, err := peer.HandleRequest(msg, client, id, func(data []byte) {
 				if sess != nil {
 					sess.HandleMessage(data)
 				}
@@ -112,6 +112,7 @@ func runProxy(args []string) {
 		case "answer":
 			clientID, _ := msg["client_id"].(string)
 			sdp, _ := msg["sdp"].(string)
+			encrypted, _ := msg["encrypted_request"].(string)
 
 			mu.Lock()
 			conn := connections[clientID]
@@ -122,7 +123,7 @@ func runProxy(args []string) {
 				}
 				return
 			}
-			if err := conn.HandleAnswer(sdp); err != nil {
+			if err := conn.HandleAnswer(sdp, encrypted); err != nil {
 				log.Printf("Failed to handle answer for %s: %v", clientID, err)
 			}
 

@@ -80,12 +80,24 @@ func Load(programName string, ephemeral bool) (*Identity, error) {
 // Sign signs a domain-separated challenge nonce using RSASSA-PKCS1-v1_5 with
 // SHA-256. The domain tag prevents the auth signature from being interchangeable
 // with signatures produced for any other purpose.
+//
+// Retained for future use (e.g. signing network-membership tokens). The
+// signaling server no longer issues a challenge, so this is not called on the
+// connection path today.
 func (id *Identity) Sign(nonce []byte) ([]byte, error) {
 	h := sha256.New()
 	h.Write(AuthDomain)
 	h.Write(nonce)
 	hash := h.Sum(nil)
 	return rsa.SignPKCS1v15(rand.Reader, id.PrivateKey, crypto.SHA256, hash)
+}
+
+// Decrypt unwraps a ciphertext that was produced by RSA-OAEP/SHA-256
+// encryption to this identity's public key. Used to decrypt the browser's
+// bidirectional-verify payload — {fingerprint, nonce} — that rides on the
+// WebRTC answer message.
+func (id *Identity) Decrypt(ciphertext []byte) ([]byte, error) {
+	return rsa.DecryptOAEP(sha256.New(), rand.Reader, id.PrivateKey, ciphertext, nil)
 }
 
 func generate() (*Identity, error) {

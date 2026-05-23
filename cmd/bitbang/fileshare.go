@@ -101,7 +101,7 @@ func runFileshare(args []string) {
 
 			var sess *session.Session
 
-			conn, err := peer.HandleRequest(msg, client, func(data []byte) {
+			conn, err := peer.HandleRequest(msg, client, id, func(data []byte) {
 				if sess != nil {
 					sess.HandleMessage(data)
 				}
@@ -120,13 +120,14 @@ func runFileshare(args []string) {
 		case "answer":
 			clientID, _ := msg["client_id"].(string)
 			sdp, _ := msg["sdp"].(string)
+			encrypted, _ := msg["encrypted_request"].(string)
 			mu.Lock()
 			conn := connections[clientID]
 			mu.Unlock()
 			if conn == nil {
 				return
 			}
-			if err := conn.HandleAnswer(sdp); err != nil {
+			if err := conn.HandleAnswer(sdp, encrypted); err != nil {
 				log.Printf("Failed to handle answer: %v", err)
 			}
 

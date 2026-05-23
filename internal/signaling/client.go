@@ -1,10 +1,12 @@
 // Package signaling handles the WebSocket connection to the BitBang signaling
-// server, including registration and challenge-response authentication.
+// server. The device announces its UID and public key; the server binds
+// hash(pubkey) == UID and accepts the registration. Proof of private-key
+// possession is verified end-to-end by the browser (bidirectional verify on
+// the WebRTC data channel), not by the signaling server.
 package signaling
 
 import (
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"time"
@@ -36,9 +38,9 @@ func NewClient(server string, id *identity.Identity) *Client {
 	}
 }
 
-// Connect connects to the signaling server, registers, and handles the
-// challenge-response. On success, it calls handler for each incoming message.
-// Reconnects automatically on disconnection.
+// Connect connects to the signaling server and registers. On success, it
+// calls handler for each incoming message. Reconnects automatically on
+// disconnection.
 func (c *Client) Connect(handler func(msg Message)) {
 	for {
 		err := c.connectOnce(handler)
@@ -100,49 +102,26 @@ func (c *Client) register() error {
 	if err := c.conn.WriteJSON(reg); err != nil {
 		return fmt.Errorf("send register: %w", err)
 	}
-	// Handle challenge-response loop
-	for {
-		var msg Message
-		if err := c.conn.ReadJSON(&msg); err != nil {
-			return fmt.Errorf("read: %w", err)
+
+	var msg Message
+	if err := c.conn.ReadJSON(&msg); err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+
+	switch msg["type"] {
+	case "registered":
+		return nil
+
+	case "error":
+		errMsg, _ := msg["message"].(string)
+		if errMsg == "protocol_too_old" {
+			fmt.Println("\nPlease upgrade bitbangproxy:")
+			fmt.Println("  Download latest from https://github.com/richlegrand/bitbangproxy/releases")
+			log.Fatal("Protocol version too old")
 		}
+		return fmt.Errorf("server error: %v", errMsg)
 
-		switch msg["type"] {
-		case "challenge":
-			nonceB64, ok := msg["nonce"].(string)
-			if !ok {
-				return fmt.Errorf("invalid nonce")
-			}
-			nonce, err := base64.StdEncoding.DecodeString(nonceB64)
-			if err != nil {
-				return fmt.Errorf("decode nonce: %w", err)
-			}
-			sig, err := c.ID.Sign(nonce)
-			if err != nil {
-				return fmt.Errorf("sign challenge: %w", err)
-			}
-			resp := Message{
-				"type":      "challenge_response",
-				"signature": base64.StdEncoding.EncodeToString(sig),
-			}
-			if err := c.conn.WriteJSON(resp); err != nil {
-				return fmt.Errorf("send challenge_response: %w", err)
-			}
-
-		case "registered":
-			return nil
-
-		case "error":
-			errMsg, _ := msg["message"].(string)
-			if errMsg == "protocol_too_old" {
-				fmt.Println("\nPlease upgrade bitbangproxy:")
-				fmt.Println("  Download latest from https://github.com/richlegrand/bitbangproxy/releases")
-				log.Fatal("Protocol version too old")
-			}
-			return fmt.Errorf("server error: %v", errMsg)
-
-		default:
-			return fmt.Errorf("unexpected message type: %v", msg["type"])
-		}
+	default:
+		return fmt.Errorf("unexpected message type: %v", msg["type"])
 	}
 }

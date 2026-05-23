@@ -183,7 +183,7 @@ func main() {
 				noPressure:  *noPressure,
 			}
 
-			conn, err := peer.HandleRequest(msg, client, func(data []byte) {
+			conn, err := peer.HandleRequest(msg, client, id, func(data []byte) {
 				h.handleMessage(data)
 			}, true)
 			if err != nil {
@@ -200,13 +200,14 @@ func main() {
 		case "answer":
 			clientID, _ := msg["client_id"].(string)
 			sdp, _ := msg["sdp"].(string)
+			encrypted, _ := msg["encrypted_request"].(string)
 			mu.Lock()
 			conn := connections[clientID]
 			mu.Unlock()
 			if conn == nil {
 				return
 			}
-			if err := conn.HandleAnswer(sdp); err != nil {
+			if err := conn.HandleAnswer(sdp, encrypted); err != nil {
 				log.Printf("HandleAnswer: %v", err)
 			}
 
