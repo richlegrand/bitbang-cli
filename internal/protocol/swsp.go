@@ -27,7 +27,12 @@ const (
 	// ProtocolVersion is the registration-protocol version sent to the
 	// signaling server on device register. Independent of SWSPVersion
 	// below (which is the data-channel wire protocol).
-	ProtocolVersion = 2
+	//
+	// v3: split-identity URLs (128-bit UID + 64-bit access code in the URL
+	// fragment, both base64url-encoded), browser includes the code in the
+	// encrypted_request payload, signaling server forwards browser_ip on
+	// connection requests.
+	ProtocolVersion = 3
 
 	// SWSPVersion is the data-channel wire protocol version. Sent in
 	// stream-0 `connect` (client → device) and `ready` (device → client).

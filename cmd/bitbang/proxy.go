@@ -39,10 +39,14 @@ func runProxy(args []string) {
 		os.Exit(1)
 	}
 
+	// URL fragment carries the 64-bit access code, which the signaling
+	// server never sees (browsers don't send fragments to servers).
+	// Any query string (e.g. ?debug) must come before the fragment.
 	url := fmt.Sprintf("https://%s/%s", *server, id.UID)
 	if *verbose {
 		url += "?debug"
 	}
+	url += "#" + id.Code
 
 	fmt.Println(banner)
 	fmt.Printf("v%s\n", version)

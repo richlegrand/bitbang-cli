@@ -107,14 +107,15 @@ func TestBuildVerifyNonceHashFrameRoundTrip(t *testing.T) {
 
 // TestDecryptRoundTrip verifies that identity.Decrypt unwraps a payload
 // encrypted with RSA-OAEP/SHA-256 to the identity's public key. Mirrors the
-// browser-side encryption that will live in bootstrap.js.
+// browser-side encryption that lives in bootstrap.js, including the v3
+// access-code field.
 func TestDecryptRoundTrip(t *testing.T) {
 	id, err := identity.Load("bitbang-peer-test", true) // ephemeral
 	if err != nil {
 		t.Fatalf("identity.Load ephemeral: %v", err)
 	}
 
-	plain := []byte(`{"fingerprint":"AA:BB","nonce":"YWFh"}`)
+	plain := []byte(`{"fingerprint":"AA:BB","nonce":"YWFh","code":"` + id.Code + `"}`)
 
 	ct, err := encryptToPubkey(t, id, plain)
 	if err != nil {
@@ -127,5 +128,43 @@ func TestDecryptRoundTrip(t *testing.T) {
 	}
 	if string(got) != string(plain) {
 		t.Fatalf("roundtrip mismatch: got %q, want %q", got, plain)
+	}
+}
+
+// TestEncryptedRequestCodeField verifies the encrypted payload carries the
+// access code through unchanged, so the constant-time compare on the device
+// side matches when the browser supplies the right code and rejects a
+// tampered one.
+func TestEncryptedRequestCodeField(t *testing.T) {
+	id, err := identity.Load("bitbang-peer-test-code", true)
+	if err != nil {
+		t.Fatalf("identity.Load ephemeral: %v", err)
+	}
+
+	encryptAndParse := func(code string) string {
+		t.Helper()
+		plain := []byte(`{"fingerprint":"AA:BB","nonce":"YWFh","code":"` + code + `"}`)
+		ct, err := encryptToPubkey(t, id, plain)
+		if err != nil {
+			t.Fatalf("encryptToPubkey: %v", err)
+		}
+		got, err := id.Decrypt(ct)
+		if err != nil {
+			t.Fatalf("Decrypt: %v", err)
+		}
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(got, &req); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		return req.Code
+	}
+
+	if got := encryptAndParse(id.Code); got != id.Code {
+		t.Fatalf("right code did not round-trip: got %q, want %q", got, id.Code)
+	}
+	if got := encryptAndParse("AAAAAAAAAAA"); got == id.Code {
+		t.Fatalf("wrong code matched real code (got %q)", got)
 	}
 }

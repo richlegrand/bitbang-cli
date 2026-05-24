@@ -5,14 +5,17 @@
 // and handles the answer and trickle ICE candidates.
 //
 // Bidirectional verify rides on the answer message: the browser delivers an
-// RSA-OAEP-encrypted {fingerprint, nonce} payload. The device decrypts,
-// confirms the fingerprint matches the SDP, and replies with hash(nonce) on
-// stream 0 as soon as the data channel opens. A fingerprint mismatch closes
-// the connection without ever sending the nonce hash, which is what protects
-// the protocol against a rogue signaling server that rewrites SDPs.
+// RSA-OAEP-encrypted {fingerprint, nonce, code} payload. The device decrypts,
+// checks the access code (64-bit secret from the URL fragment), confirms
+// the fingerprint matches the SDP, and replies with hash(nonce) on stream 0
+// as soon as the data channel opens. Any failure closes the connection
+// without ever sending the nonce hash, which is what protects the protocol
+// against a rogue signaling server that rewrites SDPs or initiates its own
+// connections.
 package peer
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -38,6 +41,11 @@ type Connection struct {
 	// identity holds the device's private key, used to decrypt the
 	// browser's encrypted_request payload riding on the SDP answer.
 	identity *identity.Identity
+
+	// browserIP is the connecting browser's IP as reported by the
+	// signaling server. Empty when the server didn't supply one (e.g.
+	// in tests). Surfaced in log lines for bad-code attempts.
+	browserIP string
 
 	mu sync.Mutex
 	// nonce is the random bytes the browser put in the encrypted payload.
@@ -76,12 +84,18 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 		return nil, fmt.Errorf("create peer connection: %w", err)
 	}
 
+	// browser_ip is supplied by the signaling server; clients can't set it
+	// themselves. Empty when the server didn't provide it (e.g. older
+	// signaling server, local tests).
+	browserIP, _ := msg["browser_ip"].(string)
+
 	conn := &Connection{
 		ClientID:  clientID,
 		PC:        pc,
 		sig:       sig,
 		OnMessage: onMessage,
 		identity:  id,
+		browserIP: browserIP,
 	}
 
 	// Create data channel (we are the offerer)
@@ -236,10 +250,23 @@ func (c *Connection) HandleAnswer(sdp, encryptedRequestB64 string) error {
 	var req struct {
 		Fingerprint string `json:"fingerprint"`
 		Nonce       string `json:"nonce"`
+		Code        string `json:"code"`
 	}
 	if err := json.Unmarshal(plaintext, &req); err != nil {
 		c.markVerifyFailed()
 		return fmt.Errorf("parse encrypted_request: %w", err)
+	}
+
+	// Check the access code before anything else — a wrong code should
+	// never reveal whether the fingerprint matched. Constant-time compare
+	// to avoid leaking the code via timing.
+	if subtle.ConstantTimeCompare([]byte(req.Code), []byte(c.identity.Code)) != 1 {
+		c.markVerifyFailed()
+		ip := c.browserIP
+		if ip == "" {
+			ip = "?"
+		}
+		return fmt.Errorf("bad access code from %s (browser_ip=%s)", c.ClientID, ip)
 	}
 
 	nonceBytes, err := base64.StdEncoding.DecodeString(req.Nonce)
