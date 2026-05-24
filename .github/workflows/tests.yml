@@ -36,7 +36,7 @@ jobs:
           python-version: '3.11'
 
       - name: Build proxy
-        run: go build ./cmd/bitbang/
+        run: go build -o bitbangproxy ./cmd/bitbang/
 
       - name: Install Python dependencies
         run: |

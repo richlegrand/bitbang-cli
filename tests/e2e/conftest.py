@@ -52,7 +52,7 @@ def proxy_url(target_app):
     proxy_bin = os.path.join(repo_dir, 'bitbangproxy')
 
     if not os.path.isfile(proxy_bin):
-        pytest.fail(f'BitBangProxy binary not found at {proxy_bin}. Run: go build ./cmd/bitbangproxy/')
+        pytest.fail(f'BitBangProxy binary not found at {proxy_bin}. Run: go build -o bitbangproxy ./cmd/bitbang/')
 
     proc = subprocess.Popen(
         [proxy_bin, '--server', TEST_SERVER, '--target', target_app, '--ephemeral'],
