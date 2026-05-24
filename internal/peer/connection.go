@@ -88,6 +88,11 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 	// themselves. Empty when the server didn't provide it (e.g. older
 	// signaling server, local tests).
 	browserIP, _ := msg["browser_ip"].(string)
+	logIP := browserIP
+	if logIP == "" {
+		logIP = "?"
+	}
+	log.Printf("Connection request from %s (browser_ip=%s)", clientID, logIP)
 
 	conn := &Connection{
 		ClientID:  clientID,

@@ -155,7 +155,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	url := fmt.Sprintf("https://%s/%s?debug", *server, id.UID)
+	client := signaling.NewClient(*server, id)
+	client.Verbose = true
+	url := client.URL(true) // bench always wants ?debug + #code
+
 	fmt.Println()
 	fmt.Println("Open this URL in the browser to run the benchmark:")
 	fmt.Println("  " + url)
@@ -166,15 +169,13 @@ func main() {
 	connections := make(map[string]*peer.Connection)
 	handlers := make(map[string]*benchHandler)
 
-	client := signaling.NewClient(*server, id)
-	client.Verbose = true
-
 	client.Connect(func(msg signaling.Message) {
 		msgType, _ := msg["type"].(string)
 		switch msgType {
 		case "request":
 			clientID, _ := msg["client_id"].(string)
-			log.Printf("Connection from %s", clientID)
+			// peer.HandleRequest logs the "Connection request from <id>
+			// (browser_ip=<ip>)" line for us — no need to duplicate here.
 
 			h := &benchHandler{
 				chunkSize:   *chunkSize,

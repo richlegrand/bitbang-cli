@@ -51,22 +51,26 @@ func runFileshare(args []string) {
 		os.Exit(1)
 	}
 
-	// Fragment carries the 64-bit access code; the signaling server never
-	// sees it. Query string (e.g. ?debug) must come before the fragment.
-	url := fmt.Sprintf("https://%s/%s", *server, id.UID)
-	if *verbose {
-		url += "?debug"
+	client := signaling.NewClient(*server, id)
+	client.Verbose = *verbose
+	url := client.URL(*verbose)
+
+	// printReady is the user-facing "here's how to reach me" display. We
+	// call it once upfront and again on every reconnect (via
+	// client.OnReady below) so the URL+QR stays accessible to the
+	// operator after a network blip.
+	printReady := func() {
+		if qr, err := qrcode.New(url, qrcode.Medium); err == nil {
+			fmt.Println(qr.ToSmallString(false))
+		}
+		fmt.Printf("URL: %s\n", url)
 	}
-	url += "#" + id.Code
 
 	fmt.Println(banner)
 	fmt.Printf("v%s\n\n", version)
 
-	if qr, err := qrcode.New(url, qrcode.Medium); err == nil {
-		fmt.Println(qr.ToSmallString(false))
-	}
+	printReady()
 
-	fmt.Printf("URL: %s\n", url)
 	if share.Mode == fileshare.ModeSend {
 		fmt.Printf("Sharing file: %s\n", share.FileName)
 	} else {
@@ -83,8 +87,16 @@ func runFileshare(args []string) {
 	var mu sync.Mutex
 	connections := make(map[string]*peer.Connection)
 
-	client := signaling.NewClient(*server, id)
-	client.Verbose = *verbose
+	// Skip the first OnReady — we already printed URL+QR above. Every
+	// subsequent invocation (i.e. every reconnect) re-prints the block.
+	firstReady := true
+	client.OnReady = func() {
+		if firstReady {
+			firstReady = false
+			return
+		}
+		printReady()
+	}
 
 	client.Connect(func(msg signaling.Message) {
 		msgType, _ := msg["type"].(string)
@@ -92,7 +104,8 @@ func runFileshare(args []string) {
 		switch msgType {
 		case "request":
 			clientID, _ := msg["client_id"].(string)
-			log.Printf("Connection request from %s", clientID)
+			// peer.HandleRequest logs the "Connection request from <id>
+			// (browser_ip=<ip>)" line for us — no need to duplicate here.
 
 			// Fileshare exposes two stream types over the same session:
 			//   - http: browser UI (browse.html/send.html + /api/list,

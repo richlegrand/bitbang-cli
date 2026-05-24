@@ -25,7 +25,15 @@ type Client struct {
 	Server   string // hostname, e.g. "bitba.ng"
 	ServerWS string // full URL, e.g. "wss://bitba.ng/ws/device/<uid>"
 	Verbose  bool
-	conn     *websocket.Conn
+
+	// OnReady, if set, is called after each successful (re)registration
+	// with the signaling server. Callers use it to (re)print user-visible
+	// info — URL, QR code, etc. — that should resurface after a reconnect,
+	// so the operator doesn't have to scroll back to grab the URL.
+	// When unset, connectOnce falls back to a one-line "Ready: ..." log.
+	OnReady func()
+
+	conn *websocket.Conn
 }
 
 // NewClient creates a signaling client for the given server and identity.
@@ -36,6 +44,21 @@ func NewClient(server string, id *identity.Identity) *Client {
 		Server:   server,
 		ServerWS: ws,
 	}
+}
+
+// URL returns the canonical user-facing URL for this device:
+// ``https://<server>/<uid>[?debug]#<code>``. Single source of truth — all
+// consumers (CLI banners, reconnect prints, downstream wrappers) should
+// read this rather than reconstruct it from Server/ID.UID/ID.Code, since
+// the exact shape (query params, fragment placement) is the protocol's
+// concern, not theirs. The fragment carries the access code, which the
+// signaling server never sees because browsers don't send fragments.
+func (c *Client) URL(debug bool) string {
+	s := "https://" + c.Server + "/" + c.ID.UID
+	if debug {
+		s += "?debug"
+	}
+	return s + "#" + c.ID.Code
 }
 
 // Connect connects to the signaling server and registers. On success, it
@@ -71,7 +94,11 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 	if err := c.register(); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	log.Printf("Ready: https://%s/%s", c.Server, c.ID.UID)
+	if c.OnReady != nil {
+		c.OnReady()
+	} else {
+		log.Printf("Ready: %s", c.URL(false))
+	}
 
 	// Message loop
 	for {
