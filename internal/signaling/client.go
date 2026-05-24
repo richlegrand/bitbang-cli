@@ -94,10 +94,14 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 	if err := c.register(); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
+	// Always log the operational "Ready: ..." marker so a watcher (test
+	// harness, log scraper, ops dashboard) has a reliable post-register
+	// signal — distinct from the upfront URL print that fires before
+	// any signaling round trip. OnReady is for caller-driven extra
+	// output (QR re-print, etc.) and runs in addition.
+	log.Printf("Ready: %s", c.URL(false))
 	if c.OnReady != nil {
 		c.OnReady()
-	} else {
-		log.Printf("Ready: %s", c.URL(false))
 	}
 
 	// Message loop
