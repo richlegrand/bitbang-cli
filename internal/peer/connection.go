@@ -197,11 +197,15 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 		return nil, fmt.Errorf("set local description: %w", err)
 	}
 
-	// Wait for ICE gathering to complete so all candidates are in the SDP
-	gatherComplete := webrtc.GatheringCompletePromise(pc)
-	<-gatherComplete
-
-	// Send the offer with all candidates bundled
+	// Trickle ICE: send the offer immediately and let candidates trickle
+	// via the OnICECandidate callback above. Waiting for gather to
+	// complete here would add up to pion's default 5 s ICE-gather
+	// timeout to every connection setup — even though we're already
+	// trickling those candidates out separately and bundling them in
+	// the SDP would just be redundant. Both clients (bootstrap.js and
+	// internal/client) buffer remote candidates that arrive before
+	// setRemoteDescription finishes, so the candidate stream is safe to
+	// start before the offer has even been processed.
 	sig.Send(signaling.Message{
 		"type":      "offer",
 		"client_id": clientID,

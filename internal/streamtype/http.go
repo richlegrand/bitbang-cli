@@ -261,7 +261,23 @@ func (h *HTTPHandler) proxyRequest(s Stream, req protocol.Request, body io.Reade
 
 	headers := make(map[string]interface{})
 	for key, values := range resp.Header {
-		if key == "X-Frame-Options" {
+		// Drop headers that don't apply once the response is being
+		// delivered through BitBang's proxy:
+		//   - X-Frame-Options: the response is rendered inside our
+		//     bootstrap iframe; the app's anti-framing rule would
+		//     prevent that from working.
+		//   - Content-Security-Policy / -Report-Only: the SW injects
+		//     an inline <script> with session id + cookie sync + the
+		//     XHR / WebSocket shims. Any app with a strict
+		//     script-src (Synology DSM, many enterprise UIs) would
+		//     refuse to execute the shim and the proxy would lose
+		//     XHR/WS routing. The app's CSP was designed for direct
+		//     access at its own origin; once it's being deliberately
+		//     tunneled through us, that policy no longer fits.
+		switch key {
+		case "X-Frame-Options",
+			"Content-Security-Policy",
+			"Content-Security-Policy-Report-Only":
 			continue
 		}
 		if len(values) > 1 && key == "Set-Cookie" {

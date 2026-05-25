@@ -40,8 +40,7 @@ func main() {
 	case "fileshare":
 		runFileshare(os.Args[2:])
 	case "cp":
-		fmt.Fprintln(os.Stderr, "cp: not yet implemented (coming in step 6)")
-		os.Exit(2)
+		runCp(os.Args[2:])
 	case "shell", "connect":
 		fmt.Fprintln(os.Stderr, os.Args[1]+": deferred to v2")
 		os.Exit(2)
@@ -67,7 +66,7 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  bitbang proxy [--target HOST:PORT] [--pin PIN] [--ephemeral]")
 	fmt.Println("  bitbang fileshare <path> [--pin PIN] [--upload] [--ephemeral]")
-	fmt.Println("  bitbang cp <src> <dst>       (coming soon)")
+	fmt.Println("  bitbang cp <src> <dst>       (one side is <URL>:/path)")
 	fmt.Println()
 	fmt.Println("Without a subcommand, runs `bitbang proxy` for compatibility")
 	fmt.Println("with the previous bitbangproxy binary.")
