@@ -86,8 +86,11 @@ func (f *FileShare) OpenRead(relPath string) (io.ReadCloser, streamtype.FileStat
 // Upload-via-cp is only allowed when fileshare is in browse mode AND
 // UploadEnabled — same gate as the /api/upload HTTP route.
 func (f *FileShare) OpenWrite(relPath string, overwrite bool) (io.WriteCloser, error) {
-	if f.Mode == ModeSend || !f.UploadEnabled {
-		return nil, errors.New("uploads not enabled")
+	if f.Mode == ModeSend {
+		return nil, errors.New("listener is in send-mode (single file); uploads not allowed")
+	}
+	if !f.UploadEnabled {
+		return nil, errors.New("uploads not enabled (start the listener with --upload to allow file uploads)")
 	}
 	// The target path must resolve to inside BasePath. SafePath verifies
 	// existing paths; for new files we have to check the parent.

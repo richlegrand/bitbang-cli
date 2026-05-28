@@ -64,7 +64,7 @@ func main() {
 func printUsage() {
 	fmt.Printf("%s v%s\n\n", banner, version)
 	fmt.Println("Usage:")
-	fmt.Println("  bitbang proxy [--target HOST:PORT] [--pin PIN] [--ephemeral]")
+	fmt.Println("  bitbang proxy [HOST:PORT] [--pin PIN] [--ephemeral]")
 	fmt.Println("  bitbang fileshare <path> [--pin PIN] [--upload] [--ephemeral]")
 	fmt.Println("  bitbang cp <src> <dst>       (one side is <URL>:/path)")
 	fmt.Println()

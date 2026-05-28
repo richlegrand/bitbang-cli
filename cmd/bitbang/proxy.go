@@ -19,17 +19,36 @@ import (
 	"github.com/richlegrand/bitbang/internal/streamtype"
 )
 
-// runProxy implements `bitbang proxy`. Reproduces the old bitbangproxy
-// behavior — same flags, same wire protocol — but built on the new
-// session+streamtype dispatch.
+// runProxy implements `bitbang proxy [HOST:PORT]`. Reproduces the old
+// bitbangproxy behavior on the wire; CLI now takes the target as a
+// positional arg instead of via `--target`.
 func runProxy(args []string) {
 	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
 	server := fs.String("server", "bitba.ng", "Signaling server hostname")
-	target := fs.String("target", "", "Local server to proxy (e.g. localhost:8080). If not set, target is extracted from the URL.")
+	targetFlag := fs.String("target", "", "[deprecated] Use a positional argument instead")
 	pin := fs.String("pin", "", "PIN to protect proxy access")
 	ephemeral := fs.Bool("ephemeral", false, "Use a temporary identity (not saved to disk)")
 	verbose := fs.Bool("v", false, "Verbose logging")
 	fs.Parse(args)
+
+	// Target resolution: positional wins, --target is kept for one
+	// release with a deprecation notice. Empty target means dynamic
+	// (target is parsed from the URL by the proxy at request time).
+	target := *targetFlag
+	switch fs.NArg() {
+	case 0:
+		if *targetFlag != "" {
+			fmt.Fprintln(os.Stderr, "bitbang proxy: --target is deprecated; use positional `bitbang proxy HOST:PORT` instead")
+		}
+	case 1:
+		if *targetFlag != "" {
+			fmt.Fprintln(os.Stderr, "bitbang proxy: ignoring --target; positional argument takes precedence")
+		}
+		target = fs.Arg(0)
+	default:
+		fmt.Fprintln(os.Stderr, "Usage: bitbang proxy [HOST:PORT] [--pin PIN] [--ephemeral] [-v]")
+		os.Exit(2)
+	}
 
 	pinAuth := auth.New(*pin)
 
@@ -68,8 +87,8 @@ func runProxy(args []string) {
 
 	printReady()
 
-	if *target != "" {
-		fmt.Printf("Proxying: %s\n", *target)
+	if target != "" {
+		fmt.Printf("Proxying: %s\n", target)
 	} else {
 		fmt.Printf("Proxying: dynamic (target from URL)\n")
 	}
@@ -104,7 +123,7 @@ func runProxy(args []string) {
 			// Build the per-session handler set. HTTP and WS share state
 			// via the HTTPHandler's ResolveTarget (so WS streams use the
 			// same dynamic-target logic).
-			httpHandler := streamtype.NewHTTPProxy(*target, id.UID, *server, *verbose)
+			httpHandler := streamtype.NewHTTPProxy(target, id.UID, *server, *verbose)
 			wsHandler := streamtype.NewWebSocket(httpHandler, *verbose)
 
 			var sess *session.Session

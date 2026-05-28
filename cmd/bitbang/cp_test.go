@@ -41,6 +41,8 @@ func TestParseRemoteSpec(t *testing.T) {
 		{in: "./foo.txt", remote: false},
 		{in: "/tmp/foo.txt", remote: false},
 		{in: "foo.txt", remote: false},
+		// Pipe sentinels — stdin/stdout shortcut.
+		{in: "-", remote: false},
 		// Looks like a remote spec but missing the path → not remote
 		// (so cp doesn't silently misinterpret a local file with a
 		// colon in the name).

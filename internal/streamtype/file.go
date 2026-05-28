@@ -92,19 +92,36 @@ func (h *FileHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	case "list":
 		go h.handleList(s, op)
 	case "put":
-		// Need DAT frames for the body unless this is a zero-byte SYN|FIN.
+		// Validate the destination up-front. If OpenWrite would fail
+		// (uploads disabled, path traversal, exists+!overwrite, …) we
+		// reject with a single error SYN+FIN before any ack. Acking
+		// "ok" and then failing mid-stream is a footgun: the client
+		// dutifully streams the bytes and never sees the error because
+		// its put loop is already in the data-pumping phase.
+		w, err := h.FS.OpenWrite(op.Path, op.Overwrite)
+		if err != nil {
+			log.Printf("Put rejected: %s (%v)", op.Path, err)
+			h.sendFileError(s, fileErrMessage(err, op.Path))
+			return nil
+		}
+		// Zero-byte upload (SYN|FIN with no body): write nothing, close,
+		// ack via FIN trailer.
 		if final {
-			go h.handlePut(s, op, nil)
+			_ = w.Close()
+			log.Printf("Received: %s (0 bytes)", op.Path)
+			done, _ := json.Marshal(map[string]string{"status": "ok"})
+			_ = s.WriteSYN(done)
+			_ = s.WriteFIN(nil)
 			return nil
 		}
 		pr, pw := io.Pipe()
 		h.mu.Lock()
 		h.streams[s.ID()] = &filePending{op: "put", pw: pw}
 		h.mu.Unlock()
-		// Send ack immediately so the client starts sending DAT frames.
+		// Ack now that we know OpenWrite succeeded.
 		ack, _ := json.Marshal(map[string]string{"status": "ok"})
 		_ = s.WriteSYN(ack)
-		go h.handlePut(s, op, pr)
+		go h.handlePut(s, op.Path, w, pr)
 	default:
 		h.sendFileError(s, "unknown op: "+op.Op)
 	}
@@ -142,6 +159,7 @@ func (h *FileHandler) OnFIN(s Stream, payload []byte) error {
 func (h *FileHandler) handleGet(s Stream, op protocol.FileOp) {
 	r, stat, err := h.FS.OpenRead(op.Path)
 	if err != nil {
+		log.Printf("Get rejected: %s (%v)", op.Path, err)
 		h.sendFileError(s, fileErrMessage(err, op.Path))
 		return
 	}
@@ -159,6 +177,7 @@ func (h *FileHandler) handleGet(s Stream, op protocol.FileOp) {
 
 	const maxBuffered = 8 << 20
 	buf := make([]byte, protocol.MaxChunkSize)
+	var total int64
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
@@ -166,32 +185,37 @@ func (h *FileHandler) handleGet(s Stream, op protocol.FileOp) {
 				time.Sleep(1 * time.Millisecond)
 			}
 			if err := s.WriteDAT(buf[:n]); err != nil {
-				log.Printf("file get: WriteDAT failed (stream %d): %v", s.ID(), err)
+				log.Printf("Sent: %s (interrupted after %d bytes: %v)", op.Path, total, err)
 				return
 			}
+			total += int64(n)
 		}
 		if readErr != nil {
 			break
 		}
 	}
 	_ = s.WriteFIN(nil)
+	log.Printf("Sent: %s (%d bytes)", op.Path, total)
 }
 
-func (h *FileHandler) handlePut(s Stream, op protocol.FileOp, body io.Reader) {
-	w, err := h.FS.OpenWrite(op.Path, op.Overwrite)
+// handlePut copies the body into the (already-opened) writer and emits
+// the final status. Run as a goroutine after OnSYN has ack'd the
+// upload. Mid-stream errors (disk full, broken pipe, etc.) go in the
+// FIN trailer — NOT as a separate SYN — so the client's put loop,
+// which is waiting for FIN by the time we get here, can see them.
+func (h *FileHandler) handlePut(s Stream, path string, w io.WriteCloser, body io.Reader) {
+	defer w.Close()
+	n, err := io.Copy(w, body)
 	if err != nil {
-		h.sendFileError(s, fileErrMessage(err, op.Path))
+		log.Printf("Put failed mid-stream: %s (after %d bytes: %v)", path, n, err)
+		finErr, _ := json.Marshal(map[string]string{
+			"status": "error",
+			"error":  "write failed: " + err.Error(),
+		})
+		_ = s.WriteFIN(finErr)
 		return
 	}
-	defer w.Close()
-
-	if body != nil {
-		if _, err := io.Copy(w, body); err != nil {
-			h.sendFileError(s, "write failed: "+err.Error())
-			return
-		}
-	}
-
+	log.Printf("Received: %s (%d bytes)", path, n)
 	done, _ := json.Marshal(map[string]string{"status": "ok"})
 	_ = s.WriteFIN(done)
 }
@@ -199,9 +223,11 @@ func (h *FileHandler) handlePut(s Stream, op protocol.FileOp, body io.Reader) {
 func (h *FileHandler) handleList(s Stream, op protocol.FileOp) {
 	entries, err := h.FS.ListPath(op.Path)
 	if err != nil {
+		log.Printf("List rejected: %s (%v)", op.Path, err)
 		h.sendFileError(s, fileErrMessage(err, op.Path))
 		return
 	}
+	log.Printf("Listed: %s (%d entries)", op.Path, len(entries))
 
 	hdr, _ := json.Marshal(map[string]string{"status": "ok"})
 	if err := s.WriteSYN(hdr); err != nil {

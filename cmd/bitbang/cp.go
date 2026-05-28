@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 // Source / destination syntax:
 //
 //	./local.txt                            (local path)
+//	-                                      (stdin if src, stdout if dst)
 //	https://bitba.ng/<UID>#<CODE>:/remote  (remote path, full URL)
 //	bitba.ng/<UID>#<CODE>:/remote          (remote path, scheme-less)
 //	<UID>#<CODE>:/remote                   (remote path, defaults to bitba.ng)
@@ -37,7 +39,7 @@ func runCp(args []string) {
 
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: bitbang cp <src> <dst>")
-		fmt.Fprintln(os.Stderr, "  src and dst can be a local path or <URL>:/remote")
+		fmt.Fprintln(os.Stderr, "  src and dst can be a local path, '-' (stdin/stdout), or <URL>:/remote")
 		os.Exit(2)
 	}
 	srcArg, dstArg := fs.Arg(0), fs.Arg(1)
@@ -60,6 +62,15 @@ func runCp(args []string) {
 func runCpGet(remote remoteSpec, dstLocal string, verbose bool, timeout time.Duration, suppliedPIN string) {
 	sess := dial(remote, verbose, timeout, suppliedPIN)
 	defer sess.Close()
+
+	// Pipe mode: `bitbang cp <url>:/file -` streams to stdout, no progress
+	// chatter so the output can be piped cleanly (e.g. into grep, less).
+	if dstLocal == "-" {
+		if _, err := sess.Get(remote.Path, os.Stdout); err != nil {
+			fail("cp: %v", err)
+		}
+		return
+	}
 
 	// Allow `bitbang cp <url>:/file .` to land the file alongside its
 	// remote basename in the current directory. Same shortcut as scp.
@@ -92,33 +103,58 @@ func runCpGet(remote remoteSpec, dstLocal string, verbose bool, timeout time.Dur
 }
 
 func runCpPut(srcLocal string, remote remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string) {
-	f, err := os.Open(srcLocal)
-	if err != nil {
-		fail("cp: %v", err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		fail("cp: %v", err)
-	}
-	if info.IsDir() {
-		fail("cp: %s is a directory (recursive upload not implemented yet)", srcLocal)
+	var (
+		src      io.Reader
+		size     int64 = -1 // -1 means unknown (stdin)
+		basename string
+	)
+	if srcLocal == "-" {
+		// Pipe mode: read from stdin. Size unknown; remote path must be
+		// concrete (no auto-basename-from-stdin guessing).
+		src = os.Stdin
+		basename = "stdin"
+	} else {
+		f, err := os.Open(srcLocal)
+		if err != nil {
+			fail("cp: %v", err)
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			fail("cp: %v", err)
+		}
+		if info.IsDir() {
+			fail("cp: %s is a directory (recursive upload not implemented yet)", srcLocal)
+		}
+		src = f
+		size = info.Size()
+		basename = filepath.Base(srcLocal)
 	}
 
 	// `bitbang cp ./foo URL:/` lands at URL:/foo. Same convention as scp.
+	// For stdin, the user really should pick a filename, but we land at
+	// URL:/stdin if they don't — predictable, not a guess.
 	if remote.Path == "" || strings.HasSuffix(remote.Path, "/") {
-		remote.Path = remote.Path + filepath.Base(srcLocal)
+		remote.Path = remote.Path + basename
 	}
 
 	sess := dial(remote, verbose, timeout, suppliedPIN)
 	defer sess.Close()
 
-	fmt.Fprintf(os.Stderr, "Uploading %s → %s (%s)\n", srcLocal, remote.Path, humanBytes(info.Size()))
+	if size >= 0 {
+		fmt.Fprintf(os.Stderr, "Uploading %s → %s (%s)\n", srcLocal, remote.Path, humanBytes(size))
+	} else {
+		fmt.Fprintf(os.Stderr, "Uploading stdin → %s\n", remote.Path)
+	}
 	start := time.Now()
-	if err := sess.Put(remote.Path, f, false); err != nil {
+	if err := sess.Put(remote.Path, src, false); err != nil {
 		fail("cp: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "Done (%s in %.1fs)\n", humanBytes(info.Size()), time.Since(start).Seconds())
+	if size >= 0 {
+		fmt.Fprintf(os.Stderr, "Done (%s in %.1fs)\n", humanBytes(size), time.Since(start).Seconds())
+	} else {
+		fmt.Fprintf(os.Stderr, "Done in %.1fs\n", time.Since(start).Seconds())
+	}
 }
 
 // dial composes the connection options and runs client.Dial. Exits on
