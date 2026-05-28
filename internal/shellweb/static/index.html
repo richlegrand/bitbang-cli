@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>bitbang shell</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  /* xterm.js sizes itself from this container. Filling the iframe
+     viewport means resize-and-fit produces a full-screen terminal. */
+  #terminal {
+    width: 100%; height: 100%;
+    box-sizing: border-box;
+  }
+  /* Loading message while xterm boots; removed once the script runs. */
+  #boot-msg {
+    color: #ccc; font-family: monospace; font-size: 14px;
+    padding: 8px; white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<div id="terminal"><div id="boot-msg">loading xterm.js…</div></div>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="shell.js"></script>
+</body>
+</html>

@@ -13,6 +13,7 @@ import (
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/peer"
 	"github.com/richlegrand/bitbang/internal/session"
+	"github.com/richlegrand/bitbang/internal/shellweb"
 	"github.com/richlegrand/bitbang/internal/signaling"
 	"github.com/richlegrand/bitbang/internal/streamtype"
 )
@@ -96,11 +97,16 @@ func runShell(args []string) {
 		case "request":
 			clientID, _ := msg["client_id"].(string)
 
-			// One ShellHandler per session — the handler keeps a
-			// per-stream map so a single session could host multiple
-			// concurrent shells (though the current CLI client only
-			// opens one).
+			// Two caps registered per session:
+			//   - shell: native SWSP shell stream type used by both
+			//     `bitbang connect` (CLI) and the browser UI.
+			//   - http (local): serves the xterm.js page (shellweb)
+			//     so a browser visiting the URL gets a usable shell
+			//     terminal without any extra install.
+			// CLI clients never hit the HTTP cap; browser clients
+			// hit both (HTTP for the page, shell stream for the I/O).
 			shellHandler := streamtype.NewShell(defaultArgv, *verbose)
+			webHandler := streamtype.NewHTTPLocal(shellweb.New().HTTPHandler(), *verbose)
 
 			var sess *session.Session
 
@@ -114,7 +120,7 @@ func runShell(args []string) {
 				return
 			}
 
-			sess = session.New(conn.DC, pinAuth, *verbose, shellHandler)
+			sess = session.New(conn.DC, pinAuth, *verbose, shellHandler, webHandler)
 
 			mu.Lock()
 			connections[clientID] = conn
