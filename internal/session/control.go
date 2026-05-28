@@ -3,9 +3,17 @@ package session
 import (
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
+
+// pinFailDelay is the artificial pause before responding to a wrong
+// PIN. Slows brute-force attempts without meaningfully inconveniencing
+// a human who mistyped: a single typo costs an extra two seconds, an
+// attacker testing 4-digit PINs is capped at ~30 attempts/minute per
+// session (and the client closes the session after 3 misses anyway).
+const pinFailDelay = 2 * time.Second
 
 // handleControl processes a stream-0 SWSP frame: connect / auth /
 // auth_required / ready / auth_result / error.
@@ -78,9 +86,13 @@ func (s *Session) handleAuth(pin string) {
 		s.mu.Unlock()
 		result, _ := json.Marshal(map[string]interface{}{"type": "auth_result", "success": true})
 		_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, result)
+		// The client's handshake loop sits waiting for `ready` after a
+		// successful auth_result — without this it would hang.
+		s.sendReady()
 		return
 	}
 	log.Printf("PIN auth failed")
+	time.Sleep(pinFailDelay)
 	result, _ := json.Marshal(map[string]interface{}{"type": "auth_result", "success": false})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, result)
 }

@@ -35,7 +35,7 @@ func runCp(args []string) {
 	verbose := fs.Bool("v", false, "Verbose logging")
 	timeout := fs.Duration("timeout", 30*time.Second, "Dial timeout")
 	pin := fs.String("pin", "", "PIN (skips the interactive prompt)")
-	fs.Parse(args)
+	fs.Parse(reorderArgs(fs, args))
 
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: bitbang cp <src> <dst>")

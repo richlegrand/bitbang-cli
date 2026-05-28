@@ -29,7 +29,7 @@ func runProxy(args []string) {
 	pin := fs.String("pin", "", "PIN to protect proxy access")
 	ephemeral := fs.Bool("ephemeral", false, "Use a temporary identity (not saved to disk)")
 	verbose := fs.Bool("v", false, "Verbose logging")
-	fs.Parse(args)
+	fs.Parse(reorderArgs(fs, args))
 
 	// Target resolution: positional wins, --target is kept for one
 	// release with a deprecation notice. Empty target means dynamic

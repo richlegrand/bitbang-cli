@@ -1,13 +1,13 @@
 // Command bitbang is the BitBang CLI: a single binary with subcommands
-// for proxying local web apps, sharing files, and (in v2) running a shell.
+// for proxying local web apps, sharing files, and running a remote shell.
 //
 // Usage:
 //
-//	bitbang proxy [--target HOST:PORT] [--pin PIN] [--ephemeral]
-//	bitbang fileshare <path>          (v1)
-//	bitbang shell                      (v2)
-//	bitbang cp <src> <dst>             (v1, client-side)
-//	bitbang connect <uid>              (v2, client-side)
+//	bitbang proxy [HOST:PORT] [--pin PIN] [--ephemeral]
+//	bitbang fileshare <path>           [--pin PIN] [--upload] [--ephemeral]
+//	bitbang shell                      [--cmd CMD] [--pin PIN] [--ephemeral]
+//	bitbang cp <src> <dst>             (one side is <URL>:/path, or `-`)
+//	bitbang connect <URL> [-- argv]    (client: interactive or one-shot)
 //
 // Running `bitbang` with no arguments is currently equivalent to `bitbang
 // proxy` for backwards-compatibility with the old `bitbangproxy` binary.
@@ -41,9 +41,10 @@ func main() {
 		runFileshare(os.Args[2:])
 	case "cp":
 		runCp(os.Args[2:])
-	case "shell", "connect":
-		fmt.Fprintln(os.Stderr, os.Args[1]+": deferred to v2")
-		os.Exit(2)
+	case "shell":
+		runShell(os.Args[2:])
+	case "connect":
+		runConnect(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("bitbang v%s\n", version)
 	case "help", "--help", "-h":
@@ -64,9 +65,11 @@ func main() {
 func printUsage() {
 	fmt.Printf("%s v%s\n\n", banner, version)
 	fmt.Println("Usage:")
-	fmt.Println("  bitbang proxy [HOST:PORT] [--pin PIN] [--ephemeral]")
-	fmt.Println("  bitbang fileshare <path> [--pin PIN] [--upload] [--ephemeral]")
-	fmt.Println("  bitbang cp <src> <dst>       (one side is <URL>:/path)")
+	fmt.Println("  bitbang proxy [HOST:PORT]      [--pin PIN] [--ephemeral]")
+	fmt.Println("  bitbang fileshare <path>       [--pin PIN] [--upload] [--ephemeral]")
+	fmt.Println("  bitbang shell                  [--cmd CMD] [--pin PIN] [--ephemeral]")
+	fmt.Println("  bitbang cp <src> <dst>         (one side is <URL>:/path, or '-')")
+	fmt.Println("  bitbang connect <URL> [-- ...] (client; interactive or one-shot)")
 	fmt.Println()
 	fmt.Println("Without a subcommand, runs `bitbang proxy` for compatibility")
 	fmt.Println("with the previous bitbangproxy binary.")
