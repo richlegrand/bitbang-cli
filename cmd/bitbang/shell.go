@@ -31,6 +31,8 @@ func runShell(args []string) {
 	cmdFlag := fs.String("cmd", "", "Command to spawn (default: $SHELL or /bin/sh)")
 	pin := fs.String("pin", "", "PIN to protect shell access")
 	ephemeral := fs.Bool("ephemeral", false, "Use a temporary identity")
+	maxSessions := fs.Int("max-sessions", 1, "Max concurrent shell sessions (0 = unlimited)")
+	mirror := fs.Bool("mirror", true, "Mirror remote shell output to the listener console")
 	verbose := fs.Bool("v", false, "Verbose logging")
 	fs.Parse(reorderArgs(fs, args))
 
@@ -70,6 +72,14 @@ func runShell(args []string) {
 	} else {
 		fmt.Printf("Shell command: default ($SHELL or /bin/sh)\n")
 	}
+	if *maxSessions == 0 {
+		fmt.Printf("Max concurrent sessions: unlimited\n")
+	} else {
+		fmt.Printf("Max concurrent sessions: %d\n", *maxSessions)
+	}
+	if *mirror {
+		fmt.Printf("Mirroring shell output to this console (use --mirror=false to disable)\n")
+	}
 	if pinAuth.Required() {
 		fmt.Printf("PIN protection enabled\n")
 	} else {
@@ -106,6 +116,11 @@ func runShell(args []string) {
 			// CLI clients never hit the HTTP cap; browser clients
 			// hit both (HTTP for the page, shell stream for the I/O).
 			shellHandler := streamtype.NewShell(defaultArgv, *verbose)
+			shellHandler.MaxConcurrent = *maxSessions
+			if *mirror {
+				shellHandler.StdoutMirror = os.Stdout
+				shellHandler.StderrMirror = os.Stderr
+			}
 			webHandler := streamtype.NewHTTPLocal(shellweb.New().HTTPHandler(), *verbose)
 
 			var sess *session.Session

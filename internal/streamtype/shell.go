@@ -3,11 +3,13 @@ package streamtype
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -15,6 +17,13 @@ import (
 
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
+
+// activeShellCount is the process-wide count of in-flight shell
+// streams across all sessions. Used by MaxConcurrent enforcement on
+// ShellHandler. Lives at package scope because each WebRTC peer
+// creates its own ShellHandler instance; the limit needs to apply
+// across all of them.
+var activeShellCount atomic.Int32
 
 // Shell DAT tag bytes — the first byte of every shell DAT frame, telling
 // the receiver what to do with the rest of the payload.
@@ -45,6 +54,21 @@ type ShellHandler struct {
 	// argv. Set by `bitbang run` for service-style listeners that
 	// expose only one command. Client-supplied argv is ignored.
 	ForcedArgv []string
+
+	// MaxConcurrent caps the number of simultaneously-active shell
+	// streams across the whole process (not per-session). 0 = no
+	// limit. The default for `bitbang shell` is 1 — shell access is
+	// strictly more powerful than fileshare/proxy and one trusted
+	// user at a time is the sensible posture.
+	MaxConcurrent int
+
+	// StdoutMirror / StderrMirror, when non-nil, receive a copy of
+	// every byte written to the SWSP stream — i.e. the listener owner
+	// gets a live view of what's happening in the shell. In PTY mode
+	// the kernel-echoed stdin lands in stdout naturally, so the
+	// connector's typing is visible too.
+	StdoutMirror io.Writer
+	StderrMirror io.Writer
 
 	Verbose bool
 
@@ -104,6 +128,28 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		h.sendShellError(s, "bad shell request: "+err.Error())
 		return nil
 	}
+
+	// Max-concurrent gate. Atomic check-then-increment with rollback
+	// if we lose the race; on the happy path waitAndFinish decrements.
+	// slotTaken tracks whether we own a slot that still needs
+	// releasing; the defer below releases it on any early-return path
+	// (spawn failed, bad config, …) but we clear slotTaken once
+	// waitAndFinish is launched and assumes ownership.
+	slotTaken := false
+	if h.MaxConcurrent > 0 {
+		if int(activeShellCount.Add(1)) > h.MaxConcurrent {
+			activeShellCount.Add(-1)
+			log.Printf("Shell rejected: at max-sessions=%d", h.MaxConcurrent)
+			h.sendShellError(s, fmt.Sprintf("listener is busy (max %d concurrent shell session(s))", h.MaxConcurrent))
+			return nil
+		}
+		slotTaken = true
+	}
+	defer func() {
+		if slotTaken {
+			activeShellCount.Add(-1)
+		}
+	}()
 
 	// Resolve argv: restricted-mode ours, otherwise client's, otherwise
 	// default, otherwise $SHELL, otherwise /bin/sh.
@@ -194,12 +240,15 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	log.Printf("Shell started: argv=%v pty=%v cols=%d rows=%d", argv, open.PTY, cols, rows)
 
 	// Spin up the output pumps and the wait/FIN goroutine. Each runs
-	// independently; the wait goroutine cleans up shared state.
+	// independently; the wait goroutine cleans up shared state and
+	// releases the max-concurrent slot. We clear slotTaken here so
+	// the local defer doesn't double-release.
+	slotTaken = false
 	go h.pumpReader(s, stdout, shellTagStdout)
 	if stderr != nil {
 		go h.pumpReader(s, stderr, shellTagStderr)
 	}
-	go h.waitAndFinish(s, cmd, argv)
+	go h.waitAndFinish(s, cmd, argv, h.MaxConcurrent > 0)
 
 	if final {
 		// SYN|FIN means the client won't send any stdin. For pipe mode
@@ -214,14 +263,26 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 
 // pumpReader copies bytes from r to the stream as DAT(tag, chunk)
 // frames until EOF or write error. Each frame is [tag][payload], capped
-// at MaxChunkSize total.
+// at MaxChunkSize total. When a mirror writer is configured for this
+// tag, the bytes are also written there — the listener owner gets a
+// live view of the shell session in their terminal.
 func (h *ShellHandler) pumpReader(s Stream, r io.Reader, tag byte) {
 	// Leave 1 byte of headroom for the tag prefix.
 	buf := make([]byte, protocol.MaxChunkSize-1)
 	const maxBuffered uint64 = 8 << 20
+	var mirror io.Writer
+	switch tag {
+	case shellTagStdout:
+		mirror = h.StdoutMirror
+	case shellTagStderr:
+		mirror = h.StderrMirror
+	}
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			if mirror != nil {
+				_, _ = mirror.Write(buf[:n])
+			}
 			for s.BufferedAmount() > maxBuffered {
 				time.Sleep(1 * time.Millisecond)
 			}
@@ -307,8 +368,9 @@ func (h *ShellHandler) closeStdin(streamID uint32) {
 
 // waitAndFinish blocks on cmd.Wait(), then emits the FIN trailer with
 // the exit code and any terminating signal. Also cleans up per-stream
-// state (PTY fd, map entry).
-func (h *ShellHandler) waitAndFinish(s Stream, cmd *exec.Cmd, argv []string) {
+// state (PTY fd, map entry) and — if releaseSlot is true — releases
+// the max-concurrent slot that OnSYN reserved.
+func (h *ShellHandler) waitAndFinish(s Stream, cmd *exec.Cmd, argv []string, releaseSlot bool) {
 	err := cmd.Wait()
 
 	h.mu.Lock()
@@ -317,6 +379,9 @@ func (h *ShellHandler) waitAndFinish(s Stream, cmd *exec.Cmd, argv []string) {
 	h.mu.Unlock()
 	if sess != nil && sess.ptyFile != nil {
 		_ = sess.ptyFile.Close()
+	}
+	if releaseSlot {
+		activeShellCount.Add(-1)
 	}
 
 	exitCode := 0
