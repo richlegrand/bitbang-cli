@@ -38,6 +38,13 @@ type Connection struct {
 	sig       *signaling.Client
 	OnMessage OnMessageFunc
 
+	// OnClose, if set, is invoked when the data channel transitions to
+	// closed. Used by listener wire-up to clean up per-session
+	// resources whose lifetime would otherwise outlast the connection
+	// — most importantly, kill any shell processes that would
+	// otherwise keep holding their max-sessions slot.
+	OnClose func()
+
 	// identity holds the device's private key, used to decrypt the
 	// browser's encrypted_request payload riding on the SDP answer.
 	identity *identity.Identity
@@ -148,6 +155,13 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 	dc.OnClose(func() {
 		dcClosed = true
 		log.Printf("Data channel closed for %s", clientID)
+		// Run caller-supplied cleanup BEFORE closing the PC, so any
+		// resources tied to the data channel (e.g. spawned shell
+		// processes) get torn down while the connection state is
+		// still observable.
+		if conn.OnClose != nil {
+			conn.OnClose()
+		}
 		pc.Close()
 	})
 

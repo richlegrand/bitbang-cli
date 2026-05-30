@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	qrcode "github.com/skip2/go-qrcode"
+	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/identity"
@@ -79,6 +80,13 @@ func runShell(args []string) {
 	}
 	if *mirror {
 		fmt.Printf("Mirroring shell output to this console (use --mirror=false to disable)\n")
+		// Enable the listener-vs-client size comparison printer only
+		// when stdout is a real terminal — when it's piped to a file
+		// or systemd journal, terminal size is meaningless and
+		// SIGWINCH never fires.
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			streamtype.EnableListenerResizeTracking(int(os.Stdout.Fd()))
+		}
 	}
 	if pinAuth.Required() {
 		fmt.Printf("PIN protection enabled\n")
@@ -136,6 +144,11 @@ func runShell(args []string) {
 			}
 
 			sess = session.New(conn.DC, pinAuth, *verbose, shellHandler, webHandler)
+
+			// Kill any shell processes when this connection's data
+			// channel closes — otherwise they outlive the browser tab
+			// and keep holding their max-sessions slot.
+			conn.OnClose = shellHandler.KillAll
 
 			mu.Lock()
 			connections[clientID] = conn

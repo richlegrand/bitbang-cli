@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>bitbang</title>
+<link rel="stylesheet" href="tabs.css">
+</head>
+<body>
+<nav id="tabs">
+  {{range $i, $c := .Caps}}
+  <button data-cap="{{$c.Name}}"{{if eq $i 0}} class="active"{{end}}>{{$c.Label}}</button>
+  {{end}}
+</nav>
+<main>
+  {{range $i, $c := .Caps}}
+  <iframe data-cap="{{$c.Name}}" src="{{$c.URL}}" class="{{if ne $i 0}}inactive{{end}}"></iframe>
+  {{end}}
+</main>
+<script src="tabs.js"></script>
+</body>
+</html>

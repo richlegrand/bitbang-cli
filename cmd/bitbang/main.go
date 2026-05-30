@@ -4,10 +4,11 @@
 // Usage:
 //
 //	bitbang proxy [HOST:PORT] [--pin PIN] [--ephemeral]
-//	bitbang fileshare <path>           [--pin PIN] [--upload] [--ephemeral]
-//	bitbang shell                      [--cmd CMD] [--pin PIN] [--ephemeral]
-//	bitbang cp <src> <dst>             (one side is <URL>:/path, or `-`)
-//	bitbang connect <URL> [-- argv]    (client: interactive or one-shot)
+//	bitbang fileshare <path>                 [--pin PIN] [--upload] [--ephemeral]
+//	bitbang shell                            [--cmd CMD] [--pin PIN] [--ephemeral]
+//	bitbang serve [--files PATH] [--shell …] [--pin PIN] [--ephemeral]
+//	bitbang cp <src> <dst>                   (one side is <URL>:/path, or `-`)
+//	bitbang connect <URL> [-- argv]          (client: interactive or one-shot)
 //
 // Running `bitbang` with no arguments is currently equivalent to `bitbang
 // proxy` for backwards-compatibility with the old `bitbangproxy` binary.
@@ -39,6 +40,8 @@ func main() {
 		runProxy(os.Args[2:])
 	case "fileshare":
 		runFileshare(os.Args[2:])
+	case "serve":
+		runServe(os.Args[2:])
 	case "cp":
 		runCp(os.Args[2:])
 	case "shell":
@@ -65,11 +68,12 @@ func main() {
 func printUsage() {
 	fmt.Printf("%s v%s\n\n", banner, version)
 	fmt.Println("Usage:")
-	fmt.Println("  bitbang proxy [HOST:PORT]      [--pin PIN] [--ephemeral]")
-	fmt.Println("  bitbang fileshare <path>       [--pin PIN] [--upload] [--ephemeral]")
-	fmt.Println("  bitbang shell                  [--cmd CMD] [--pin PIN] [--ephemeral]")
-	fmt.Println("  bitbang cp <src> <dst>         (one side is <URL>:/path, or '-')")
-	fmt.Println("  bitbang connect <URL> [-- ...] (client; interactive or one-shot)")
+	fmt.Println("  bitbang proxy [HOST:PORT]              [--pin PIN] [--ephemeral]")
+	fmt.Println("  bitbang fileshare <path>               [--pin PIN] [--upload] [--ephemeral]")
+	fmt.Println("  bitbang shell                          [--cmd CMD] [--pin PIN] [--ephemeral]")
+	fmt.Println("  bitbang serve [--files PATH] [--shell] [--pin PIN] [--ephemeral]")
+	fmt.Println("  bitbang cp <src> <dst>                 (one side is <URL>:/path, or '-')")
+	fmt.Println("  bitbang connect <URL> [-- ...]         (client; interactive or one-shot)")
 	fmt.Println()
 	fmt.Println("Without a subcommand, runs `bitbang proxy` for compatibility")
 	fmt.Println("with the previous bitbangproxy binary.")

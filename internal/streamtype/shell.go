@@ -8,12 +8,14 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
@@ -24,6 +26,76 @@ import (
 // creates its own ShellHandler instance; the limit needs to apply
 // across all of them.
 var activeShellCount atomic.Int32
+
+// Listener-terminal size tracking, used to print client/listener size
+// comparison lines when mirroring is on. listenerCols/Rows are the
+// current dimensions of the listener's own terminal (as observed
+// through SIGWINCH), or 0 if tracking is disabled (stdout not a TTY,
+// or flag off). activeShells is the registry of in-flight shell
+// sessions across every ShellHandler instance — the SIGWINCH watcher
+// iterates it to print comparison lines for each active stream.
+var (
+	listenerCols atomic.Int32
+	listenerRows atomic.Int32
+
+	activeShellsMu sync.Mutex
+	activeShells   = map[*shellSession]struct{}{}
+)
+
+// EnableListenerResizeTracking starts a background SIGWINCH watcher
+// that records the listener's terminal dimensions and prints a
+// client-vs-listener comparison line whenever either side resizes.
+// Call once at listener startup, after verifying stdout is a TTY.
+// fd is the file descriptor to query for size (typically
+// int(os.Stdout.Fd())).
+func EnableListenerResizeTracking(fd int) {
+	if cols, rows, err := term.GetSize(fd); err == nil {
+		setListenerSize(cols, rows)
+	}
+	sigCh := make(chan os.Signal, 4)
+	signal.Notify(sigCh, syscall.SIGWINCH)
+	go func() {
+		for range sigCh {
+			if cols, rows, err := term.GetSize(fd); err == nil {
+				setListenerSize(cols, rows)
+			}
+		}
+	}()
+}
+
+// setListenerSize atomically updates the recorded listener size. If
+// either dimension changed, it triggers a comparison print for every
+// currently-active shell session.
+func setListenerSize(cols, rows int) {
+	oldC := listenerCols.Swap(int32(cols))
+	oldR := listenerRows.Swap(int32(rows))
+	if int(oldC) == cols && int(oldR) == rows {
+		return
+	}
+	activeShellsMu.Lock()
+	sessions := make([]*shellSession, 0, len(activeShells))
+	for sess := range activeShells {
+		sessions = append(sessions, sess)
+	}
+	activeShellsMu.Unlock()
+	for _, sess := range sessions {
+		printShellSizeComparison(sess.clientCols, sess.clientRows)
+	}
+}
+
+// printShellSizeComparison emits a single one-line log message with
+// the listener and client dimensions. No interpretation, no coloring,
+// no terminal positioning — just the numbers. No-op when listener
+// size isn't being tracked (rows==0 means stdout wasn't a TTY at
+// startup or the feature is disabled).
+func printShellSizeComparison(clientCols, clientRows int) {
+	lc := int(listenerCols.Load())
+	lr := int(listenerRows.Load())
+	if lr == 0 {
+		return
+	}
+	log.Printf("ours: %dx%d theirs: %dx%d", lc, lr, clientCols, clientRows)
+}
 
 // Shell DAT tag bytes — the first byte of every shell DAT frame, telling
 // the receiver what to do with the rest of the payload.
@@ -80,10 +152,18 @@ type ShellHandler struct {
 // whichever pipe handle(s) we need to ferry stdin to it. In PTY mode
 // the same fd is used for both directions, so stdin is nil. In pipe
 // mode stdin is the stdin pipe and ptyFile is nil.
+//
+// clientCols/clientRows track the current dimensions the client
+// requested (initial values from the SYN, updated on each
+// DAT(tag=resize) frame). Used by the listener-side size-comparison
+// printer.
 type shellSession struct {
 	cmd     *exec.Cmd
 	ptyFile *os.File       // PTY mode: master side, used for read + write
 	stdin   io.WriteCloser // pipe mode: dedicated stdin pipe
+
+	clientCols int
+	clientRows int
 }
 
 // NewShell returns a ShellHandler with the given default argv. Pass nil
@@ -108,6 +188,31 @@ func NewShellRestricted(argv []string, verbose bool) *ShellHandler {
 
 func (h *ShellHandler) Type() string             { return "shell" }
 func (h *ShellHandler) OnConnect(_ string) error { return nil }
+
+// KillAll sends SIGHUP to every active shell process this handler is
+// tracking. Called by the listener wire-up when the underlying data
+// channel closes — without it, processes outlive the connection,
+// keep holding their max-sessions slot, and the next connector hits
+// "listener is busy."
+//
+// SIGHUP is the conventional "your terminal went away" signal. bash
+// and most shells exit cleanly on it. The actual cleanup (FIN
+// emission, slot release, map removal) still flows through
+// waitAndFinish — that goroutine unblocks once cmd.Wait sees the
+// process exit.
+func (h *ShellHandler) KillAll() {
+	h.mu.Lock()
+	sessions := make([]*shellSession, 0, len(h.streams))
+	for _, sess := range h.streams {
+		sessions = append(sessions, sess)
+	}
+	h.mu.Unlock()
+	for _, sess := range sessions {
+		if sess.cmd != nil && sess.cmd.Process != nil {
+			_ = sess.cmd.Process.Signal(syscall.SIGHUP)
+		}
+	}
+}
 
 // shellOpen is the SYN payload for a shell stream. Kept private; the
 // JSON shape on the wire is the contract.
@@ -188,7 +293,7 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		rows = 24
 	}
 
-	sess := &shellSession{cmd: cmd}
+	sess := &shellSession{cmd: cmd, clientCols: cols, clientRows: rows}
 	var stdout, stderr io.Reader
 
 	if open.PTY {
@@ -236,8 +341,12 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	h.mu.Lock()
 	h.streams[s.ID()] = sess
 	h.mu.Unlock()
+	activeShellsMu.Lock()
+	activeShells[sess] = struct{}{}
+	activeShellsMu.Unlock()
 
 	log.Printf("Shell started: argv=%v pty=%v cols=%d rows=%d", argv, open.PTY, cols, rows)
+	printShellSizeComparison(cols, rows)
 
 	// Spin up the output pumps and the wait/FIN goroutine. Each runs
 	// independently; the wait goroutine cleans up shared state and
@@ -333,12 +442,19 @@ func (h *ShellHandler) OnDAT(s Stream, payload []byte) error {
 			_ = sess.cmd.Process.Signal(sig)
 		}
 	case shellTagResize:
-		if len(body) < 4 || sess.ptyFile == nil {
+		if len(body) < 4 {
 			return nil
 		}
 		cols := binary.LittleEndian.Uint16(body[0:2])
 		rows := binary.LittleEndian.Uint16(body[2:4])
-		_ = pty.Setsize(sess.ptyFile, &pty.Winsize{Cols: cols, Rows: rows})
+		if sess.ptyFile != nil {
+			_ = pty.Setsize(sess.ptyFile, &pty.Winsize{Cols: cols, Rows: rows})
+		}
+		// Track the new client size + reprint the comparison so the
+		// listener owner can see whether their terminal still fits.
+		sess.clientCols = int(cols)
+		sess.clientRows = int(rows)
+		printShellSizeComparison(int(cols), int(rows))
 	}
 	return nil
 }
@@ -377,8 +493,13 @@ func (h *ShellHandler) waitAndFinish(s Stream, cmd *exec.Cmd, argv []string, rel
 	sess := h.streams[s.ID()]
 	delete(h.streams, s.ID())
 	h.mu.Unlock()
-	if sess != nil && sess.ptyFile != nil {
-		_ = sess.ptyFile.Close()
+	if sess != nil {
+		activeShellsMu.Lock()
+		delete(activeShells, sess)
+		activeShellsMu.Unlock()
+		if sess.ptyFile != nil {
+			_ = sess.ptyFile.Close()
+		}
 	}
 	if releaseSlot {
 		activeShellCount.Add(-1)
