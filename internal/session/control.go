@@ -23,11 +23,10 @@ func (s *Session) handleControl(frame protocol.Frame) {
 	}
 
 	var msg struct {
-		Type    string   `json:"type"`
-		Path    string   `json:"path"`
-		PIN     string   `json:"pin"`
-		Caps    []string `json:"caps"`
-		Version int      `json:"version"`
+		Type    string `json:"type"`
+		Path    string `json:"path"`
+		PIN     string `json:"pin"`
+		Version int    `json:"version"`
 	}
 	if err := json.Unmarshal(frame.Payload, &msg); err != nil {
 		return
@@ -35,13 +34,13 @@ func (s *Session) handleControl(frame protocol.Frame) {
 
 	switch msg.Type {
 	case "connect":
-		s.handleConnect(msg.Path, msg.Caps, msg.Version)
+		s.handleConnect(msg.Path, msg.Version)
 	case "auth":
 		s.handleAuth(msg.PIN)
 	}
 }
 
-func (s *Session) handleConnect(path string, _ []string, _ int) {
+func (s *Session) handleConnect(path string, _ int) {
 	if path == "" {
 		path = "/"
 	}
@@ -98,13 +97,8 @@ func (s *Session) handleAuth(pin string) {
 }
 
 func (s *Session) sendReady() {
-	caps := make([]string, 0, len(s.handlers))
-	for k := range s.handlers {
-		caps = append(caps, k)
-	}
 	ready, _ := json.Marshal(map[string]interface{}{
 		"type":           "ready",
-		"caps":           caps,
 		"server_version": protocol.SWSPVersion,
 	})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, ready)

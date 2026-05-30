@@ -1,17 +1,24 @@
-// Command bitbang is the BitBang CLI: a single binary with subcommands
-// for proxying local web apps, sharing files, and running a remote shell.
+// Command bitbang is the BitBang CLI: a single binary with a listener
+// entrypoint (`serve`) and two client subcommands (`cp`, `connect`).
 //
 // Usage:
 //
-//	bitbang proxy [HOST:PORT] [--pin PIN] [--ephemeral]
-//	bitbang fileshare <path>                 [--pin PIN] [--upload] [--ephemeral]
-//	bitbang shell                            [--cmd CMD] [--pin PIN] [--ephemeral]
-//	bitbang serve [--files PATH] [--shell …] [--pin PIN] [--ephemeral]
-//	bitbang cp <src> <dst>                   (one side is <URL>:/path, or `-`)
-//	bitbang connect <URL> [-- argv]          (client: interactive or one-shot)
+//	bitbang serve                                 # all caps: shell + files + proxy
+//	bitbang serve shell [flags]                   # shell only
+//	bitbang serve files [PATH] [flags]            # files only, PATH defaults to cwd
+//	bitbang serve proxy [flags]                   # proxy only (HTTP reverse proxy)
+//	bitbang cp <src> <dst>                        (one side is <URL>:/path, or `-`)
+//	bitbang connect <URL> [-- argv]               (client: interactive or one-shot)
 //
-// Running `bitbang` with no arguments is currently equivalent to `bitbang
-// proxy` for backwards-compatibility with the old `bitbangproxy` binary.
+// `bitbang serve` is the umbrella mode — its default cap set (today:
+// shell + files + proxy) is what most users want, and the hamburger
+// menu on the launcher tab is how they pick which cap to open.
+// Single-cap modes are for when you specifically want to expose just
+// one capability and skip the hamburger UI entirely.
+//
+// Bare `bitbang` (no args) prints help. The earlier no-args-runs-proxy
+// behavior (inherited from the old `bitbangproxy` binary) is gone —
+// accidental double-clicks shouldn't silently start a listener.
 package main
 
 import (
@@ -19,7 +26,7 @@ import (
 	"os"
 )
 
-const version = "0.2.0"
+const version = "0.4.0"
 
 const banner = `   ___  _ __  ___
   / _ )(_) /_/ _ )___ ____  ___ _
@@ -29,23 +36,15 @@ const banner = `   ___  _ __  ___
 
 func main() {
 	if len(os.Args) < 2 {
-		// No subcommand → default to proxy (matches old bitbangproxy
-		// behavior so existing invocations still work).
-		runProxy(os.Args[1:])
-		return
+		printUsage()
+		os.Exit(2)
 	}
 
 	switch os.Args[1] {
-	case "proxy":
-		runProxy(os.Args[2:])
-	case "fileshare":
-		runFileshare(os.Args[2:])
 	case "serve":
-		runServe(os.Args[2:])
+		dispatchServe(os.Args[2:])
 	case "cp":
 		runCp(os.Args[2:])
-	case "shell":
-		runShell(os.Args[2:])
 	case "connect":
 		runConnect(os.Args[2:])
 	case "version", "--version", "-v":
@@ -53,13 +52,31 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	default:
-		// Backwards compatibility: if the first arg looks like a flag,
-		// fall through to proxy mode (matches old bitbangproxy CLI).
-		if len(os.Args[1]) > 0 && os.Args[1][0] == '-' {
-			runProxy(os.Args[1:])
-			return
-		}
 		fmt.Fprintf(os.Stderr, "bitbang: unknown subcommand %q\n\n", os.Args[1])
+		printUsage()
+		os.Exit(2)
+	}
+}
+
+// dispatchServe routes `bitbang serve [mode] [flags]`. With no mode
+// (bare `serve` or `serve --flag`), runs the all-caps umbrella mode.
+// With `shell`, `files`, or `proxy` as the next arg, runs that single
+// cap. Anything else after `serve` that starts with `-` is treated as
+// a flag to the all-mode; anything else is an unknown mode.
+func dispatchServe(args []string) {
+	if len(args) == 0 || args[0] == "" || args[0][0] == '-' {
+		runServe(args)
+		return
+	}
+	switch args[0] {
+	case "shell":
+		runServeShell(args[1:])
+	case "files":
+		runServeFiles(args[1:])
+	case "proxy":
+		runServeProxy(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "bitbang serve: unknown mode %q (expected shell, files, or proxy)\n\n", args[0])
 		printUsage()
 		os.Exit(2)
 	}
@@ -68,13 +85,12 @@ func main() {
 func printUsage() {
 	fmt.Printf("%s v%s\n\n", banner, version)
 	fmt.Println("Usage:")
-	fmt.Println("  bitbang proxy [HOST:PORT]              [--pin PIN] [--ephemeral]")
-	fmt.Println("  bitbang fileshare <path>               [--pin PIN] [--upload] [--ephemeral]")
-	fmt.Println("  bitbang shell                          [--cmd CMD] [--pin PIN] [--ephemeral]")
-	fmt.Println("  bitbang serve [--files PATH] [--shell] [--pin PIN] [--ephemeral]")
-	fmt.Println("  bitbang cp <src> <dst>                 (one side is <URL>:/path, or '-')")
-	fmt.Println("  bitbang connect <URL> [-- ...]         (client; interactive or one-shot)")
+	fmt.Println("  bitbang serve [flags]                  All caps (shell + files + proxy)")
+	fmt.Println("  bitbang serve shell [flags]            Shell only")
+	fmt.Println("  bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)")
+	fmt.Println("  bitbang serve proxy [flags]            Proxy only (HTTP reverse proxy)")
+	fmt.Println("  bitbang cp <src> <dst>                 Copy files (one side is <URL>:/path, or '-')")
+	fmt.Println("  bitbang connect <URL> [-- argv...]     Open a remote shell (interactive or one-shot)")
 	fmt.Println()
-	fmt.Println("Without a subcommand, runs `bitbang proxy` for compatibility")
-	fmt.Println("with the previous bitbangproxy binary.")
+	fmt.Println("Run `bitbang serve --help` (or with a mode) for the available flags.")
 }

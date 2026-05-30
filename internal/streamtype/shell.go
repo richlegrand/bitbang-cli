@@ -1,6 +1,7 @@
 package streamtype
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -20,6 +21,18 @@ import (
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
+// Mirror-line decoration. Every emitted shell mirror line is prefixed
+// with mirrorPrefix so it's visually distinct from listener log
+// messages (which carry a "YYYY/MM/DD HH:MM:SS " prefix from the
+// stdlib logger). When the underlying writer is a TTY, the line is
+// further dimmed via SGR 2 so a quick scan separates remote shell
+// output from the listener's own activity.
+const (
+	mirrorPrefix = "│ "
+	ansiDim      = "\x1b[2m"
+	ansiReset    = "\x1b[0m"
+)
+
 // activeShellCount is the process-wide count of in-flight shell
 // streams across all sessions. Used by MaxConcurrent enforcement on
 // ShellHandler. Lives at package scope because each WebRTC peer
@@ -27,74 +40,115 @@ import (
 // across all of them.
 var activeShellCount atomic.Int32
 
-// Listener-terminal size tracking, used to print client/listener size
-// comparison lines when mirroring is on. listenerCols/Rows are the
-// current dimensions of the listener's own terminal (as observed
-// through SIGWINCH), or 0 if tracking is disabled (stdout not a TTY,
-// or flag off). activeShells is the registry of in-flight shell
-// sessions across every ShellHandler instance — the SIGWINCH watcher
-// iterates it to print comparison lines for each active stream.
-var (
-	listenerCols atomic.Int32
-	listenerRows atomic.Int32
+// ansiEscape matches the VT/ANSI escape sequences a shell session
+// realistically emits: CSI (ESC [ params intermediates final), OSC
+// (ESC ] ... BEL or ST), and the shorter two-byte ESC X forms.
+// Anchored nowhere — used with ReplaceAll to strip all matches.
+var ansiEscape = regexp.MustCompile(
+	"\x1b\\[[0-?]*[ -/]*[@-~]" + // CSI
+		"|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)" + // OSC ... BEL or ST
+		"|\x1b[@-Z\\\\-_]") // two-byte ESC X
 
-	activeShellsMu sync.Mutex
-	activeShells   = map[*shellSession]struct{}{}
-)
+// otherControl strips C0/C1 control characters except newline and
+// tab. Backspace, BEL, vertical tab, and friends are mostly cursor
+// gymnastics that don't carry meaning once the line is decoded as
+// text.
+var otherControl = regexp.MustCompile("[\x00-\x08\x0b-\x1f\x7f]")
 
-// EnableListenerResizeTracking starts a background SIGWINCH watcher
-// that records the listener's terminal dimensions and prints a
-// client-vs-listener comparison line whenever either side resizes.
-// Call once at listener startup, after verifying stdout is a TTY.
-// fd is the file descriptor to query for size (typically
-// int(os.Stdout.Fd())).
-func EnableListenerResizeTracking(fd int) {
-	if cols, rows, err := term.GetSize(fd); err == nil {
-		setListenerSize(cols, rows)
+// lineMirror is the listener-side mirror filter: ANSI escapes
+// stripped, control characters except \n and \t dropped, output
+// emitted to the underlying writer one full line at a time. Each
+// pumpReader gets its own lineMirror — concurrent shells interleave
+// at line granularity, which matches what the old full-passthrough
+// mirror did.
+//
+// Both \n and \r flush a line. \r-terminated lines are treated as
+// redraws (e.g. `less`'s status line, a progress bar): consecutive
+// identical \r-terminated lines are deduped so 15 redraws of "(END)"
+// become one "(END)" line in the log. \n always emits because it's a
+// real content boundary.
+//
+// Trade-off: a prompt that doesn't end with \n or \r won't print
+// until something terminates the line. That's the cost of a clean
+// per-line listener log; the connector still sees everything in
+// real-time on their side.
+type lineMirror struct {
+	w   io.Writer
+	mu  sync.Mutex
+	buf bytes.Buffer
+	// color is set when the underlying writer is a TTY — we wrap each
+	// emitted line in SGR-dim escapes. Piped output skips the
+	// escapes so the prefix is the only differentiator (which is the
+	// portable signal anyway).
+	color bool
+	// lastRedraw is the cleaned content of the most recent
+	// \r-terminated line. Consecutive identical redraws get suppressed.
+	// Reset whenever a \n-terminated line is emitted (real content
+	// breaks the redraw run).
+	lastRedraw string
+}
+
+func newLineMirror(w io.Writer) *lineMirror {
+	color := false
+	if f, ok := w.(*os.File); ok {
+		color = term.IsTerminal(int(f.Fd()))
 	}
-	sigCh := make(chan os.Signal, 4)
-	signal.Notify(sigCh, syscall.SIGWINCH)
-	go func() {
-		for range sigCh {
-			if cols, rows, err := term.GetSize(fd); err == nil {
-				setListenerSize(cols, rows)
-			}
+	return &lineMirror{w: w, color: color}
+}
+
+// Write accumulates bytes and flushes on either \n or \r. The
+// terminator itself isn't added to the buffer — it's the trigger.
+func (m *lineMirror) Write(p []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range p {
+		switch b {
+		case '\n':
+			m.flushLine(false)
+		case '\r':
+			m.flushLine(true)
+		default:
+			m.buf.WriteByte(b)
 		}
-	}()
+	}
+	return len(p), nil
 }
 
-// setListenerSize atomically updates the recorded listener size. If
-// either dimension changed, it triggers a comparison print for every
-// currently-active shell session.
-func setListenerSize(cols, rows int) {
-	oldC := listenerCols.Swap(int32(cols))
-	oldR := listenerRows.Swap(int32(rows))
-	if int(oldC) == cols && int(oldR) == rows {
+// flushLine emits the buffered line (after ANSI/control stripping) to
+// the underlying writer. isRedraw=true marks a \r-terminated line, in
+// which case the dedup check kicks in. Each emitted line is wrapped
+// with mirrorPrefix and (on TTY writers) SGR-dim escapes.
+func (m *lineMirror) flushLine(isRedraw bool) {
+	if m.buf.Len() == 0 {
 		return
 	}
-	activeShellsMu.Lock()
-	sessions := make([]*shellSession, 0, len(activeShells))
-	for sess := range activeShells {
-		sessions = append(sessions, sess)
-	}
-	activeShellsMu.Unlock()
-	for _, sess := range sessions {
-		printShellSizeComparison(sess.clientCols, sess.clientRows)
-	}
-}
-
-// printShellSizeComparison emits a single one-line log message with
-// the listener and client dimensions. No interpretation, no coloring,
-// no terminal positioning — just the numbers. No-op when listener
-// size isn't being tracked (rows==0 means stdout wasn't a TTY at
-// startup or the feature is disabled).
-func printShellSizeComparison(clientCols, clientRows int) {
-	lc := int(listenerCols.Load())
-	lr := int(listenerRows.Load())
-	if lr == 0 {
+	cleaned := ansiEscape.ReplaceAll(m.buf.Bytes(), nil)
+	cleaned = otherControl.ReplaceAll(cleaned, nil)
+	m.buf.Reset()
+	if len(cleaned) == 0 {
+		// Pure ANSI / control noise — emit nothing and don't touch
+		// the dedup state, so a "real" redraw afterwards still emits.
 		return
 	}
-	log.Printf("ours: %dx%d theirs: %dx%d", lc, lr, clientCols, clientRows)
+	if isRedraw {
+		if string(cleaned) == m.lastRedraw {
+			return
+		}
+		m.lastRedraw = string(cleaned)
+	} else {
+		// \n is a content boundary — break the redraw run so the next
+		// \r-terminated line emits even if it matches the prior one.
+		m.lastRedraw = ""
+	}
+	if m.color {
+		_, _ = io.WriteString(m.w, ansiDim+mirrorPrefix)
+		_, _ = m.w.Write(cleaned)
+		_, _ = io.WriteString(m.w, ansiReset+"\n")
+	} else {
+		_, _ = io.WriteString(m.w, mirrorPrefix)
+		_, _ = m.w.Write(cleaned)
+		_, _ = m.w.Write([]byte{'\n'})
+	}
 }
 
 // Shell DAT tag bytes — the first byte of every shell DAT frame, telling
@@ -152,18 +206,10 @@ type ShellHandler struct {
 // whichever pipe handle(s) we need to ferry stdin to it. In PTY mode
 // the same fd is used for both directions, so stdin is nil. In pipe
 // mode stdin is the stdin pipe and ptyFile is nil.
-//
-// clientCols/clientRows track the current dimensions the client
-// requested (initial values from the SYN, updated on each
-// DAT(tag=resize) frame). Used by the listener-side size-comparison
-// printer.
 type shellSession struct {
 	cmd     *exec.Cmd
 	ptyFile *os.File       // PTY mode: master side, used for read + write
 	stdin   io.WriteCloser // pipe mode: dedicated stdin pipe
-
-	clientCols int
-	clientRows int
 }
 
 // NewShell returns a ShellHandler with the given default argv. Pass nil
@@ -293,7 +339,7 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		rows = 24
 	}
 
-	sess := &shellSession{cmd: cmd, clientCols: cols, clientRows: rows}
+	sess := &shellSession{cmd: cmd}
 	var stdout, stderr io.Reader
 
 	if open.PTY {
@@ -341,12 +387,8 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	h.mu.Lock()
 	h.streams[s.ID()] = sess
 	h.mu.Unlock()
-	activeShellsMu.Lock()
-	activeShells[sess] = struct{}{}
-	activeShellsMu.Unlock()
 
-	log.Printf("Shell started: argv=%v pty=%v cols=%d rows=%d", argv, open.PTY, cols, rows)
-	printShellSizeComparison(cols, rows)
+	log.Printf("Shell started: argv=%v pty=%v", argv, open.PTY)
 
 	// Spin up the output pumps and the wait/FIN goroutine. Each runs
 	// independently; the wait goroutine cleans up shared state and
@@ -373,8 +415,10 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 // pumpReader copies bytes from r to the stream as DAT(tag, chunk)
 // frames until EOF or write error. Each frame is [tag][payload], capped
 // at MaxChunkSize total. When a mirror writer is configured for this
-// tag, the bytes are also written there — the listener owner gets a
-// live view of the shell session in their terminal.
+// tag, the bytes pass through a lineMirror filter (ANSI stripped,
+// emitted one line at a time) before reaching the underlying writer.
+// The connector still sees the raw stream over the data channel — the
+// filter only affects what the listener owner sees on their console.
 func (h *ShellHandler) pumpReader(s Stream, r io.Reader, tag byte) {
 	// Leave 1 byte of headroom for the tag prefix.
 	buf := make([]byte, protocol.MaxChunkSize-1)
@@ -382,9 +426,13 @@ func (h *ShellHandler) pumpReader(s Stream, r io.Reader, tag byte) {
 	var mirror io.Writer
 	switch tag {
 	case shellTagStdout:
-		mirror = h.StdoutMirror
+		if h.StdoutMirror != nil {
+			mirror = newLineMirror(h.StdoutMirror)
+		}
 	case shellTagStderr:
-		mirror = h.StderrMirror
+		if h.StderrMirror != nil {
+			mirror = newLineMirror(h.StderrMirror)
+		}
 	}
 	for {
 		n, err := r.Read(buf)
@@ -450,11 +498,6 @@ func (h *ShellHandler) OnDAT(s Stream, payload []byte) error {
 		if sess.ptyFile != nil {
 			_ = pty.Setsize(sess.ptyFile, &pty.Winsize{Cols: cols, Rows: rows})
 		}
-		// Track the new client size + reprint the comparison so the
-		// listener owner can see whether their terminal still fits.
-		sess.clientCols = int(cols)
-		sess.clientRows = int(rows)
-		printShellSizeComparison(int(cols), int(rows))
 	}
 	return nil
 }
@@ -494,9 +537,6 @@ func (h *ShellHandler) waitAndFinish(s Stream, cmd *exec.Cmd, argv []string, rel
 	delete(h.streams, s.ID())
 	h.mu.Unlock()
 	if sess != nil {
-		activeShellsMu.Lock()
-		delete(activeShells, sess)
-		activeShellsMu.Unlock()
 		if sess.ptyFile != nil {
 			_ = sess.ptyFile.Close()
 		}

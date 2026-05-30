@@ -9,89 +9,180 @@ import (
 	"sync"
 
 	qrcode "github.com/skip2/go-qrcode"
-	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/peer"
+	"github.com/richlegrand/bitbang/internal/proxyweb"
 	"github.com/richlegrand/bitbang/internal/session"
 	"github.com/richlegrand/bitbang/internal/shellweb"
 	"github.com/richlegrand/bitbang/internal/signaling"
 	"github.com/richlegrand/bitbang/internal/streamtype"
-	"github.com/richlegrand/bitbang/internal/tabweb"
 )
 
-// runServe implements `bitbang serve` — the unified multi-cap listener.
-// Each cap is opt-in via a flag; the resulting listener exposes the
-// union of selected caps over one signaling identity. With multiple
-// caps the browser sees a tabbed UI; with a single cap the listener
-// reduces to the equivalent single-purpose subcommand (and the page
-// goes straight to that cap's UI, no tab strip).
-//
-//	bitbang serve --files PATH                  # = bitbang fileshare PATH
-//	bitbang serve --shell                       # = bitbang shell
-//	bitbang serve --files PATH --shell          # combo: tabbed browser
+// serveConfig is the assembled per-mode configuration that the shared
+// listener loop in startListener uses. Each mode (all / shell / files /
+// proxy) populates the fields relevant to it and leaves the rest zero.
+type serveConfig struct {
+	// Shared flags (all modes).
+	server    string
+	pin       string
+	ephemeral bool
+	verbose   bool
+
+	// Caps actually enabled in this mode.
+	shellEnabled bool
+	filesEnabled bool
+	proxyEnabled bool
+
+	// Shell-cap configuration (only set when shellEnabled).
+	shellCmd         string
+	shellMaxSessions int
+	shellMirror      bool
+
+	// Files-cap configuration (only set when filesEnabled).
+	filesPath   string
+	filesUpload bool
+}
+
+// runServe — `bitbang serve` — exposes shell + files + proxy. The
+// launcher tab serves shell at `/`; the hamburger menu lets users open
+// Files or Proxy in new browser tabs. Files-only / Shell-only /
+// Proxy-only modes are dedicated subcommands; this mode is the "I want
+// everything I can get from a single listener" entry point.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	server := fs.String("server", "bitba.ng", "Signaling server hostname")
-	pin := fs.String("pin", "", "PIN to protect access")
-	ephemeral := fs.Bool("ephemeral", false, "Use a temporary identity")
-	verbose := fs.Bool("v", false, "Verbose logging")
-
-	// File-cap flags.
-	filesPath := fs.String("files", "", "Share a file or directory")
-	filesUpload := fs.Bool("files-upload", false, "Allow uploads to the shared directory")
-
-	// Shell-cap flags.
-	shellEnabled := fs.Bool("shell", false, "Expose a remote shell")
-	shellCmd := fs.String("shell-cmd", "", "Shell command to spawn (default: $SHELL or /bin/sh)")
-	shellMaxSessions := fs.Int("shell-max-sessions", 1, "Max concurrent shell sessions (0 = unlimited)")
-	shellMirror := fs.Bool("shell-mirror", true, "Mirror shell output to listener console")
+	cfg := serveConfig{shellEnabled: true, filesEnabled: true, proxyEnabled: true}
+	registerSharedFlags(fs, &cfg)
+	registerShellFlags(fs, &cfg)
+	fs.StringVar(&cfg.filesPath, "files", "", "Files path (default: current working directory)")
+	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
 
 	fs.Parse(reorderArgs(fs, args))
 
-	// Sanity-check the cap selection: at least one cap must be enabled.
-	if *filesPath == "" && !*shellEnabled {
-		fmt.Fprintln(os.Stderr, "bitbang serve: no caps enabled — pass at least one of --files PATH, --shell")
+	if cfg.filesPath == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.filesPath = cwd
+	}
+
+	startListener(cfg)
+}
+
+// runServeShell — `bitbang serve shell` — exposes shell only. No
+// hamburger; the entire tab is the shell.
+func runServeShell(args []string) {
+	fs := flag.NewFlagSet("serve shell", flag.ExitOnError)
+	cfg := serveConfig{shellEnabled: true}
+	registerSharedFlags(fs, &cfg)
+	registerShellFlags(fs, &cfg)
+	fs.Parse(reorderArgs(fs, args))
+	startListener(cfg)
+}
+
+// runServeFiles — `bitbang serve files [PATH]` — exposes files only.
+// PATH is positional (defaults to cwd). No hamburger; the tab is the
+// file browser.
+func runServeFiles(args []string) {
+	fs := flag.NewFlagSet("serve files", flag.ExitOnError)
+	cfg := serveConfig{filesEnabled: true}
+	registerSharedFlags(fs, &cfg)
+	fs.BoolVar(&cfg.filesUpload, "upload", false, "Allow uploads to the shared directory")
+
+	fs.Parse(reorderArgs(fs, args))
+
+	// Positional PATH lives in fs.Args() after Parse — at most one.
+	switch fs.NArg() {
+	case 0:
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.filesPath = cwd
+	case 1:
+		cfg.filesPath = fs.Arg(0)
+	default:
+		fmt.Fprintln(os.Stderr, "bitbang serve files: at most one PATH argument")
 		os.Exit(2)
 	}
 
-	pinAuth := auth.New(*pin)
+	startListener(cfg)
+}
 
-	id, err := identity.Load("bitbang-serve", *ephemeral)
+// runServeProxy — `bitbang serve proxy` — exposes a dynamic-target
+// HTTP reverse proxy. Landing page asks for a target URL; entered
+// targets open in new browser tabs that the SWSP layer routes through
+// streamtype.HTTPHandler.
+func runServeProxy(args []string) {
+	fs := flag.NewFlagSet("serve proxy", flag.ExitOnError)
+	cfg := serveConfig{proxyEnabled: true}
+	registerSharedFlags(fs, &cfg)
+	fs.Parse(reorderArgs(fs, args))
+	startListener(cfg)
+}
+
+// registerSharedFlags wires --pin, --ephemeral, --server, -v on every
+// mode. They have the same semantics across all four runServe*
+// functions, so factor them out.
+func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.StringVar(&cfg.server, "server", "bitba.ng", "Signaling server hostname")
+	fs.StringVar(&cfg.pin, "pin", "", "PIN to protect access")
+	fs.BoolVar(&cfg.ephemeral, "ephemeral", false, "Use a temporary identity")
+	fs.BoolVar(&cfg.verbose, "v", false, "Verbose logging")
+}
+
+// registerShellFlags wires the shell-specific flags. Used by both
+// `serve` (all-mode) and `serve shell` since both expose a shell.
+func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.StringVar(&cfg.shellCmd, "shell-cmd", "", "Shell command to spawn (default: $SHELL or /bin/sh)")
+	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", 1, "Max concurrent shell sessions (0 = unlimited)")
+	fs.BoolVar(&cfg.shellMirror, "shell-mirror", true, "Mirror shell output to listener console")
+}
+
+// startListener is the shared listener loop. Given a populated
+// serveConfig, it sets up identity, signaling, the HTTP front-end, and
+// the SWSP handler dispatch — then blocks accepting peer requests.
+//
+// Each mode's runServe* function does mode-specific flag parsing then
+// calls in here. Per-cap state (shell mirror, file share) is built
+// based on which *Enabled fields are set.
+func startListener(cfg serveConfig) {
+	// Build the file share if files enabled.
+	var share *fileshare.FileShare
+	if cfg.filesEnabled {
+		s, err := fileshare.New(cfg.filesPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot share %q: %v\n", cfg.filesPath, err)
+			os.Exit(1)
+		}
+		s.UploadEnabled = cfg.filesUpload
+		share = s
+	}
+
+	var shellArgv []string
+	if cfg.shellCmd != "" {
+		shellArgv = []string{cfg.shellCmd}
+	}
+
+	pinAuth := auth.New(cfg.pin)
+
+	id, err := identity.Load("bitbang", cfg.ephemeral)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Identity error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Build the file share once (state shared across all sessions —
-	// reads-only by design, plus an upload flag).
-	var share *fileshare.FileShare
-	if *filesPath != "" {
-		share, err = fileshare.New(*filesPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot share %q: %v\n", *filesPath, err)
-			os.Exit(1)
-		}
-		share.UploadEnabled = *filesUpload
-	}
+	httpFront := buildServeHTTPHandler(share, cfg.shellEnabled, cfg.proxyEnabled,
+		cfg.shellMaxSessions, isAllMode(cfg))
 
-	// Default argv for shell. Empty means ShellHandler falls back to
-	// $SHELL → /bin/sh at spawn time.
-	var shellArgv []string
-	if *shellCmd != "" {
-		shellArgv = []string{*shellCmd}
-	}
-
-	// Build the HTTP front-end. Single-cap → that cap's handler at
-	// root. Multi-cap → tab UI at root + each cap's handler mounted
-	// under a subpath.
-	httpFront := buildServeHTTPHandler(share, *shellEnabled)
-
-	signalingClient := signaling.NewClient(*server, id)
-	signalingClient.Verbose = *verbose
-	url := signalingClient.URL(*verbose)
+	signalingClient := signaling.NewClient(cfg.server, id)
+	signalingClient.Verbose = cfg.verbose
+	url := signalingClient.URL(cfg.verbose)
 
 	printReady := func() {
 		if qr, err := qrcode.New(url, qrcode.Medium); err == nil {
@@ -103,44 +194,14 @@ func runServe(args []string) {
 	fmt.Println(banner)
 	fmt.Printf("v%s\n\n", version)
 	printReady()
+	printSharingBlock(cfg, share)
 
-	// Status block — what's actually enabled.
-	if share != nil {
-		if share.Mode == fileshare.ModeSend {
-			fmt.Printf("Sharing file: %s\n", share.FileName)
-		} else {
-			fmt.Printf("Sharing directory: %s\n", share.BasePath)
-			if share.UploadEnabled {
-				fmt.Printf("Uploads enabled\n")
-			}
-		}
-	}
-	if *shellEnabled {
-		if *shellCmd != "" {
-			fmt.Printf("Shell command: %s\n", *shellCmd)
-		} else {
-			fmt.Printf("Shell command: default ($SHELL or /bin/sh)\n")
-		}
-		if *shellMaxSessions == 0 {
-			fmt.Printf("Max concurrent shell sessions: unlimited\n")
-		} else {
-			fmt.Printf("Max concurrent shell sessions: %d\n", *shellMaxSessions)
-		}
-		if *shellMirror {
-			fmt.Printf("Mirroring shell output to this console (--shell-mirror=false to disable)\n")
-			if term.IsTerminal(int(os.Stdout.Fd())) {
-				streamtype.EnableListenerResizeTracking(int(os.Stdout.Fd()))
-			}
-		}
-	}
+	// PIN status / shell-without-PIN warning.
 	if pinAuth.Required() {
-		fmt.Printf("PIN protection enabled\n")
-	} else if *shellEnabled {
-		// No-PIN warning only applies to shell (the cap with arbitrary
-		// command execution). File-only listeners without a PIN are a
-		// normal use case (drop a folder, send the URL).
-		fmt.Fprintln(os.Stderr, "WARNING: no PIN set — anyone with the URL gets a shell on this machine.")
-		fmt.Fprintln(os.Stderr, "         Add --pin <PIN> to require authentication.")
+		fmt.Println("PIN protection enabled.")
+	} else if cfg.shellEnabled {
+		fmt.Fprintln(os.Stderr, "⚠ Anyone with this URL gets a shell on this machine.")
+		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
 	}
 	fmt.Println()
 
@@ -163,25 +224,26 @@ func runServe(args []string) {
 		case "request":
 			clientID, _ := msg["client_id"].(string)
 
-			// Build per-session handlers. File handler is per-session
-			// (its streams map is) but the FileShare backing it is
-			// shared. Shell handler is per-session. HTTPLocal wraps
-			// the unified HTTP front-end so the browser flow works.
 			var handlers []streamtype.StreamHandler
 			if share != nil {
-				handlers = append(handlers, streamtype.NewFile(share, *verbose))
+				handlers = append(handlers, streamtype.NewFile(share, cfg.verbose))
 			}
 			var shellHandler *streamtype.ShellHandler
-			if *shellEnabled {
-				shellHandler = streamtype.NewShell(shellArgv, *verbose)
-				shellHandler.MaxConcurrent = *shellMaxSessions
-				if *shellMirror {
+			if cfg.shellEnabled {
+				shellHandler = streamtype.NewShell(shellArgv, cfg.verbose)
+				shellHandler.MaxConcurrent = cfg.shellMaxSessions
+				if cfg.shellMirror {
 					shellHandler.StdoutMirror = os.Stdout
 					shellHandler.StderrMirror = os.Stderr
 				}
 				handlers = append(handlers, shellHandler)
 			}
-			handlers = append(handlers, streamtype.NewHTTPLocal(httpFront, *verbose))
+			localHTTP := streamtype.NewHTTPLocal(httpFront, cfg.verbose)
+			var proxyHTTP streamtype.StreamHandler
+			if cfg.proxyEnabled {
+				proxyHTTP = streamtype.NewHTTPProxy("", id.UID, cfg.server, cfg.verbose)
+			}
+			handlers = append(handlers, newHTTPDispatcher(localHTTP, proxyHTTP))
 
 			var sess *session.Session
 
@@ -189,17 +251,17 @@ func runServe(args []string) {
 				if sess != nil {
 					sess.HandleMessage(data)
 				}
-			}, *verbose)
+			}, cfg.verbose)
 			if err != nil {
 				log.Printf("Failed to create peer connection: %v", err)
 				return
 			}
 
-			sess = session.New(conn.DC, pinAuth, *verbose, handlers...)
+			sess = session.New(conn.DC, pinAuth, cfg.verbose, handlers...)
 
-			// Kill any shell processes when this connection's data
-			// channel closes — without this they outlive the browser
-			// tab and keep holding their max-sessions slot.
+			// Kill any shell processes when the data channel closes —
+			// without this they outlive the browser tab and keep
+			// holding their max-sessions slot.
 			if shellHandler != nil {
 				conn.OnClose = shellHandler.KillAll
 			}
@@ -239,45 +301,166 @@ func runServe(args []string) {
 	})
 }
 
-// buildServeHTTPHandler composes the HTTP-cap front-end from the set of
-// enabled caps. Single-cap listeners get that cap's handler at root
-// (so iframe paths like "api/list" or "shell.js" resolve cleanly).
-// Multi-cap listeners get a tab UI at root and each cap mounted under
-// its own subpath.
-func buildServeHTTPHandler(share *fileshare.FileShare, shellEnabled bool) http.Handler {
-	var fileH, shellH http.Handler
+// isAllMode reports whether the listener is running in `serve` (all-
+// caps) mode rather than a single-cap mode. Used to gate the launcher
+// hamburger: only the all-mode launcher tab gets a cap bar.
+func isAllMode(cfg serveConfig) bool {
+	n := 0
+	if cfg.shellEnabled {
+		n++
+	}
+	if cfg.filesEnabled {
+		n++
+	}
+	if cfg.proxyEnabled {
+		n++
+	}
+	return n > 1
+}
+
+// launcherCapBarItems composes the dropdown for the all-mode launcher
+// tab. Shell appears only when --shell-max-sessions != 1 (otherwise
+// the main tab IS the only shell and offering another would just hit
+// the session limit). Files and Proxy always appear when enabled.
+//
+// Items render in this order. The bb-open-cap postMessage sends Path
+// up to bootstrap.js, which composes the new-tab URL using the secret
+// access code it owns.
+func launcherCapBarItems(share *fileshare.FileShare, shellEnabled, proxyEnabled bool, shellMaxSessions int) []shellweb.CapBarItem {
+	var items []shellweb.CapBarItem
+	if shellEnabled && shellMaxSessions != 1 {
+		items = append(items, shellweb.CapBarItem{Label: "Shell", Path: "/"})
+	}
+	if share != nil {
+		items = append(items, shellweb.CapBarItem{Label: "Files", Path: "/files/"})
+	}
+	if proxyEnabled {
+		items = append(items, shellweb.CapBarItem{Label: "Proxy", Path: "/proxy/"})
+	}
+	return items
+}
+
+// printSharingBlock prints the "Sharing:" status block listing each
+// enabled cap with its salient configuration.
+func printSharingBlock(cfg serveConfig, share *fileshare.FileShare) {
+	fmt.Println()
+	fmt.Println("Sharing:")
+	if cfg.shellEnabled {
+		shellLine := "  • shell  ("
+		if cfg.shellCmd != "" {
+			shellLine += cfg.shellCmd
+		} else {
+			shellLine += "$SHELL or /bin/sh"
+		}
+		if cfg.shellMaxSessions == 0 {
+			shellLine += ", unlimited concurrent sessions"
+		} else if cfg.shellMaxSessions != 1 {
+			shellLine += fmt.Sprintf(", max %d concurrent sessions", cfg.shellMaxSessions)
+		}
+		if cfg.shellMirror {
+			shellLine += ", mirroring to console"
+		}
+		shellLine += ")"
+		fmt.Println(shellLine)
+	}
+	if cfg.filesEnabled && share != nil {
+		if share.Mode == fileshare.ModeSend {
+			fmt.Printf("  • files  (%s — single file)\n", share.FileName)
+		} else {
+			fileLine := fmt.Sprintf("  • files  (%s", share.BasePath)
+			if share.UploadEnabled {
+				fileLine += ", uploads enabled"
+			}
+			fileLine += ")"
+			fmt.Println(fileLine)
+		}
+	}
+	if cfg.proxyEnabled {
+		fmt.Println("  • proxy  (any local HTTP service)")
+	}
+	fmt.Println()
+}
+
+// buildServeHTTPHandler composes the in-process HTTP-cap front-end.
+//
+// In all-mode: the launcher at "/" serves shellweb with the cap-bar
+// injected (hamburger + dropdown). "/shell/" serves plain shell (no
+// strip — that's a cap-specific tab opened via the hamburger). Files
+// at "/files/", proxy landing at "/proxy/".
+//
+// In single-cap modes: the cap's handler is served at "/" directly,
+// no strip, no prefix routing.
+//
+// Dynamic-target reverse proxying lives at the SWSP layer in
+// streamtype.HTTPHandler, dispatched by httpDispatcher based on the
+// connect path — those paths never reach this HTTP handler.
+func buildServeHTTPHandler(share *fileshare.FileShare, shellEnabled, proxyEnabled bool, shellMaxSessions int, allMode bool) http.Handler {
+	var fileH, shellH, proxyH http.Handler
 	if share != nil {
 		fileH = share.HTTPHandler()
 	}
 	if shellEnabled {
 		shellH = shellweb.New().HTTPHandler()
 	}
-
-	// Single-cap shortcuts: skip the tab UI entirely.
-	switch {
-	case fileH != nil && shellH == nil:
-		return fileH
-	case fileH == nil && shellH != nil:
-		return shellH
+	if proxyEnabled {
+		proxyH = proxyweb.LandingHandler()
 	}
 
-	// Multi-cap: tab strip at root, each cap under a subpath. The
-	// relative URLs in browse.html / shell.html (e.g. fetch
-	// "api/list", <script src="shell.js">) resolve against the
-	// iframe's base URL ("/files/" or "/shell/"), so they tunnel
-	// back as "/files/api/list" / "/shell/shell.js" — which the
-	// StripPrefix handlers below convert to the same shape the
-	// per-cap handler already expects.
-	var caps []tabweb.Cap
+	// Single-cap fast path: serve the cap directly so relative URLs
+	// in its HTML resolve cleanly.
+	if !allMode {
+		switch {
+		case shellH != nil:
+			return shellH
+		case fileH != nil:
+			return fileH
+		case proxyH != nil:
+			return proxyH
+		}
+	}
+
+	// All-mode: build the launcher shell with the cap-bar strip
+	// injected. The strip's dropdown anchors postMessage parent to
+	// open new tabs (bootstrap.js handles the URL composition).
+	launcherItems := launcherCapBarItems(share, shellEnabled, proxyEnabled, shellMaxSessions)
+	launcherShell := shellweb.New(shellweb.WithCapBar(launcherItems)).HTTPHandler()
+
 	mux := http.NewServeMux()
-	if fileH != nil {
-		caps = append(caps, tabweb.Cap{Name: "files", Label: "Files", URL: "/files/"})
-		mux.Handle("/files/", http.StripPrefix("/files", fileH))
-	}
+	capRoots := map[string]bool{}
 	if shellH != nil {
-		caps = append(caps, tabweb.Cap{Name: "shell", Label: "Shell", URL: "/shell/"})
 		mux.Handle("/shell/", http.StripPrefix("/shell", shellH))
+		capRoots["/shell"] = true
 	}
-	mux.Handle("/", tabweb.New(caps))
-	return mux
+	if fileH != nil {
+		mux.Handle("/files/", http.StripPrefix("/files", fileH))
+		capRoots["/files"] = true
+	}
+	if proxyH != nil {
+		mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyH))
+		capRoots["/proxy"] = true
+	}
+	// "/" is the launcher tab: shell + strip. (When proxy-only or
+	// files-only happens in some future all-mode variant where shell
+	// is disabled, fall through to that cap at root.)
+	switch {
+	case shellEnabled:
+		mux.Handle("/", launcherShell)
+	case fileH != nil:
+		mux.Handle("/", fileH)
+	case proxyH != nil:
+		mux.Handle("/", proxyH)
+	default:
+		mux.Handle("/", http.HandlerFunc(http.NotFound))
+	}
+
+	// Trailing-slash normalizer for the cap subpath roots. Without
+	// this, "/proxy" → 301 → "/proxy/", and the redirect's
+	// server-relative Location loses the browser's
+	// /__device__/<sessionId>/ prefix.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if capRoots[r.URL.Path] {
+			r.URL.Path += "/"
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
