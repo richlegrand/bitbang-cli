@@ -337,15 +337,40 @@ func startListener(cfg serveConfig) {
 		case "answer":
 			clientID, _ := msg["client_id"].(string)
 			sdp, _ := msg["sdp"].(string)
-			encrypted, _ := msg["encrypted_request"].(string)
 			mu.Lock()
 			conn := connections[clientID]
 			mu.Unlock()
 			if conn == nil {
 				return
 			}
+			// An answer flagged ice_restart is the reply to our ICE-restart
+			// re-offer (TURN fallback) — apply it without re-running verify.
+			if restart, _ := msg["ice_restart"].(bool); restart {
+				if err := conn.HandleRenegotiationAnswer(sdp); err != nil {
+					log.Printf("Failed to handle ice-restart answer: %v", err)
+				}
+				return
+			}
+			encrypted, _ := msg["encrypted_request"].(string)
 			if err := conn.HandleAnswer(sdp, encrypted); err != nil {
 				log.Printf("Failed to handle answer: %v", err)
+			}
+
+		case "ice_restart":
+			// The browser's direct-only ICE stalled; the signaling server has
+			// served it relay creds and asked us to re-offer with an ICE
+			// restart so it can re-answer with relay candidates.
+			clientID, _ := msg["client_id"].(string)
+			mu.Lock()
+			conn := connections[clientID]
+			mu.Unlock()
+			if conn == nil {
+				return
+			}
+			iceServers := peer.ParseICEServers(msg)
+			log.Printf("ICE restart requested for %s — re-offering with relay (%d ice servers)", clientID, len(iceServers))
+			if err := conn.RestartICE(iceServers); err != nil {
+				log.Printf("ICE restart for %s failed: %v", clientID, err)
 			}
 
 		case "candidate":
