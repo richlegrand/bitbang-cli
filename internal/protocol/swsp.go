@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	FlagSYN = 0x0001 // Start of stream, payload is JSON metadata
-	FlagFIN = 0x0004 // End of stream
-	FlagDAT = 0x0000 // Data chunk (no flags set)
+	FlagSYN  = 0x0001 // Start of stream, payload is JSON metadata
+	FlagFIN  = 0x0004 // End of stream
+	FlagDAT  = 0x0000 // Data chunk (no flags set)
+	FlagMORE = 0x0002 // Non-final fragment of a chunked WebSocket message
 
 	MaxChunkSize = 32768 // 32KB max payload per frame (frame stays under 64KB SCTP limit)
 	HeaderSize   = 8
@@ -76,12 +77,12 @@ type WebSocketOpen struct {
 // FileOp is the JSON metadata for a file-stream SYN frame (SWSP v3).
 // `Op` is one of "get", "put", "list", "stat", "delete".
 type FileOp struct {
-	Type      string `json:"type"`
-	Op        string `json:"op"`
-	Path      string `json:"path"`
-	Size      int64  `json:"size,omitempty"`      // for put: total bytes the client will send
-	Overwrite bool   `json:"overwrite,omitempty"` // for put
-	Range     []int64 `json:"range,omitempty"`    // for get: [start, end] inclusive byte range
+	Type      string  `json:"type"`
+	Op        string  `json:"op"`
+	Path      string  `json:"path"`
+	Size      int64   `json:"size,omitempty"`      // for put: total bytes the client will send
+	Overwrite bool    `json:"overwrite,omitempty"` // for put
+	Range     []int64 `json:"range,omitempty"`     // for get: [start, end] inclusive byte range
 }
 
 // ParseFrame parses a raw SWSP frame from bytes.
@@ -123,6 +124,10 @@ func (f Frame) IsSYN() bool { return f.Flags&FlagSYN != 0 }
 
 // IsFIN returns true if the FIN flag is set.
 func (f Frame) IsFIN() bool { return f.Flags&FlagFIN != 0 }
+
+// IsMORE returns true if the MORE flag is set, i.e. this DAT frame is a
+// non-final fragment of a chunked WebSocket message.
+func (f Frame) IsMORE() bool { return f.Flags&FlagMORE != 0 }
 
 // ParseRequest parses the JSON payload of a SYN frame as a Request.
 func (f Frame) ParseRequest() (Request, error) {

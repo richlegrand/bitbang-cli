@@ -41,6 +41,20 @@ type Session struct {
 	// Per-stream routing: once a SYN dispatches a stream to a handler,
 	// subsequent DAT/FIN frames on that stream go to the same handler.
 	streamHandler map[uint32]streamtype.StreamHandler
+
+	// reasm buffers WebSocket message fragments per stream. A large WS
+	// message arrives as DAT frames with FLAG_MORE on every non-final chunk;
+	// we reassemble before delivering to OnDAT so the message boundary is
+	// preserved. Only WS streams set FLAG_MORE, so byte-stream handlers
+	// (http/file/shell) never populate this.
+	reasm map[uint32][]byte
+
+	// video, if set, negotiates a secondary video PeerConnection with the
+	// browser over stream-0 control frames (relayed to an external media
+	// helper). videoStarted guards the one-shot handshake kickoff. Both
+	// guarded by mu.
+	video        VideoBridge
+	videoStarted bool
 }
 
 // New creates a Session bound to the given data channel. The handlers
@@ -53,6 +67,7 @@ func New(dc *webrtc.DataChannel, pin *auth.PINAuth, verbose bool, handlers ...st
 		Verbose:       verbose,
 		handlers:      make(map[string]streamtype.StreamHandler, len(handlers)),
 		streamHandler: make(map[uint32]streamtype.StreamHandler),
+		reasm:         make(map[uint32][]byte),
 	}
 	for _, h := range handlers {
 		s.handlers[h.Type()] = h
@@ -131,11 +146,30 @@ func (s *Session) handleBody(frame protocol.Frame) {
 		}
 		s.mu.Lock()
 		delete(s.streamHandler, frame.StreamID)
+		delete(s.reasm, frame.StreamID)
 		s.mu.Unlock()
 		return
 	}
 
-	if err := handler.OnDAT(stream, frame.Payload); err != nil {
+	// Reassemble a chunked WebSocket message: FLAG_MORE marks non-final
+	// fragments. Buffer until the final chunk, then deliver the whole message.
+	// Only WS streams set FLAG_MORE, so byte-stream handlers (http/file/shell)
+	// see each DAT delivered as-is.
+	payload := frame.Payload
+	if frame.IsMORE() {
+		s.mu.Lock()
+		s.reasm[frame.StreamID] = append(s.reasm[frame.StreamID], payload...)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	if buf, ok := s.reasm[frame.StreamID]; ok {
+		delete(s.reasm, frame.StreamID)
+		payload = append(buf, payload...)
+	}
+	s.mu.Unlock()
+
+	if err := handler.OnDAT(stream, payload); err != nil {
 		log.Printf("Handler OnDAT error (stream %d): %v", frame.StreamID, err)
 	}
 }

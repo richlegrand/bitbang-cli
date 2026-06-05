@@ -23,10 +23,12 @@ func (s *Session) handleControl(frame protocol.Frame) {
 	}
 
 	var msg struct {
-		Type    string `json:"type"`
-		Path    string `json:"path"`
-		PIN     string `json:"pin"`
-		Version int    `json:"version"`
+		Type      string                 `json:"type"`
+		Path      string                 `json:"path"`
+		PIN       string                 `json:"pin"`
+		Version   int                    `json:"version"`
+		SDP       string                 `json:"sdp"`
+		Candidate map[string]interface{} `json:"candidate"`
 	}
 	if err := json.Unmarshal(frame.Payload, &msg); err != nil {
 		return
@@ -37,6 +39,20 @@ func (s *Session) handleControl(frame protocol.Frame) {
 		s.handleConnect(msg.Path, msg.Version)
 	case "auth":
 		s.handleAuth(msg.PIN)
+	case "video_answer":
+		s.mu.Lock()
+		v := s.video
+		s.mu.Unlock()
+		if v != nil {
+			v.Answer(msg.SDP)
+		}
+	case "video_candidate":
+		s.mu.Lock()
+		v := s.video
+		s.mu.Unlock()
+		if v != nil {
+			v.Candidate(msg.Candidate)
+		}
 	}
 }
 
@@ -102,6 +118,18 @@ func (s *Session) sendReady() {
 		"server_version": protocol.SWSPVersion,
 	})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, ready)
+
+	// Channel is verified and ready — kick off the video PC handshake once.
+	s.mu.Lock()
+	v := s.video
+	start := v != nil && !s.videoStarted
+	if start {
+		s.videoStarted = true
+	}
+	s.mu.Unlock()
+	if start {
+		go s.startVideo(v)
+	}
 }
 
 func (s *Session) sendControlError(message string) {

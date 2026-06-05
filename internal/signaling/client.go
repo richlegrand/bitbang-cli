@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -34,6 +35,11 @@ type Client struct {
 	OnReady func()
 
 	conn *websocket.Conn
+
+	// writeMu serializes WriteJSON. gorilla/websocket forbids concurrent
+	// writes, and we write from both the message-handler goroutine (offers)
+	// and pion's OnICECandidate callback (trickle candidates).
+	writeMu sync.Mutex
 }
 
 // NewClient creates a signaling client for the given server and identity.
@@ -119,6 +125,8 @@ func (c *Client) Send(msg Message) error {
 	if c.conn == nil {
 		return fmt.Errorf("not connected")
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.conn.WriteJSON(msg)
 }
 
@@ -130,7 +138,10 @@ func (c *Client) register() error {
 		"public_key": c.ID.PublicB64,
 		"protocol":   protocol.ProtocolVersion,
 	}
-	if err := c.conn.WriteJSON(reg); err != nil {
+	c.writeMu.Lock()
+	err := c.conn.WriteJSON(reg)
+	c.writeMu.Unlock()
+	if err != nil {
 		return fmt.Errorf("send register: %w", err)
 	}
 

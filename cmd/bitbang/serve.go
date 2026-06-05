@@ -19,6 +19,7 @@ import (
 	"github.com/richlegrand/bitbang/internal/shellweb"
 	"github.com/richlegrand/bitbang/internal/signaling"
 	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang/internal/videohelper"
 )
 
 // serveConfig is the assembled per-mode configuration that the shared
@@ -30,6 +31,21 @@ type serveConfig struct {
 	pin       string
 	ephemeral bool
 	verbose   bool
+
+	// Inherited socketpair FD for an external video helper (-1 = disabled).
+	// When set, each session negotiates a secondary video PeerConnection with
+	// the browser, relayed to the helper process over this FD.
+	videoFD int
+
+	// Identity program name: the persistent key lives at
+	// ~/.bitbang/<program>/identity.pem. Lets an embedding process (e.g. the
+	// OctoPrint plugin) point us at its existing identity so we share its URL.
+	program string
+
+	// Fixed proxy target (host:port). When set (proxy-only mode), every
+	// request goes straight to this target — the plain device URL serves the
+	// app directly, no path-based target selection / landing page.
+	target string
 
 	// Caps actually enabled in this mode.
 	shellEnabled bool
@@ -134,6 +150,9 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.pin, "pin", "", "PIN to protect access")
 	fs.BoolVar(&cfg.ephemeral, "ephemeral", false, "Use a temporary identity")
 	fs.BoolVar(&cfg.verbose, "v", false, "Verbose logging")
+	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
+	fs.StringVar(&cfg.program, "program", "bitbang", "Identity program name (~/.bitbang/<program>/identity.pem)")
+	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
 }
 
 // registerShellFlags wires the shell-specific flags. Used by both
@@ -171,10 +190,23 @@ func startListener(cfg serveConfig) {
 
 	pinAuth := auth.New(cfg.pin)
 
-	id, err := identity.Load("bitbang", cfg.ephemeral)
+	id, err := identity.Load(cfg.program, cfg.ephemeral)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Identity error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Optional video helper: an external process (e.g. Python aiortc driving
+	// the camera) reached over an inherited socketpair FD. Each session gets a
+	// per-client bridge that negotiates a video PC with the browser.
+	var videoClient *videohelper.Client
+	if cfg.videoFD >= 0 {
+		videoClient, err = videohelper.DialFD(cfg.videoFD)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Video helper error: %v\n", err)
+			os.Exit(1)
+		}
+		log.Printf("Video helper attached on fd %d", cfg.videoFD)
 	}
 
 	httpFront := buildServeHTTPHandler(share, cfg.shellEnabled, cfg.proxyEnabled,
@@ -238,12 +270,20 @@ func startListener(cfg serveConfig) {
 				}
 				handlers = append(handlers, shellHandler)
 			}
-			localHTTP := streamtype.NewHTTPLocal(httpFront, cfg.verbose)
-			var proxyHTTP streamtype.StreamHandler
-			if cfg.proxyEnabled {
-				proxyHTTP = streamtype.NewHTTPProxy("", id.UID, cfg.server, cfg.verbose)
+			// Fixed-target proxy-only mode (e.g. the OctoPrint plugin): every
+			// request goes straight to --target, so the plain device URL serves
+			// the app directly — no dispatcher, no landing page.
+			if cfg.proxyEnabled && cfg.target != "" && !cfg.shellEnabled && !cfg.filesEnabled {
+				handlers = append(handlers,
+					streamtype.NewHTTPProxy(cfg.target, id.UID, cfg.server, cfg.verbose))
+			} else {
+				localHTTP := streamtype.NewHTTPLocal(httpFront, cfg.verbose)
+				var proxyHTTP streamtype.StreamHandler
+				if cfg.proxyEnabled {
+					proxyHTTP = streamtype.NewHTTPProxy("", id.UID, cfg.server, cfg.verbose)
+				}
+				handlers = append(handlers, newHTTPDispatcher(localHTTP, proxyHTTP))
 			}
-			handlers = append(handlers, newHTTPDispatcher(localHTTP, proxyHTTP))
 
 			var sess *session.Session
 
@@ -259,11 +299,35 @@ func startListener(cfg serveConfig) {
 
 			sess = session.New(conn.DC, pinAuth, cfg.verbose, handlers...)
 
-			// Kill any shell processes when the data channel closes —
-			// without this they outlive the browser tab and keep
-			// holding their max-sessions slot.
+			// Per-connection teardown, run when the data channel closes.
+			var onClose []func()
+			// Kill any shell processes — without this they outlive the
+			// browser tab and keep holding their max-sessions slot.
 			if shellHandler != nil {
-				conn.OnClose = shellHandler.KillAll
+				onClose = append(onClose, shellHandler.KillAll)
+			}
+			// Tear down the video PC and unregister the bridge.
+			if videoClient != nil {
+				// Forward the data PC's ICE servers so the video PC can use
+				// the same STUN/TURN (needed for peers with no direct path).
+				var iceServers []map[string]interface{}
+				if raw, ok := msg["ice_servers"].([]interface{}); ok {
+					for _, s := range raw {
+						if m, ok := s.(map[string]interface{}); ok {
+							iceServers = append(iceServers, m)
+						}
+					}
+				}
+				bridge := videoClient.Bridge(clientID, iceServers)
+				sess.SetVideoBridge(bridge)
+				onClose = append(onClose, bridge.Close)
+			}
+			if len(onClose) > 0 {
+				conn.OnClose = func() {
+					for _, f := range onClose {
+						f()
+					}
+				}
 			}
 
 			mu.Lock()

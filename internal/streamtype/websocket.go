@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
 // WSHandler implements StreamHandler for type="websocket". Bridges a SWSP
@@ -139,8 +140,29 @@ func (h *WSHandler) bridge(s Stream, pathname, cookies string) {
 		buf := make([]byte, 1+len(data))
 		buf[0] = typeByte
 		copy(buf[1:], data)
-		if err := s.WriteDAT(buf); err != nil {
+		// The data channel caps messages at MaxChunkSize and the SWSP
+		// length field is 16-bit, so a large WS message must be split
+		// across frames. Non-final chunks carry FlagMORE; the receiver
+		// reassembles them into one WS message (the type byte rides in
+		// the first chunk).
+		if err := writeWSChunks(s, buf); err != nil {
 			return
 		}
 	}
+}
+
+// writeWSChunks sends one WebSocket message as one or more SWSP DAT frames,
+// each at most MaxChunkSize bytes. Every chunk but the last carries FlagMORE
+// so the receiver reassembles them back into a single WS message.
+func writeWSChunks(s Stream, buf []byte) error {
+	for off := 0; off < len(buf); off += protocol.MaxChunkSize {
+		end := off + protocol.MaxChunkSize
+		if end >= len(buf) {
+			return s.WriteDAT(buf[off:]) // final chunk: FlagDAT, no MORE
+		}
+		if err := s.SendRaw(protocol.FlagDAT|protocol.FlagMORE, buf[off:end]); err != nil {
+			return err
+		}
+	}
+	return s.WriteDAT(buf) // only reached for an empty message
 }
