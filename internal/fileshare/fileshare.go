@@ -77,7 +77,6 @@ func New(p string) (*FileShare, error) {
 // compatible with the Python fileshare's app.py routes.
 func (f *FileShare) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/favicon.ico", f.serveFavicon)
 	mux.HandleFunc("/api/list", f.listFiles)
 	mux.HandleFunc("/api/download", f.downloadFile)
 	mux.HandleFunc("/api/preview", f.previewFile)
@@ -86,16 +85,6 @@ func (f *FileShare) HTTPHandler() http.Handler {
 	mux.HandleFunc("/download", f.downloadSingle)
 	mux.HandleFunc("/", f.index)
 	return mux
-}
-
-func (f *FileShare) serveFavicon(w http.ResponseWriter, r *http.Request) {
-	data, err := staticFS.ReadFile("static/favicon.png")
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Write(data)
 }
 
 func (f *FileShare) index(w http.ResponseWriter, r *http.Request) {
