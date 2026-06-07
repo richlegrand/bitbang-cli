@@ -120,6 +120,19 @@ func (c *Client) Bridge(clientID string, iceServers []map[string]interface{}) *B
 	return b
 }
 
+// UpdateICEServers replaces the ICE servers a client's bridge forwards to the
+// helper. Called when the data channel's TURN fallback fetches relay creds, so
+// a video PC created afterward (its open is sent at session-ready, after the
+// fallback on a relay path) carries the same STUN/TURN and can gather relay
+// candidates instead of host-only.
+func (c *Client) UpdateICEServers(clientID string, iceServers []map[string]interface{}) {
+	c.mu.Lock()
+	if b := c.bridges[clientID]; b != nil {
+		b.iceServers = iceServers
+	}
+	c.mu.Unlock()
+}
+
 // Bridge is the per-session relay handed to a Session. It forwards the browser
 // side (Start/Answer/Candidate/Close) to the helper, and the helper side
 // (offer/candidate) back to the Session via the callbacks given to Start.
@@ -137,8 +150,9 @@ func (b *Bridge) Start(onOffer func(sdp string), onCandidate func(map[string]int
 	b.c.mu.Lock()
 	b.onOffer = onOffer
 	b.onCandidate = onCandidate
+	ice := b.iceServers
 	b.c.mu.Unlock()
-	b.c.send(wireMsg{Kind: "open", Client: b.client, IceServers: b.iceServers})
+	b.c.send(wireMsg{Kind: "open", Client: b.client, IceServers: ice})
 }
 
 func (b *Bridge) Answer(sdp string) {

@@ -372,6 +372,13 @@ func startListener(cfg serveConfig) {
 			if err := conn.RestartICE(iceServers); err != nil {
 				log.Printf("ICE restart for %s failed: %v", clientID, err)
 			}
+			// Hand the same relay creds to the video bridge so a video PC
+			// created after this fallback (its open is sent at session-ready,
+			// which on a relay path follows the fallback) gathers relay too —
+			// otherwise the data channel relays but the video PC is host-only.
+			if videoClient != nil {
+				videoClient.UpdateICEServers(clientID, iceServerMaps(msg))
+			}
 
 		case "candidate":
 			clientID, _ := msg["client_id"].(string)
@@ -388,6 +395,21 @@ func startListener(cfg serveConfig) {
 			log.Printf("Signaling error: %v", msg["message"])
 		}
 	})
+}
+
+// iceServerMaps extracts the raw browser-native ICE server objects from a
+// signaling message as []map[string]interface{} — the shape the video bridge
+// forwards verbatim to the media helper.
+func iceServerMaps(msg signaling.Message) []map[string]interface{} {
+	var out []map[string]interface{}
+	if raw, ok := msg["ice_servers"].([]interface{}); ok {
+		for _, s := range raw {
+			if m, ok := s.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
 }
 
 // isAllMode reports whether the listener is running in `serve` (all-
