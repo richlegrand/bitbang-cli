@@ -1,130 +1,156 @@
-# BitBangProxy
+# bitbang
 
-![Tests](https://github.com/richlegrand/bitbangproxy/actions/workflows/tests.yml/badge.svg)
-![License](https://img.shields.io/github/license/richlegrand/bitbangproxy)
+**Secure remote access to any machine — shell, files, and web apps — from a browser or another terminal. No SSH, no port forwarding, no account, and nothing to install on the far end.**
 
-BitBangProxy enables full access to your NAS / Jellyfin / Plex / Open WebUI / Flask apps / Node-RED dashboard / etc. from outside your network. It's a single executable that runs on a machine on your local network. It doesn't require port forwarding, VPNs, accounts, or software to be installed on the target machine.
+![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)
+![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
 
-This is part of the [BitBang project](https://github.com/richlegrand/bitbang). 
+`bitbang` is a single Go binary. Run `bitbang serve` on a machine — a Raspberry Pi, a home server, a workstation behind NAT — and it prints one URL. Open that URL in any browser, or `bitbang connect` to it from another machine, and you get a terminal, a file browser, and a gateway to that machine's network. The connection is peer-to-peer and end-to-end encrypted; the `bitba.ng` signaling server only introduces the two ends, then steps aside.
+
+Part of the [BitBang project](https://github.com/richlegrand/bitbang).
+
+## Why
+
+- **Nothing to forward or configure.** Works from behind NAT, CGNAT, or a locked-down network — no router changes, no VPN, no tunnel daemon.
+- **Nothing to install on the client.** A browser is enough. A CLI is there when you want scripting, pipes, and file copy.
+- **Private by design.** Traffic is WebRTC/DTLS, peer-to-peer. The signaling server never sees it; if a direct path isn't possible, a TURN relay carries ciphertext only.
+- **No account, no telemetry.**
+
+## Install
+
+Download the binary for your platform from [Releases](https://github.com/richlegrand/bitbang-cli/releases), or build it (see [Building](#building-from-source)):
+
+```bash
+go build ./cmd/bitbang/     # produces ./bitbang
+```
 
 ## Quick start
 
-```bash
-# Download the binary for your platform from Releases, then:
-./bitbangproxy
-```
-![bitbangproxy screen](https://raw.githubusercontent.com/richlegrand/bitbangproxy/refs/heads/main/assets/bitbangproxy_screen.png)
+Every `serve` command prints a URL like `https://bitba.ng/<id>#<code>`. Open it in a browser, or hand it to `bitbang connect` / `bitbang cp`.
 
-This prints a URL and waits for connections. Open the URL in a browser, enter a local server address (e.g. `nas.local`, `192.168.1.10:8080`), and you're connected.
-
-Or specify the target directly in the URL:
-
-```
-https://bitba.ng/<proxy-id>/nas.local
-https://bitba.ng/<proxy-id>/192.168.1.10:8080
-https://bitba.ng/<proxy-id>/localhost:3000/admin
-```
-
-## Features
-
-- **HTTP proxy** -- GET, POST, uploads, downloads, streaming (SSE)
-- **WebSocket proxy** -- bidirectional, multiplexed over the same data channel
-- **Dynamic targets** -- target server specified in the URL, no restart needed
-- **Cookie/session support** -- login flows work (managed by the service worker)
-- **PIN protection** -- optional `--pin` flag to restrict access
-- **Redirect handling** -- follows cross-host redirects, passes same-host redirects to the browser
-- **No installation on the target** -- proxy runs on any machine on the same network
-
-## Comparison
-
-| | ngrok | Cloudflare Tunnel | Tailscale | BitBang |
-|---|---|---|---|---|
-| Account required | Yes | Yes | Yes | No |
-| Free tunnels | 1 | Unlimited | Unlimited | Unlimited |
-| Data path | Their servers | Their servers | P2P | P2P |
-| Viewer needs install | No | No | Yes | No |
-| Configuration | CLI flags | Config file + DNS | Dashboard | None |
-
-BitBang's data path is direct between peers. The signaling server (`bitba.ng`) brokers the initial connection, then steps aside.
-
-## Usage
+### Shell
 
 ```bash
-# Dynamic target (from URL)
-./bitbangproxy
-
-# Fixed target
-./bitbangproxy --target localhost:8080
-
-# With PIN protection
-./bitbangproxy --pin 1234
-
-# Ephemeral identity (new URL each run)
-./bitbangproxy --ephemeral
-
-# Custom signaling server
-./bitbangproxy --server my-signaling-server.com
-
-# Verbose logging
-./bitbangproxy -v
+bitbang serve shell
 ```
 
-## CLI flags
+A full terminal in the browser (xterm.js — colors, resize, copy/paste), or from another machine:
 
-```
---target HOST:PORT   Local server to proxy (default: dynamic from URL)
---pin PIN            PIN to protect proxy access
---ephemeral          Use a temporary identity (new URL each run)
---server HOST        Signaling server hostname (default: bitba.ng)
--v                   Verbose logging and browser debug UI (?debug)
+```bash
+bitbang connect https://bitba.ng/<id>#<code>                              # interactive shell
+bitbang connect https://bitba.ng/<id>#<code> -- tail -f /var/log/syslog   # one-shot command
 ```
 
-When `-v` is enabled, the printed URL includes `?debug`, which activates a browser-side debug UI showing connection steps. Without it, the browser shows a simple "Loading..." while connecting. Verbose mode also logs all HTTP requests and dependency versions at startup.
+### Files
+
+```bash
+bitbang serve files ~/share                  # share a directory (read-only)
+bitbang serve files ~/share -files-upload    # ...and allow uploads
+```
+
+Browse, preview, download, and upload in the browser — or copy from the CLI, scp-style:
+
+```bash
+bitbang cp https://bitba.ng/<id>#<code>:/var/log/app.log ./app.log        # remote -> local
+bitbang cp ./firmware.bin https://bitba.ng/<id>#<code>:/tmp/firmware.bin   # local -> remote
+```
+
+### Proxy
+
+Reach any HTTP / WebSocket service on the machine's network — a NAS, Jellyfin, Node-RED, a Flask dashboard — through your browser:
+
+```bash
+bitbang serve proxy                         # choose the target in the URL
+bitbang serve proxy -target localhost:8080  # or pin a single target
+```
+
+Open the URL, type a LAN address (`nas.local`, `192.168.1.10:8080`, `localhost:3000/admin`), and you're in. Logins, cookies, uploads, downloads, and server-sent events all work — sessions are handled by a service worker, so apps behave normally.
+
+### Everything at once
+
+```bash
+bitbang serve     # shell + files + proxy on one URL; the browser offers each
+```
+
+## Connecting
+
+Same URL, two front ends:
+
+- **Browser** — open `https://bitba.ng/<id>#<code>`. Nothing to install.
+- **CLI** — `bitbang connect <url>` for a shell (add `-- cmd` for one-shot), `bitbang cp` for files.
+
+The access code lives in the URL **fragment** (`#…`), which browsers never send to a server — so `bitba.ng` brokers the connection without ever seeing the secret that authorizes it.
+
+## Security
+
+- **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is *derived from* the public key, so it can't be impersonated.
+- **Optional PIN.** Add `--pin` for permanent or headless setups — connectors must supply it.
+- **End-to-end encryption.** All traffic rides WebRTC's DTLS. The signaling server sees only the public key, the derived UID, and connection metadata — never your data. A TURN relay, if one is needed, sees ciphertext only.
+- **Throwaway mode.** `-ephemeral` uses a temporary identity (a fresh URL each run).
 
 ## How it works
 
-![BitBangProxy Block Diagram](https://raw.githubusercontent.com/richlegrand/bitbangproxy/refs/heads/main/assets/bitbangproxy.png)
+```
+  browser / bitbang connect           bitba.ng              bitbang serve
+         (client)        ── handshake ─ (signaling) ─ handshake ──  (device)
+            └──────────────  encrypted WebRTC data channel  ──────────────┘
+                            (direct peer-to-peer, or TURN-relayed)
+```
 
-The signaling server (`bitba.ng`) brokers the WebRTC handshake, then steps aside. All traffic flows directly between the browser and the proxy via an encrypted data channel (DTLS).
+`bitba.ng` brokers the WebRTC handshake and then gets out of the way — application traffic flows directly between the two peers over an encrypted data channel. Shell, file, and proxy traffic are multiplexed over that single channel using **SWSP** (Simple WebRTC Streaming Protocol): a small `streamId | flags | length | payload` framing, carrying HTTP requests for file/proxy operations and long-lived streams for the shell.
+
+## How it compares
+
+| | ngrok | Cloudflare Tunnel | Tailscale | bitbang |
+|---|---|---|---|---|
+| Account required | Yes | Yes | Yes | **No** |
+| Client install | No | No | **Yes** | **No** (browser) |
+| Port forwarding / router config | No | No | No | **No** |
+| Data path | Their servers | Their servers | P2P | **P2P** |
+| Configuration | CLI flags | Config + DNS | Dashboard | **None** |
+
+## Common flags
+
+**`serve`**
+- `-pin PIN` — require a PIN for connections
+- `-ephemeral` — temporary identity (new URL each run)
+- `-target HOST:PORT` — fixed proxy target (proxy mode)
+- `-files PATH` / `-files-upload` — directory to share / allow uploads
+- `-shell-cmd CMD` — shell to spawn (default `$SHELL` or `/bin/sh`)
+- `-shell-max-sessions N` — cap concurrent shells (0 = unlimited)
+- `-server HOST` — signaling server (default `bitba.ng`)
+- `-v` — verbose logging (adds the browser `?debug` overlay)
+
+**`connect` / `cp`** — `-pin`, `-timeout`, `-v`
 
 ## Building from source
 
-Requires Go 1.24+:
+Requires Go 1.25+. Pure Go, statically linked (`CGO_ENABLED=0`) — trivial cross-compilation, no runtime dependencies.
 
 ```bash
-go build ./cmd/bitbangproxy/
+go build ./cmd/bitbang/
+
+# cross-compile:
+GOOS=linux   GOARCH=arm64        go build -o bitbang-arm64 ./cmd/bitbang/
+GOOS=linux   GOARCH=arm GOARM=7  go build -o bitbang-armv7 ./cmd/bitbang/
+GOOS=windows GOARCH=amd64        go build -o bitbang.exe   ./cmd/bitbang/
+GOOS=darwin  GOARCH=arm64        go build -o bitbang-macos ./cmd/bitbang/
 ```
 
-Cross-compile for other platforms:
+## Roadmap
 
-```bash
-GOOS=windows GOARCH=amd64 go build -o bitbangproxy.exe ./cmd/bitbangproxy/
-GOOS=darwin GOARCH=amd64 go build -o bitbangproxy-macos ./cmd/bitbangproxy/
-GOOS=linux GOARCH=amd64 go build -o bitbangproxy ./cmd/bitbangproxy/
-```
+Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus scp-style file copy. Designed and on the way:
 
-## Architecture
-
-```
-cmd/bitbangproxy/main.go       -- entry point, CLI flags, connection management
-cmd/bitbangbench/main.go       -- throughput benchmark over SWSP/data-channel
-internal/identity/identity.go  -- RSA keypair, UID derivation, persistence
-internal/signaling/client.go   -- WebSocket signaling, challenge-response auth
-internal/peer/connection.go    -- WebRTC peer connection, ICE, SDP
-internal/protocol/swsp.go      -- SWSP frame parsing/building
-internal/proxy/http.go         -- HTTP proxying, redirects, cookies, landing page
-internal/proxy/websocket.go    -- WebSocket bridging
-internal/auth/pin.go           -- PIN verification
-```
-
-Packages under `internal/` are not exposed as a public Go API. To embed bitbang in another program, run `bitbangproxy` as a sidecar binary.
-
-See [implementation_notes.md](implementation_notes.md) for detailed design decisions.
+- **Serial bridging** — drive a remote `/dev/ttyUSB0` from a local virtual port (e.g. the Arduino IDE, over the internet).
+- **TCP port forwarding** — `-L 5432:db.internal:5432` to reach LAN-only services.
+- **Remote desktop** — screen over a WebRTC video track, keyboard/mouse over the data channel.
+- **Ad-hoc pairing** — short numeric codes with a human-verified challenge, plus a saved device table (`bitbang connect pi-sensor`).
+- **Network mode** — team/fleet access with enrollment, scoped tokens, device discovery, and audit logging.
 
 ## License
 
-MIT See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-Issues and PRs are welcome. 
+Issues and PRs welcome.
