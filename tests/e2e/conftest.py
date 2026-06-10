@@ -55,7 +55,7 @@ def proxy_url(target_app):
         pytest.fail(f'BitBangProxy binary not found at {proxy_bin}. Run: go build -o bitbangproxy ./cmd/bitbang/')
 
     proc = subprocess.Popen(
-        [proxy_bin, '--server', TEST_SERVER, '--target', target_app, '--ephemeral'],
+        [proxy_bin, 'serve', 'proxy', '-server', TEST_SERVER, '-target', target_app, '-ephemeral'],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
