@@ -274,13 +274,18 @@ func startListener(cfg serveConfig) {
 			// request goes straight to --target, so the plain device URL serves
 			// the app directly — no dispatcher, no landing page.
 			if cfg.proxyEnabled && cfg.target != "" && !cfg.shellEnabled && !cfg.filesEnabled {
-				handlers = append(handlers,
-					streamtype.NewHTTPProxy(cfg.target, id.UID, cfg.server, cfg.verbose))
+				httpProxy := streamtype.NewHTTPProxy(cfg.target, id.UID, cfg.server, cfg.verbose)
+				// Pair a WebSocket handler so ws:// streams resolve to the same
+				// target as HTTP (otherwise: "no handler for stream type websocket").
+				handlers = append(handlers, httpProxy,
+					streamtype.NewWebSocket(httpProxy, cfg.verbose))
 			} else {
 				localHTTP := streamtype.NewHTTPLocal(httpFront, cfg.verbose)
 				var proxyHTTP streamtype.StreamHandler
 				if cfg.proxyEnabled {
-					proxyHTTP = streamtype.NewHTTPProxy("", id.UID, cfg.server, cfg.verbose)
+					p := streamtype.NewHTTPProxy("", id.UID, cfg.server, cfg.verbose)
+					proxyHTTP = p
+					handlers = append(handlers, streamtype.NewWebSocket(p, cfg.verbose))
 				}
 				handlers = append(handlers, newHTTPDispatcher(localHTTP, proxyHTTP))
 			}
