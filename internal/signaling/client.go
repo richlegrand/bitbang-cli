@@ -27,6 +27,19 @@ type Client struct {
 	ServerWS string // full URL, e.g. "wss://bitba.ng/ws/device/<uid>"
 	Verbose  bool
 
+	// WantCode, when true, asks the server to issue a short 6-digit pairing
+	// code at register time. The server returns it in the `registered`
+	// reply; we expose it on PairingCode for the caller to display. Setting
+	// this is the listener's opt-in to the code-exchange pairing flow —
+	// without it, connectors can only reach the listener via the full
+	// 22-character UID URL.
+	WantCode bool
+
+	// PairingCode is the 6-digit code issued by the server when WantCode
+	// was true. Empty when WantCode was false, when the server doesn't
+	// support pairing, or before the first successful register.
+	PairingCode string
+
 	// OnReady, if set, is called after each successful (re)registration
 	// with the signaling server. Callers use it to (re)print user-visible
 	// info — URL, QR code, etc. — that should resurface after a reconnect,
@@ -100,12 +113,12 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 	if err := c.register(); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	// Always log the operational "Ready: ..." marker so a watcher (test
-	// harness, log scraper, ops dashboard) has a reliable post-register
-	// signal — distinct from the upfront URL print that fires before
-	// any signaling round trip. OnReady is for caller-driven extra
-	// output (QR re-print, etc.) and runs in addition.
-	log.Printf("Ready: %s", c.URL(false))
+	// Single-word post-register marker so a watcher (test harness, log
+	// scraper, ops dashboard) has a reliable signal that registration
+	// completed. The URL is already printed prominently above (or by the
+	// caller via OnReady on reconnect), so re-emitting it here would
+	// just be noise.
+	log.Printf("Ready")
 	if c.OnReady != nil {
 		c.OnReady()
 	}
@@ -131,12 +144,19 @@ func (c *Client) Send(msg Message) error {
 }
 
 func (c *Client) register() error {
-	// Send registration with public key and protocol version
+	// Send registration with public key and protocol version. want_code is
+	// additive in v3.x — the server returns a 6-digit code in the
+	// registered reply when both we set it and the server has the pairing
+	// table configured. Old servers ignore the field, new servers without
+	// pairing configured return a bare registered.
 	reg := Message{
 		"type":       "register",
 		"uid":        c.ID.UID,
 		"public_key": c.ID.PublicB64,
 		"protocol":   protocol.ProtocolVersion,
+	}
+	if c.WantCode {
+		reg["want_code"] = true
 	}
 	c.writeMu.Lock()
 	err := c.conn.WriteJSON(reg)
@@ -152,6 +172,14 @@ func (c *Client) register() error {
 
 	switch msg["type"] {
 	case "registered":
+		// Capture the pairing code if the server returned one. Reset to
+		// empty on each reconnect first — a server that loses its pairing
+		// table (process restart) re-issues a fresh code, and any stale
+		// code we were holding would mislead the operator.
+		c.PairingCode = ""
+		if code, ok := msg["code"].(string); ok && code != "" {
+			c.PairingCode = code
+		}
 		return nil
 
 	case "error":

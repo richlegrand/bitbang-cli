@@ -1,6 +1,7 @@
-// Bidirectional-verify helpers for the device side: pull the DTLS fingerprint
-// out of an SDP, build the "verify_nonce_hash" control frame sent as the
-// first stream-0 message after the data channel opens.
+// Bidirectional-verify helpers for the listener side: build the
+// "verify_nonce_hash" control frame sent as the first stream-0 message
+// after the data channel opens. DTLS fingerprint parsing lives in
+// internal/sdp so connector and listener parses are guaranteed identical.
 package peer
 
 import (
@@ -8,37 +9,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
-	"strings"
 
 	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang/internal/sdp"
 )
 
-// fingerprintLine matches lines like "a=fingerprint:sha-256 AA:BB:..."
-// (case-insensitive). Only sha-256 is accepted — every modern browser and
-// pion emit this; SDPs with only legacy hashes would be rejected outright.
-var fingerprintLine = regexp.MustCompile(`(?i)^a=fingerprint:sha-256\s+([0-9A-F:]+)\s*$`)
+// extractFingerprint is a local alias for sdp.ExtractFingerprint kept so
+// the existing call sites in connection.go don't need to change.
+// New code should call sdp.ExtractFingerprint directly.
+func extractFingerprint(s string) string { return sdp.ExtractFingerprint(s) }
 
-// extractFingerprint pulls the sha-256 DTLS fingerprint out of an SDP and
-// returns it in normalized (uppercase, colon-separated) form. Returns ""
-// if no sha-256 fingerprint is present.
-func extractFingerprint(sdp string) string {
-	for _, line := range strings.Split(sdp, "\n") {
-		line = strings.TrimRight(line, "\r")
-		m := fingerprintLine.FindStringSubmatch(line)
-		if m != nil {
-			return strings.ToUpper(m[1])
-		}
-	}
-	return ""
-}
-
-// fingerprintsEqual compares two DTLS fingerprints case-insensitively.
-// Browsers and pion both emit uppercase colon-separated hex, but normalizing
-// here keeps this resilient to minor formatting differences.
-func fingerprintsEqual(a, b string) bool {
-	return strings.EqualFold(a, b)
-}
+// fingerprintsEqual is a local alias for sdp.FingerprintsEqual, same
+// rationale as extractFingerprint above.
+func fingerprintsEqual(a, b string) bool { return sdp.FingerprintsEqual(a, b) }
 
 // buildVerifyNonceHashFrame returns the SWSP stream-0 SYN frame the device
 // sends right after the data channel opens, proving to the browser that it

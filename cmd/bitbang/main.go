@@ -90,7 +90,7 @@ func printUsage() {
 	fmt.Println("  bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)")
 	fmt.Println("  bitbang serve proxy [flags]            Proxy only (HTTP reverse proxy)")
 	fmt.Println("  bitbang cp <src> <dst>                 Copy files (one side is <URL>:/path, or '-')")
-	fmt.Println("  bitbang connect <URL> [-- argv...]     Open a remote shell (interactive or one-shot)")
+	fmt.Println("  bitbang connect <URL-or-code> [-- ...]  Open shell, or pair via 6-digit code")
 	fmt.Println()
 	fmt.Println("Run `bitbang serve --help` (or with a mode) for the available flags.")
 }

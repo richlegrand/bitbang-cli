@@ -22,16 +22,23 @@ import (
 // Message is the wire-level JSON envelope used by the signaling server.
 type Message map[string]interface{}
 
-// Signaling manages the WebSocket connection to /ws/client/<uid> on the
-// signaling server. Owns the read loop; dispatches incoming messages to
-// callbacks registered before Run().
+// Signaling manages a WebSocket connection to a signaling-server endpoint.
+// Owns the read loop; dispatches incoming messages to callbacks registered
+// before the WS opens.
 //
-// Lifetime is one signaling session. Once the WebRTC data channel is up
-// the caller closes this — signaling is only used for the offer/answer/
-// candidate exchange, not for ongoing traffic.
+// Two endpoint flavors are supported and constructed via separate helpers:
+//
+//   - New(server, uid) → /ws/client/<uid>  (URL-flow connector)
+//   - NewForPair(server) → /ws/pair        (pair-flow connector)
+//
+// Lifetime is one signaling session per flow. Once the WebRTC data channel
+// is up the caller closes this — signaling is only used for the
+// offer/answer/candidate exchange and any pair-flow control messages, not
+// for ongoing traffic.
 type Signaling struct {
 	Server string // hostname, e.g. "bitba.ng"
-	UID    string
+	UID    string // populated for URL flow; empty for pair flow
+	path   string // resolved WS path, e.g. /ws/client/<uid> or /ws/pair
 
 	Verbose bool
 
@@ -42,25 +49,49 @@ type Signaling struct {
 	OnCandidate func(msg Message)
 	OnError     func(message string)
 
+	// Pair-flow callbacks. Set only when the caller is driving a pair
+	// flow (typically via NewForPair). nil under the URL flow.
+	OnPairRouted   func()
+	OnPairApproved func(msg Message)
+	OnPairRejected func(reason string)
+
 	conn   *websocket.Conn
 	mu     sync.Mutex // guards writes to conn
 	closed bool
 }
 
-// New constructs a Signaling client. Defaults Server to bitba.ng when
-// empty so callers passing just a UID get the production listener.
+// New constructs a Signaling client for the URL-flow connector — the path
+// resolves to /ws/client/<uid>. Defaults Server to bitba.ng when empty so
+// callers passing just a UID get the production signaling instance.
 func New(server, uid string) *Signaling {
 	if server == "" {
 		server = "bitba.ng"
 	}
-	return &Signaling{Server: server, UID: uid}
+	return &Signaling{
+		Server: server,
+		UID:    uid,
+		path:   "/ws/client/" + uid,
+	}
+}
+
+// NewForPair constructs a Signaling client for the pair-flow connector —
+// the path is /ws/pair. UID is unset because pair_init carries the lookup
+// code instead.
+func NewForPair(server string) *Signaling {
+	if server == "" {
+		server = "bitba.ng"
+	}
+	return &Signaling{
+		Server: server,
+		path:   "/ws/pair",
+	}
 }
 
 // Connect dials the signaling server and starts the read loop in a
 // background goroutine. Returns once the WebSocket is open, before any
 // signaling messages have been exchanged.
 func (s *Signaling) Connect() error {
-	url := fmt.Sprintf("wss://%s/ws/client/%s", s.Server, s.UID)
+	url := fmt.Sprintf("wss://%s%s", s.Server, s.path)
 	if s.Verbose {
 		fmt.Fprintf(stderr, "[client] dialing %s\n", url)
 	}
@@ -90,6 +121,19 @@ func (s *Signaling) SendRequest(caps []string, version int) error {
 		"type":    "request",
 		"caps":    caps,
 		"version": version,
+	})
+}
+
+// SendPairInit sends the pair-flow initial message with a 6-digit code.
+// The signaling server validates the code (sleeping ~3s constant-time to
+// brake enumeration), then either routes pair_request to the listener and
+// replies pair_routed to us, or returns an "error" message with
+// {"message":"unknown_code"}. Only meaningful on a Signaling constructed
+// via NewForPair.
+func (s *Signaling) SendPairInit(code string) error {
+	return s.send(Message{
+		"type": "pair_init",
+		"code": code,
 	})
 }
 
@@ -172,6 +216,24 @@ func (s *Signaling) readLoop() {
 			if s.OnError != nil {
 				s.OnError(message)
 			}
+
+		// Pair-flow control messages — only meaningful under NewForPair,
+		// but routed unconditionally so a misconfigured callback fires
+		// loud instead of silently dropping.
+		case "pair_routed":
+			if s.OnPairRouted != nil {
+				s.OnPairRouted()
+			}
+		case "pair_approved":
+			if s.OnPairApproved != nil {
+				s.OnPairApproved(msg)
+			}
+		case "pair_rejected":
+			if s.OnPairRejected != nil {
+				reason, _ := msg["reason"].(string)
+				s.OnPairRejected(reason)
+			}
+
 		default:
 			if s.Verbose {
 				fmt.Fprintf(stderr, "[client] ignoring signaling message type=%q\n", t)

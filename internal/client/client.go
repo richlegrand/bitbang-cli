@@ -91,9 +91,11 @@ func Dial(opts DialOptions) (*Session, error) {
 	select {
 	case offer = <-offerCh:
 	case err := <-errCh:
+		sendConnectionPath(sig, "failed", "signaling_error")
 		sig.Close()
 		return nil, err
 	case <-time.After(opts.DialTimeout):
+		sendConnectionPath(sig, "failed", "offer_timeout")
 		sig.Close()
 		return nil, errors.New("timeout waiting for offer")
 	}
@@ -152,18 +154,25 @@ func Dial(opts DialOptions) (*Session, error) {
 	case <-peer.DCReady():
 	case err := <-errCh:
 		close(candDone)
+		sendConnectionPath(sig, "failed", "signaling_error")
 		peer.Close()
 		sig.Close()
 		return nil, err
 	case <-time.After(opts.DialTimeout):
 		close(candDone)
+		sendConnectionPath(sig, "failed", "ice_timeout")
 		peer.Close()
 		sig.Close()
 		return nil, errors.New("timeout waiting for data channel")
 	}
 
-	// Data channel is up — signaling is done with us. Stop the candidate
-	// drain and close the WS; from here on traffic flows over WebRTC.
+	// Data channel is up — fire one connection_path report with the
+	// path that ICE actually settled on (direct / relay / tcp-relay).
+	// Must run before sig.Close, since the report rides the same WS.
+	sendConnectionPath(sig, detectConnectionPath(peer.PC), "")
+
+	// Signaling is done with us. Stop the candidate drain and close the
+	// WS; from here on traffic flows over WebRTC.
 	close(candDone)
 	sig.Close()
 

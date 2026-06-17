@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/richlegrand/bitbang/internal/protocol"
@@ -113,9 +114,21 @@ func (s *Session) handleAuth(pin string) {
 }
 
 func (s *Session) sendReady() {
+	// Caps from the registered handler types — what stream kinds this
+	// listener is willing to serve. Empty when no handlers (test paths);
+	// sorted for stable wire output (otherwise map iteration order would
+	// jitter and complicate snapshot tests / log diffing). The client's
+	// hasCap() check is the consumer.
+	caps := make([]string, 0, len(s.handlers))
+	for t := range s.handlers {
+		caps = append(caps, t)
+	}
+	sort.Strings(caps)
+
 	ready, _ := json.Marshal(map[string]interface{}{
 		"type":           "ready",
 		"server_version": protocol.SWSPVersion,
+		"caps":           caps,
 	})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, ready)
 

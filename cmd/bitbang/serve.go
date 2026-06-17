@@ -13,6 +13,7 @@ import (
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
 	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/peer"
 	"github.com/richlegrand/bitbang/internal/proxyweb"
 	"github.com/richlegrand/bitbang/internal/session"
@@ -31,6 +32,13 @@ type serveConfig struct {
 	pin       string
 	ephemeral bool
 	verbose   bool
+
+	// nocode disables the code-exchange pairing flow. Default is code ON
+	// for the `bitbang serve` family — pairing is the expected way new
+	// users reach a listener — but a non-interactive deployment (systemd
+	// unit, batch job) won't be able to answer the SAS-entry prompt and
+	// should pass --nocode to suppress code issuance entirely.
+	nocode bool
 
 	// Inherited socketpair FD for an external video helper (-1 = disabled).
 	// When set, each session negotiates a secondary video PeerConnection with
@@ -150,6 +158,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.pin, "pin", "", "PIN to protect access")
 	fs.BoolVar(&cfg.ephemeral, "ephemeral", false, "Use a temporary identity")
 	fs.BoolVar(&cfg.verbose, "v", false, "Verbose logging")
+	fs.BoolVar(&cfg.nocode, "nocode", false, "Disable code-exchange pairing (operator typed SAS); URL still works")
 	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
 	fs.StringVar(&cfg.program, "program", "bitbang", "Identity program name (~/.bitbang/<program>/identity.pem)")
 	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
@@ -214,6 +223,7 @@ func startListener(cfg serveConfig) {
 
 	signalingClient := signaling.NewClient(cfg.server, id)
 	signalingClient.Verbose = cfg.verbose
+	signalingClient.WantCode = !cfg.nocode
 	url := signalingClient.URL(cfg.verbose)
 
 	printReady := func() {
@@ -221,6 +231,17 @@ func startListener(cfg serveConfig) {
 			fmt.Println(qr.ToSmallString(false))
 		}
 		fmt.Printf("URL: %s\n", url)
+	}
+
+	// printPairCode renders the issued pairing code on its own line —
+	// the operator shares this verbally so the connector can pair
+	// without the full UID URL. Code may be empty when (a) --nocode is
+	// set, or (b) the server lacks pairing support. In either case the
+	// URL flow still works; we just don't surface a code.
+	printPairCode := func() {
+		if signalingClient.PairingCode != "" {
+			fmt.Printf("Pairing code: %s (valid 5 minutes)\n", signalingClient.PairingCode)
+		}
 	}
 
 	fmt.Println(banner)
@@ -244,9 +265,16 @@ func startListener(cfg serveConfig) {
 	signalingClient.OnReady = func() {
 		if firstReady {
 			firstReady = false
+			// First-ready: URL/QR was already printed above (synchronously,
+			// before Connect). Print just the pair code now that we've
+			// learned it from the registered reply.
+			printPairCode()
 			return
 		}
+		// Reconnect: re-print URL+QR (operator may have scrolled past it
+		// during a long-running session) and the freshly-issued code.
 		printReady()
+		printPairCode()
 	}
 
 	signalingClient.Connect(func(msg signaling.Message) {
@@ -356,10 +384,35 @@ func startListener(cfg serveConfig) {
 				}
 				return
 			}
+			// Pair-flow answers skip the bidirectional-verify decrypt —
+			// SAS comparison (run from the data-channel OnOpen) is the
+			// substitute, since the connector doesn't hold an access
+			// code yet to feed encrypted_request with.
+			if conn.PairingMode {
+				if err := conn.HandlePairAnswer(sdp); err != nil {
+					log.Printf("Failed to handle pair answer: %v", err)
+				}
+				return
+			}
 			encrypted, _ := msg["encrypted_request"].(string)
 			if err := conn.HandleAnswer(sdp, encrypted); err != nil {
 				log.Printf("Failed to handle answer: %v", err)
 			}
+
+		case "pair_request":
+			clientID, _ := msg["client_id"].(string)
+			if clientID == "" {
+				return
+			}
+			conn, err := peer.HandlePairRequest(msg, signalingClient, id,
+				pairing.DefaultTTYPrompt, cfg.verbose)
+			if err != nil {
+				log.Printf("Failed to handle pair request: %v", err)
+				return
+			}
+			mu.Lock()
+			connections[clientID] = conn
+			mu.Unlock()
 
 		case "ice_restart":
 			// The browser's direct-only ICE stalled; the signaling server has

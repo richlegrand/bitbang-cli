@@ -24,6 +24,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
@@ -44,6 +45,17 @@ type Connection struct {
 	// — most importantly, kill any shell processes that would
 	// otherwise keep holding their max-sessions slot.
 	OnClose func()
+
+	// PairingMode is true when this connection was created by
+	// HandlePairRequest rather than HandleRequest. In pair mode the
+	// access-code check in HandleAnswer is skipped (the connector does not
+	// yet have an access code — that's what pairing delivers) and the
+	// data-channel OnOpen runs the SAS confirmation flow instead of
+	// sending verify_nonce_hash. The connector reads its computed SAS
+	// aloud; the listener types it; BitBang compares the typed value to
+	// its own SAS. Match → pair_approved with uid+access_code. Mismatch →
+	// pair_rejected with reason.
+	PairingMode bool
 
 	// identity holds the device's private key, used to decrypt the
 	// browser's encrypted_request payload riding on the SDP answer.
@@ -66,51 +78,63 @@ type Connection struct {
 	verifyFailed bool
 }
 
-// HandleRequest creates a new peer connection in response to a browser's
-// connection request. It configures ICE servers, creates the data channel,
-// generates an SDP offer, and sends it back via the signaling client.
-// The onMessage callback is called for each data channel message.
+// connSetup carries the per-flow customization for setupConnection:
+// what to log on first sight, what to do when the data channel opens,
+// and which flow-specific fields to populate on the Connection. The
+// shared boilerplate (ParseICEServers, PC creation, DC creation, trickle
+// ICE plumbing, offer-send) lives in setupConnection.
+type connSetup struct {
+	clientID string
+	msg      signaling.Message
+	sig      *signaling.Client
+	id       *identity.Identity
+	verbose  bool
+
+	// logTag distinguishes log prefixes between flows — "Connection" for
+	// the regular request path, "Pair" for the pair_request path. Used
+	// in the data-channel open/close lines and the state-change log.
+	logTag string
+
+	// onMessage is the per-data-channel-message callback. Nil for pair
+	// flow (no application traffic flows over the pair-mode PC).
+	onMessage OnMessageFunc
+
+	// onOpen is the post-DTLS body — verify_nonce_hash for the regular
+	// flow, SAS prompt + approve/reject for the pair flow. It runs
+	// inside dc.OnOpen; the helper provides conn and dc as arguments.
+	onOpen func(conn *Connection, dc *webrtc.DataChannel)
+
+	// Flow-specific Connection-struct fields. browserIP is populated
+	// only for the regular flow; pairingMode only for the pair flow.
+	browserIP   string
+	pairingMode bool
+}
+
+// setupConnection builds the PC + DC + signaling wiring shared by both
+// flow entry points (HandleRequest and HandlePairRequest). The caller's
+// only obligation is to fill in connSetup.onOpen with the post-DTLS body
+// that distinguishes the flow.
 //
-// id is the device's identity — needed to decrypt the bidirectional-verify
-// payload that arrives later with the SDP answer.
-func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, onMessage OnMessageFunc, verbose bool) (*Connection, error) {
-	clientID, _ := msg["client_id"].(string)
-	if clientID == "" {
-		return nil, fmt.Errorf("missing client_id")
-	}
-
-	// Parse ICE servers from the signaling server's request message
-	iceServers := ParseICEServers(msg)
-
-	config := webrtc.Configuration{
-		ICEServers: iceServers,
-	}
-
-	pc, err := webrtc.NewPeerConnection(config)
+// On success the Connection is returned with the offer already sent;
+// answer + ICE-candidate handling proceeds normally from the caller's
+// signaling read loop. On failure the partial PC is cleaned up.
+func setupConnection(s connSetup) (*Connection, error) {
+	iceServers := ParseICEServers(s.msg)
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		return nil, fmt.Errorf("create peer connection: %w", err)
 	}
 
-	// browser_ip is supplied by the signaling server; clients can't set it
-	// themselves. Empty when the server didn't provide it (e.g. older
-	// signaling server, local tests).
-	browserIP, _ := msg["browser_ip"].(string)
-	logIP := browserIP
-	if logIP == "" {
-		logIP = "?"
-	}
-	log.Printf("Connection request from %s (browser_ip=%s)", clientID, logIP)
-
 	conn := &Connection{
-		ClientID:  clientID,
-		PC:        pc,
-		sig:       sig,
-		OnMessage: onMessage,
-		identity:  id,
-		browserIP: browserIP,
+		ClientID:    s.clientID,
+		PC:          pc,
+		sig:         s.sig,
+		OnMessage:   s.onMessage,
+		identity:    s.id,
+		browserIP:   s.browserIP,
+		PairingMode: s.pairingMode,
 	}
 
-	// Create data channel (we are the offerer)
 	dc, err := pc.CreateDataChannel("http", nil)
 	if err != nil {
 		pc.Close()
@@ -119,42 +143,14 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 	conn.DC = dc
 
 	dc.OnOpen(func() {
-		log.Printf("Data channel opened for %s", clientID)
-		conn.mu.Lock()
-		failed := conn.verifyFailed
-		nonce := conn.nonce
-		conn.mu.Unlock()
-		if failed {
-			log.Printf("Verify failed for %s — closing without nonce reply", clientID)
-			pc.Close()
-			return
-		}
-		if nonce == nil {
-			// Browser did not include the bidirectional-verify payload —
-			// reject. Connecting clients must use a bootstrap that supports
-			// the encrypted_request field; older browsers won't be served.
-			log.Printf("No bidirectional-verify nonce for %s — closing", clientID)
-			pc.Close()
-			return
-		}
-		frame, err := buildVerifyNonceHashFrame(nonce)
-		if err != nil {
-			log.Printf("Build verify_nonce_hash for %s: %v", clientID, err)
-			pc.Close()
-			return
-		}
-		if err := dc.Send(frame); err != nil {
-			log.Printf("Send verify_nonce_hash for %s: %v", clientID, err)
-			pc.Close()
-			return
-		}
+		log.Printf("%s data channel opened for %s", s.logTag, s.clientID)
+		s.onOpen(conn, dc)
 	})
 
 	dcClosed := false
-
 	dc.OnClose(func() {
 		dcClosed = true
-		log.Printf("Data channel closed for %s", clientID)
+		log.Printf("%s data channel closed for %s", s.logTag, s.clientID)
 		// Run caller-supplied cleanup BEFORE closing the PC, so any
 		// resources tied to the data channel (e.g. spawned shell
 		// processes) get torn down while the connection state is
@@ -165,9 +161,9 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 		pc.Close()
 	})
 
-	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+	dc.OnMessage(func(m webrtc.DataChannelMessage) {
 		if conn.OnMessage != nil {
-			conn.OnMessage(msg.Data)
+			conn.OnMessage(m.Data)
 		}
 	})
 
@@ -175,32 +171,31 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 		if dcClosed {
 			return
 		}
-		if verbose {
-			log.Printf("Connection state for %s: %s", clientID, state.String())
+		if s.verbose {
+			log.Printf("%s state for %s: %s", s.logTag, s.clientID, state.String())
 		}
 		if state == webrtc.PeerConnectionStateFailed {
 			pc.Close()
 		}
 	})
 
-	// Send trickle ICE candidates to browser via signaling
+	// Trickle ICE candidates to the connector via signaling.
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
 			return // gathering complete
 		}
-		candidateJSON := candidate.ToJSON()
-		sig.Send(signaling.Message{
+		cj := candidate.ToJSON()
+		s.sig.Send(signaling.Message{
 			"type":      "candidate",
-			"client_id": clientID,
+			"client_id": s.clientID,
 			"candidate": map[string]interface{}{
-				"candidate":     candidateJSON.Candidate,
-				"sdpMid":        candidateJSON.SDPMid,
-				"sdpMLineIndex": candidateJSON.SDPMLineIndex,
+				"candidate":     cj.Candidate,
+				"sdpMid":        cj.SDPMid,
+				"sdpMLineIndex": cj.SDPMLineIndex,
 			},
 		})
 	})
 
-	// Create and send offer
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		pc.Close()
@@ -216,18 +211,90 @@ func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Id
 	// complete here would add up to pion's default 5 s ICE-gather
 	// timeout to every connection setup — even though we're already
 	// trickling those candidates out separately and bundling them in
-	// the SDP would just be redundant. Both clients (bootstrap.js and
+	// the SDP would just be redundant. Both connectors (bootstrap.js and
 	// internal/client) buffer remote candidates that arrive before
 	// setRemoteDescription finishes, so the candidate stream is safe to
 	// start before the offer has even been processed.
-	sig.Send(signaling.Message{
+	s.sig.Send(signaling.Message{
 		"type":      "offer",
-		"client_id": clientID,
+		"client_id": s.clientID,
 		"sdp":       pc.LocalDescription().SDP,
 		"streams":   map[string]interface{}{},
 	})
 
 	return conn, nil
+}
+
+// HandleRequest creates a new peer connection in response to a connector's
+// connection request. It configures ICE servers, creates the data channel,
+// generates an SDP offer, and sends it back via the signaling client.
+// The onMessage callback is called for each data channel message.
+//
+// id is the device's identity — needed to decrypt the bidirectional-verify
+// payload that arrives later with the SDP answer.
+func HandleRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, onMessage OnMessageFunc, verbose bool) (*Connection, error) {
+	clientID, _ := msg["client_id"].(string)
+	if clientID == "" {
+		return nil, fmt.Errorf("missing client_id")
+	}
+
+	// browser_ip is supplied by the signaling server; connectors can't
+	// set it themselves. Empty when the server didn't provide it (e.g.
+	// older signaling server, local tests).
+	browserIP, _ := msg["browser_ip"].(string)
+	logIP := browserIP
+	if logIP == "" {
+		logIP = "?"
+	}
+	log.Printf("Connection request from %s (browser_ip=%s)", clientID, logIP)
+
+	return setupConnection(connSetup{
+		clientID:  clientID,
+		msg:       msg,
+		sig:       sig,
+		id:        id,
+		verbose:   verbose,
+		logTag:    "Connection",
+		onMessage: onMessage,
+		browserIP: browserIP,
+		onOpen:    handleRequestOnOpen,
+	})
+}
+
+// handleRequestOnOpen is the post-DTLS body for the regular flow. Sends
+// verify_nonce_hash on stream 0, proving to the connector that the
+// listener decrypted the bidirectional-verify payload. Verify failure
+// (set by HandleAnswer) closes without sending the frame, which is the
+// signal the connector watches for to detect a rogue relay.
+func handleRequestOnOpen(conn *Connection, dc *webrtc.DataChannel) {
+	conn.mu.Lock()
+	failed := conn.verifyFailed
+	nonce := conn.nonce
+	conn.mu.Unlock()
+	if failed {
+		log.Printf("Verify failed for %s — closing without nonce reply", conn.ClientID)
+		conn.PC.Close()
+		return
+	}
+	if nonce == nil {
+		// Connector did not include the bidirectional-verify payload —
+		// reject. Connecting clients must use a bootstrap that supports
+		// the encrypted_request field; older browsers won't be served.
+		log.Printf("No bidirectional-verify nonce for %s — closing", conn.ClientID)
+		conn.PC.Close()
+		return
+	}
+	frame, err := buildVerifyNonceHashFrame(nonce)
+	if err != nil {
+		log.Printf("Build verify_nonce_hash for %s: %v", conn.ClientID, err)
+		conn.PC.Close()
+		return
+	}
+	if err := dc.Send(frame); err != nil {
+		log.Printf("Send verify_nonce_hash for %s: %v", conn.ClientID, err)
+		conn.PC.Close()
+		return
+	}
 }
 
 // HandleAnswer sets the remote description from the browser's SDP answer and
@@ -319,6 +386,136 @@ func (c *Connection) markVerifyFailed() {
 	c.mu.Lock()
 	c.verifyFailed = true
 	c.mu.Unlock()
+}
+
+// HandlePairRequest creates a peer connection in response to a "pair_request"
+// from the signaling server. Wire-shape is the same as a regular request
+// (offer / answer / candidate); the difference is in what happens after the
+// data channel opens: instead of sending verify_nonce_hash, the listener
+// computes the Short Authentication String (SAS) from the two negotiated DTLS
+// fingerprints, prompts its operator to enter the SAS that the connector is
+// reading aloud, and sends pair_approved (with the listener's UID and access
+// code) or pair_rejected (with the reason) through signaling.
+//
+// prompt is the PromptFunc used to read each SAS attempt; pass
+// pairing.DefaultTTYPrompt for interactive listeners. The SAS itself is
+// never written to the terminal — the whole design point is that there is
+// nothing to blindly approve.
+//
+// The connection closes itself in all post-DTLS outcomes (approved, rejected,
+// timeout, abort). The connector never sends application traffic over this
+// connection; once it receives pair_approved on signaling, it reconnects via
+// the standard /ws/client/<uid> direct flow using the delivered access code.
+//
+// pair_request currently carries no ice_servers — pairing assumes
+// reachable peers (typically interactive co-location). If the server
+// later attaches TURN here, ParseICEServers picks it up unchanged.
+func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, prompt pairing.PromptFunc, verbose bool) (*Connection, error) {
+	clientID, _ := msg["client_id"].(string)
+	if clientID == "" {
+		return nil, fmt.Errorf("missing client_id")
+	}
+
+	// pair_request carries the connector's IP under remote_ip — distinct
+	// from the regular request flow's browser_ip, since the connector
+	// isn't necessarily a browser.
+	if remoteIP, _ := msg["remote_ip"].(string); remoteIP == "" {
+		log.Printf("Pair request received")
+	} else {
+		log.Printf("Pair request received from %s", remoteIP)
+	}
+
+	return setupConnection(connSetup{
+		clientID:    clientID,
+		msg:         msg,
+		sig:         sig,
+		id:          id,
+		verbose:     verbose,
+		logTag:      "Pair",
+		pairingMode: true,
+		onOpen: func(conn *Connection, dc *webrtc.DataChannel) {
+			handlePairRequestOnOpen(conn, prompt, id)
+		},
+	})
+}
+
+// handlePairRequestOnOpen is the post-DTLS body for the pair flow. Extracts
+// both DTLS fingerprints from the negotiated SDPs, computes the SAS, prompts
+// the listener operator to type the value the connector is reading aloud,
+// and signals pair_approved / pair_rejected accordingly. Closes the PC in
+// all outcomes — the connector reconnects via the standard direct flow.
+func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *identity.Identity) {
+	localFp := extractFingerprint(conn.PC.LocalDescription().SDP)
+	remoteFp := extractFingerprint(conn.PC.RemoteDescription().SDP)
+	if localFp == "" || remoteFp == "" {
+		// SDP without sha-256 fingerprints shouldn't happen with any
+		// modern peer; if it does, refusing is the only safe move.
+		log.Printf("Pair %s: missing SDP fingerprints (local=%q remote=%q)", conn.ClientID, localFp, remoteFp)
+		conn.sendPairRejected("user_declined")
+		conn.PC.Close()
+		return
+	}
+	sas := ComputeSAS(localFp, remoteFp)
+	// Don't log the SAS — even verbose mode shouldn't leak it to the
+	// operator (who would then have nothing to type, since the design
+	// assumes they hear it from the connector).
+
+	reason, ok := pairing.PromptForSAS(sas, prompt)
+	if !ok {
+		log.Printf("Pair rejected for %s: %s", conn.ClientID, reason)
+		conn.sendPairRejected(reason)
+		conn.PC.Close()
+		return
+	}
+
+	log.Printf("Pair approved for %s", conn.ClientID)
+	conn.sendPairApproved(id.UID, id.Code)
+	// Close the pair-flow PC: the connector now has uid+access_code and
+	// will reconnect via the standard direct request flow.
+	conn.PC.Close()
+}
+
+// HandlePairAnswer applies the connector's SDP answer to a pair-flow peer
+// connection. Unlike HandleAnswer it does not require (or expect) an
+// encrypted_request payload — the connector does not yet hold an access code,
+// and the bidirectional-verify fingerprint check is supplanted in pair mode
+// by the SAS comparison the OnOpen callback runs after the data channel
+// opens.
+func (c *Connection) HandlePairAnswer(sdp string) error {
+	answer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeAnswer,
+		SDP:  sdp,
+	}
+	if err := c.PC.SetRemoteDescription(answer); err != nil {
+		return fmt.Errorf("set remote description (pair): %w", err)
+	}
+	return nil
+}
+
+// sendPairApproved emits pair_approved through signaling. uid and accessCode
+// are the listener's own — the connector saves them after receiving this and
+// reaches the device directly on subsequent connects.
+func (c *Connection) sendPairApproved(uid, accessCode string) {
+	if err := c.sig.Send(signaling.Message{
+		"type":        "pair_approved",
+		"client_id":   c.ClientID,
+		"uid":         uid,
+		"access_code": accessCode,
+	}); err != nil {
+		log.Printf("Pair %s: send pair_approved: %v", c.ClientID, err)
+	}
+}
+
+// sendPairRejected emits pair_rejected with the given reason. Reason is wire-
+// stable: "sas_mismatch", "timeout", or "user_declined".
+func (c *Connection) sendPairRejected(reason string) {
+	if err := c.sig.Send(signaling.Message{
+		"type":      "pair_rejected",
+		"client_id": c.ClientID,
+		"reason":    reason,
+	}); err != nil {
+		log.Printf("Pair %s: send pair_rejected: %v", c.ClientID, err)
+	}
 }
 
 // AddICECandidate adds a trickle ICE candidate from the browser.

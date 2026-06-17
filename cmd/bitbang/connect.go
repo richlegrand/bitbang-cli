@@ -16,9 +16,16 @@ import (
 	"github.com/richlegrand/bitbang/internal/client"
 )
 
-// runConnect implements `bitbang connect <URL> [-- argv...]`.
+// runConnect implements `bitbang connect <URL-or-pair-code> [-- argv...]`.
 //
-// Mode auto-detection:
+// Two arg shapes are accepted:
+//
+//   - A 6-digit numeric code → pair flow against /ws/pair. Walks the
+//     SAS-display dance, saves uid+access_code to ~/.bitbang/devices.json
+//     on success, exits. Subsequent connects use the saved URL.
+//   - Anything else → URL flow. Opens a remote shell to the listener.
+//
+// Mode auto-detection (URL flow only):
 //   - Interactive: stdin is a TTY and no argv is given. Allocate a PTY
 //     on the listener, put local terminal in raw mode, forward
 //     keystrokes, render output, watch SIGWINCH for resize.
@@ -37,11 +44,12 @@ func runConnect(args []string) {
 	verbose := fs.Bool("v", false, "Verbose logging")
 	timeout := fs.Duration("timeout", 30*time.Second, "Dial timeout")
 	pin := fs.String("pin", "", "PIN (skips the interactive prompt)")
+	server := fs.String("server", "bitba.ng", "Signaling server (pair-code mode only; URL form carries its own server)")
 	fs.Parse(reorderArgs(fs, args))
 
 	posArgs := fs.Args()
 	if len(posArgs) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: bitbang connect <URL> [-- argv...]")
+		fmt.Fprintln(os.Stderr, "Usage: bitbang connect <URL-or-pair-code> [-- argv...]")
 		os.Exit(2)
 	}
 	urlArg := posArgs[0]
@@ -56,9 +64,19 @@ func runConnect(args []string) {
 		}
 	}
 
-	rs, ok := parseConnectURL(urlArg)
-	if !ok {
-		fail("connect: invalid URL: %s", urlArg)
+	// Decide where the remoteSpec comes from. A 6-digit code triggers the
+	// pair flow first, then falls through with the just-obtained
+	// credentials so we land in a shell exactly like the URL form would.
+	// Otherwise parse the URL form directly.
+	var rs remoteSpec
+	if pairCodePattern.MatchString(urlArg) {
+		rs = runPairConnect(urlArg, *server, *verbose)
+	} else {
+		var ok bool
+		rs, ok = parseConnectURL(urlArg)
+		if !ok {
+			fail("connect: invalid URL: %s", urlArg)
+		}
 	}
 
 	// Mode decision: PTY only when stdin is a real terminal AND no argv

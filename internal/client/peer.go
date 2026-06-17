@@ -8,18 +8,41 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
-	"strings"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
+
+	"github.com/richlegrand/bitbang/internal/sdp"
 )
 
-// Peer wraps a pion PeerConnection set up as the *answerer* (client side
-// of a BitBang session). The listener creates the data channel; we accept
-// it via OnDataChannel.
+// Mode is the verification posture this Peer takes for the offer it
+// receives. The URL flow (bidirectional verify with an access code) and
+// the pair flow (SAS-verified, no access code yet) need different
+// HandleOffer behavior; everything else about Peer is identical.
+type Mode int
+
+const (
+	// ModeURL is the URL-flow connector: the answerer holds an access
+	// code, verifies the listener's pubkey hashes to the URL's UID,
+	// builds an RSA-OAEP-encrypted {fingerprint, nonce, code} payload,
+	// and rides it on the SDP answer.
+	ModeURL Mode = iota
+
+	// ModePair is the pair-flow connector: no access code exists yet
+	// (the listener delivers one in pair_approved after SAS comparison),
+	// no device_pubkey is consulted from the offer, and the SDP answer
+	// carries no encrypted_request payload. Channel integrity rides on
+	// the SAS the operator types on the listener side, not on
+	// bidirectional verify.
+	ModePair
+)
+
+// Peer wraps a pion PeerConnection set up as the *answerer* (connector
+// side of a BitBang session). The listener creates the data channel; we
+// accept it via OnDataChannel.
 //
-// Owns the bidirectional-verify dance from the client perspective:
+// In ModeURL, Peer owns the bidirectional-verify dance from the connector
+// perspective:
 //
 //  1. Receive offer from signaling, which carries `device_pubkey`.
 //  2. Verify hash(pubkey)[:16] == uid (catches a rogue server that swaps
@@ -34,15 +57,22 @@ import (
 //
 // The session layer drives step (5); Peer exposes Nonce() so it can be
 // checked against the inbound hash.
+//
+// In ModePair, Peer skips steps 1–3 (no pubkey check, no encrypted_request
+// payload). HandleOffer returns ("", "", nil) for those outputs; the
+// caller sends an answer with sdp but without encrypted_request. The SAS
+// comparison the operator performs on the listener side is what protects
+// the channel against a rogue relay.
 type Peer struct {
 	PC           *webrtc.PeerConnection
 	DC           *webrtc.DataChannel // populated when listener opens it
-	devicePubkey *rsa.PublicKey
-	uid          string
-	code         string
+	mode         Mode
+	devicePubkey *rsa.PublicKey // ModeURL only
+	uid          string         // ModeURL only
+	code         string         // ModeURL only
 
 	mu          sync.Mutex
-	verifyNonce []byte // populated when answer is built
+	verifyNonce []byte // ModeURL only
 
 	// dcReady fires once the data channel transitions to open AND has been
 	// stored on Peer. Session.Wait blocks on this before sending control
@@ -58,10 +88,22 @@ type Peer struct {
 	dcClosed chan struct{}
 }
 
-// NewPeer constructs a Peer ready to receive an offer. The UID and code
-// are the values from the URL the user supplied — UID anchors the
-// pubkey/UID check, code rides on the bidirectional-verify payload.
+// NewPeer constructs a Peer in URL mode. The UID and code are the values
+// from the URL the user supplied — UID anchors the pubkey/UID check, code
+// rides on the bidirectional-verify payload.
 func NewPeer(uid, code string, iceServers []webrtc.ICEServer) (*Peer, error) {
+	return newPeer(ModeURL, uid, code, iceServers)
+}
+
+// NewPairPeer constructs a Peer in pair mode. The pair flow has no UID
+// or access code at this point — those arrive in pair_approved after SAS
+// verification. Use NewPeer for URL-flow connects where the credentials
+// are already known.
+func NewPairPeer(iceServers []webrtc.ICEServer) (*Peer, error) {
+	return newPeer(ModePair, "", "", iceServers)
+}
+
+func newPeer(mode Mode, uid, code string, iceServers []webrtc.ICEServer) (*Peer, error) {
 	cfg := webrtc.Configuration{ICEServers: iceServers}
 	pc, err := webrtc.NewPeerConnection(cfg)
 	if err != nil {
@@ -69,6 +111,7 @@ func NewPeer(uid, code string, iceServers []webrtc.ICEServer) (*Peer, error) {
 	}
 	p := &Peer{
 		PC:       pc,
+		mode:     mode,
 		uid:      uid,
 		code:     code,
 		dcReady:  make(chan struct{}),
@@ -78,6 +121,9 @@ func NewPeer(uid, code string, iceServers []webrtc.ICEServer) (*Peer, error) {
 	pc.OnDataChannel(p.onDataChannel)
 	return p, nil
 }
+
+// Mode returns the verification posture this Peer was constructed with.
+func (p *Peer) Mode() Mode { return p.mode }
 
 func (p *Peer) onDataChannel(dc *webrtc.DataChannel) {
 	p.DC = dc
@@ -109,36 +155,50 @@ func (p *Peer) onDataChannel(dc *webrtc.DataChannel) {
 	})
 }
 
-// HandleOffer parses the offer from signaling, runs the pubkey/UID
-// check, builds the SDP answer, and produces the encrypted_request
-// payload. The caller forwards (answerSDP, encryptedRequestB64) to
-// signaling via SendAnswer.
+// HandleOffer parses the offer from signaling, sets up the answer-side
+// of the WebRTC handshake, and (in ModeURL) builds the bidirectional-
+// verify encrypted_request payload. The caller forwards (answerSDP,
+// encryptedRequestB64) to signaling via SendAnswer; encryptedRequestB64
+// is empty in ModePair.
 //
 // After this returns, the caller must call AddICECandidate for each
 // inbound candidate (from signaling) and forward locally-gathered
 // candidates back via signaling.SendCandidate.
+//
+// Behavior differs by Mode:
+//
+//   - ModeURL: requires device_pubkey on the offer, verifies it hashes
+//     to the configured UID, encrypts {fingerprint, nonce, code} to the
+//     pubkey, returns the base64 ciphertext as encryptedRequestB64.
+//   - ModePair: ignores device_pubkey if present, returns "" for
+//     encryptedRequestB64. SAS comparison on the listener side is the
+//     channel-integrity check.
 func (p *Peer) HandleOffer(msg Message) (string, string, error) {
-	sdp, _ := msg["sdp"].(string)
-	if sdp == "" {
+	// offerSDP — avoid the bare name "sdp" because the package import
+	// (internal/sdp) shadows it for the fingerprint extraction below.
+	offerSDP, _ := msg["sdp"].(string)
+	if offerSDP == "" {
 		return "", "", fmt.Errorf("offer missing sdp")
 	}
-	devicePubkeyB64, _ := msg["device_pubkey"].(string)
-	if devicePubkeyB64 == "" {
-		return "", "", fmt.Errorf("offer missing device_pubkey — listener too old or misbehaving")
-	}
 
-	pubkey, der, err := importDevicePubkey(devicePubkeyB64)
-	if err != nil {
-		return "", "", fmt.Errorf("decode device_pubkey: %w", err)
+	if p.mode == ModeURL {
+		devicePubkeyB64, _ := msg["device_pubkey"].(string)
+		if devicePubkeyB64 == "" {
+			return "", "", fmt.Errorf("offer missing device_pubkey — listener too old or misbehaving")
+		}
+		pubkey, der, err := importDevicePubkey(devicePubkeyB64)
+		if err != nil {
+			return "", "", fmt.Errorf("decode device_pubkey: %w", err)
+		}
+		if got := uidFromPubkeyDER(der); got != p.uid {
+			return "", "", fmt.Errorf("pubkey/UID mismatch (server returned key for %s, expected %s)", got, p.uid)
+		}
+		p.devicePubkey = pubkey
 	}
-	if got := uidFromPubkeyDER(der); got != p.uid {
-		return "", "", fmt.Errorf("pubkey/UID mismatch (server returned key for %s, expected %s)", got, p.uid)
-	}
-	p.devicePubkey = pubkey
 
 	if err := p.PC.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
-		SDP:  sdp,
+		SDP:  offerSDP,
 	}); err != nil {
 		return "", "", fmt.Errorf("set remote description: %w", err)
 	}
@@ -152,11 +212,16 @@ func (p *Peer) HandleOffer(msg Message) (string, string, error) {
 	}
 
 	localSDP := p.PC.LocalDescription().SDP
-	fp := extractDTLSFingerprint(localSDP)
+
+	if p.mode == ModePair {
+		// Pair flow: no encrypted_request, SAS substitutes.
+		return localSDP, "", nil
+	}
+
+	fp := sdp.ExtractFingerprint(localSDP)
 	if fp == "" {
 		return "", "", fmt.Errorf("local SDP has no sha-256 fingerprint")
 	}
-
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", "", fmt.Errorf("generate verify nonce: %w", err)
@@ -165,7 +230,7 @@ func (p *Peer) HandleOffer(msg Message) (string, string, error) {
 	p.verifyNonce = nonce
 	p.mu.Unlock()
 
-	encrypted, err := encryptVerifyPayload(pubkey, fp, nonce, p.code)
+	encrypted, err := encryptVerifyPayload(p.devicePubkey, fp, nonce, p.code)
 	if err != nil {
 		return "", "", fmt.Errorf("encrypt verify payload: %w", err)
 	}
@@ -233,25 +298,9 @@ func (p *Peer) Close() {
 // ---------------------------------------------------------------------------
 // Bidirectional-verify helpers (mirror bootstrap.js's three corresponding
 // functions). Kept in this file rather than a separate verify.go to make
-// the dependency on RSA-OAEP / SDP fingerprint extraction obvious at the
-// call site.
+// the dependency on RSA-OAEP obvious at the call site. SDP fingerprint
+// extraction lives in internal/sdp so both sides use the same parse.
 // ---------------------------------------------------------------------------
-
-var fingerprintLine = regexp.MustCompile(`(?i)^a=fingerprint:sha-256\s+([0-9A-F:]+)\s*$`)
-
-// extractDTLSFingerprint pulls the sha-256 DTLS fingerprint out of an SDP
-// and normalizes to uppercase. Must match peer/verify.go on the listener
-// side byte-for-byte — the device compares the string we send against
-// what extractFingerprint returns from its parse of the same SDP.
-func extractDTLSFingerprint(sdp string) string {
-	for _, line := range strings.Split(sdp, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if m := fingerprintLine.FindStringSubmatch(line); m != nil {
-			return strings.ToUpper(m[1])
-		}
-	}
-	return ""
-}
 
 // importDevicePubkey decodes a base64-encoded SPKI DER public key into
 // an *rsa.PublicKey. Returns the DER bytes too so the caller can hash
