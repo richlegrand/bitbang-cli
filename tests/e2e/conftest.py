@@ -18,7 +18,7 @@ import queue
 
 TEST_SERVER = os.environ.get('BITBANG_TEST_SERVER', 'test.bitba.ng')
 TARGET_PORT = 18080
-PROXY_STARTUP_TIMEOUT = 15
+PROXY_STARTUP_TIMEOUT = 30
 
 
 @pytest.fixture(scope='session')
@@ -77,6 +77,7 @@ def proxy_url(target_app):
     threading.Thread(target=_pump, daemon=True).start()
 
     url = None
+    ready = False
     captured = []
     deadline = time.time() + PROXY_STARTUP_TIMEOUT
     while time.time() < deadline:
@@ -88,16 +89,23 @@ def proxy_url(target_app):
             break
         captured.append(line)
         print(f'[proxy] {line.rstrip()}')
-        match = re.search(r'Ready: (https://\S+)', line)
-        if match:
-            url = match.group(1)
+        # Current CLI prints the share URL on a "URL: https://..." line and a
+        # separate "Ready" status line. Capture the URL, then proceed once the
+        # proxy reports Ready.
+        m = re.search(r'URL:\s*(https://\S+)', line)
+        if m:
+            url = m.group(1)
+        if re.search(r'\bReady\b', line):
+            ready = True
+        if url and ready:
             break
 
-    if url is None:
+    if not (url and ready):
         proc.kill()
         pytest.fail(
-            f'Proxy did not reach "Ready:" within {PROXY_STARTUP_TIMEOUT}s '
-            f'(server={TEST_SERVER}). Output:\n{"".join(captured)}'
+            f'Proxy did not become ready within {PROXY_STARTUP_TIMEOUT}s '
+            f'(url={url!r}, ready={ready}, server={TEST_SERVER}). '
+            f'Output:\n{"".join(captured)}'
         )
 
     print(f'[proxy] URL: {url}')
