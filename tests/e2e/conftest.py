@@ -13,6 +13,8 @@ import sys
 import os
 import re
 import signal
+import threading
+import queue
 
 TEST_SERVER = os.environ.get('BITBANG_TEST_SERVER', 'test.bitba.ng')
 TARGET_PORT = 18080
@@ -61,15 +63,30 @@ def proxy_url(target_app):
         text=True,
     )
 
-    # Wait for the "Ready: https://..." line
+    # Wait for the "Ready: https://..." line. Read stdout on a background
+    # thread and poll with a real deadline -- a blocking readline() here would
+    # let a silent/stuck proxy (e.g. unable to register with the signaling
+    # server in CI) hang the whole job past PROXY_STARTUP_TIMEOUT.
+    lines = queue.Queue()
+
+    def _pump():
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)  # EOF sentinel
+
+    threading.Thread(target=_pump, daemon=True).start()
+
     url = None
+    captured = []
     deadline = time.time() + PROXY_STARTUP_TIMEOUT
     while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            continue
+        try:
+            line = lines.get(timeout=max(0.1, deadline - time.time()))
+        except queue.Empty:
+            break
+        if line is None:  # proxy exited before becoming ready
+            break
+        captured.append(line)
         print(f'[proxy] {line.rstrip()}')
         match = re.search(r'Ready: (https://\S+)', line)
         if match:
@@ -78,8 +95,10 @@ def proxy_url(target_app):
 
     if url is None:
         proc.kill()
-        output = proc.stdout.read()
-        pytest.fail(f'Proxy failed to start. Output:\n{output}')
+        pytest.fail(
+            f'Proxy did not reach "Ready:" within {PROXY_STARTUP_TIMEOUT}s '
+            f'(server={TEST_SERVER}). Output:\n{"".join(captured)}'
+        )
 
     print(f'[proxy] URL: {url}')
     yield url

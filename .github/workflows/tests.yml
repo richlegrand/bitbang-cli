@@ -40,11 +40,11 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install flask flask-sock pytest pytest-playwright playwright
+          pip install flask flask-sock pytest pytest-timeout pytest-playwright playwright
           playwright install --with-deps chromium
 
       - name: Run E2E tests
-        run: python -m pytest tests/e2e/ -v --screenshot=only-on-failure --output=tests/e2e/screenshots
+        run: python -m pytest tests/e2e/ -v --timeout=60 --timeout-method=thread --screenshot=only-on-failure --output=tests/e2e/screenshots
 
       - name: Upload screenshots on failure
         if: failure()
