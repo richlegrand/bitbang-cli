@@ -109,19 +109,96 @@ The access code lives in the URL **fragment** (`#…`), which browsers never sen
 | Data path | Their servers | Their servers | P2P | **P2P** |
 | Configuration | CLI flags | Config + DNS | Dashboard | **None** |
 
-## Common flags
+## Command reference
 
-**`serve`**
-- `-pin PIN` — require a PIN for connections
-- `-ephemeral` — temporary identity (new URL each run)
-- `-target HOST:PORT` — fixed proxy target (proxy mode)
-- `-files PATH` / `-files-upload` — directory to share / allow uploads
-- `-shell-cmd CMD` — shell to spawn (default `$SHELL` or `/bin/sh`)
-- `-shell-max-sessions N` — cap concurrent shells (0 = unlimited)
-- `-server HOST` — signaling server (default `bitba.ng`)
-- `-v` — verbose logging (adds the browser `?debug` overlay)
+Flags accept either form (`-pin` or `--pin`). Boolean flags default off unless noted.
 
-**`connect` / `cp`** — `-pin`, `-timeout`, `-v`
+```
+bitbang serve [flags]                  All caps: shell + files + proxy on one URL
+bitbang serve shell [flags]            Shell only
+bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)
+bitbang serve proxy [flags]            HTTP/WebSocket reverse proxy only
+bitbang connect <target> [-- cmd …]    Client shell (interactive or one-shot)
+bitbang cp <src> <dst>                 Copy files (one side is <URL>:/path, or '-')
+bitbang version                        Print version (also --version)
+bitbang help                           Usage (also --help, -h)
+```
+
+### `bitbang serve` — run a listener
+
+**Shared flags** (all four `serve` forms):
+
+| Flag | Default | Description |
+|---|---|---|
+| `-server HOST` | `bitba.ng` | Signaling server hostname |
+| `-pin PIN` | (none) | Require this PIN for connections |
+| `-ephemeral` | off | Temporary identity (a fresh URL each run) |
+| `-nocode` | off | Disable code-exchange pairing — no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
+| `-program NAME` | `bitbang` | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem` |
+| `-target HOST:PORT` | (dynamic) | Fixed proxy target (proxy mode); empty = pick the target in the browser |
+| `-v` | off | Verbose logging (adds the browser `?debug` overlay) |
+
+**Shell flags** (`serve` and `serve shell`):
+
+| Flag | Default | Description |
+|---|---|---|
+| `-shell-cmd CMD` | `$SHELL` or `/bin/sh` | Shell to spawn |
+| `-shell-max-sessions N` | `1` | Max concurrent shell sessions (0 = unlimited) |
+| `-shell-mirror` | on | Mirror shell output to the listener's console |
+
+**Files flags:**
+
+| Form | Path | Upload flag |
+|---|---|---|
+| `serve` (all caps) | `-files PATH` (default cwd) | `-files-upload` |
+| `serve files [PATH]` | positional `PATH` (default cwd) | `-upload` |
+
+*(Advanced: `-video-fd N` passes an inherited socketpair FD to an external video helper; for internal/embedding use.)*
+
+### `bitbang connect <target> [-- command …]` — client shell
+
+`<target>` may be any of:
+
+- a **saved name** — e.g. `nas1`; resolved from the known-hosts table (see below)
+- a **6-digit pair code** — e.g. `482731`; runs the pairing flow, then connects
+- a **URL** — `https://bitba.ng/<id>#<code>`, `bitba.ng/<id>#<code>`, or bare `<id>#<code>`
+
+With no `-- command`, opens an interactive shell (a PTY when stdin is a terminal). With `-- command args…`, runs that single command non-interactively and exits with its status (signal exits report 128).
+
+| Flag | Default | Description |
+|---|---|---|
+| `-name NAME` | (auto) | Remember this host under NAME (new hosts only; auto-assigns `device<N>` if omitted) |
+| `-relay` | off | Request a TURN relay up front instead of only on fallback (ICE still prefers a direct path if one succeeds) |
+| `-pin PIN` | (prompt) | PIN to send if the listener requires one (skips the interactive prompt) |
+| `-timeout DUR` | `30s` | Dial timeout (e.g. `45s`, `1m`) |
+| `-server HOST` | `bitba.ng` | Signaling server — **pair-code mode only**; the URL form carries its own host |
+| `-v` | off | Verbose logging |
+
+### `bitbang cp <src> <dst>` — copy files
+
+Exactly one of `<src>` / `<dst>` is remote, written `<URL>:/path` (URL in any form accepted by `connect`). `-` means stdin/stdout, so `cp <URL>:/f -` streams to stdout and `cp - <URL>:/f` uploads from stdin. A trailing `/` or `.` on the local side keeps the remote basename (scp-style).
+
+| Flag | Default | Description |
+|---|---|---|
+| `-relay` | off | Request a TURN relay up front (as in `connect`) |
+| `-pin PIN` | (prompt) | PIN to send if required |
+| `-timeout DUR` | `30s` | Dial timeout |
+| `-v` | off | Verbose logging |
+
+### Device names & the known-hosts table
+
+Every successful connect or pairing is remembered in `~/.bitbang/devices.json` (mode `0600`), so you can reconnect by a short name instead of a URL or code:
+
+```bash
+bitbang connect 482731 -name nas1     # pair once, save it as "nas1"
+bitbang connect nas1                  # thereafter, just the name
+```
+
+- **`-name NAME`** chooses the name; it applies only to a *new* host. Without it, an auto name (`device1`, `device2`, …) is assigned and printed (`Saved as "device1".`).
+- **Naming rules:** a name must start with a letter and contain only letters, digits, `-`, or `_`. That guarantees it can never be mistaken for a 6-digit code or a URL. Lookups and uniqueness are case-insensitive.
+- **No renaming via connect:** `bitbang connect nas1 -name nas2` is rejected — `-name` is for first-time saves only.
+- **When it's saved:** a pairing is recorded as soon as the SAS is verified (so a flaky reconnect doesn't lose it); a URL connect is recorded once connected.
+- Each entry stores `{name, uid, access_code, server, paired_at}`. Reconnecting a known host (by name or URL) refreshes it in place and keeps the name.
 
 ## Building from source
 
@@ -139,12 +216,11 @@ GOOS=darwin  GOARCH=arm64        go build -o bitbang-macos ./cmd/bitbang/
 
 ## Roadmap
 
-Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus scp-style file copy. Designed and on the way:
+Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus scp-style file copy and **ad-hoc pairing** — short 6-digit codes with a human-verified challenge (SAS) and a saved device table (`bitbang connect nas1`). Designed and on the way:
 
 - **Serial bridging** — drive a remote `/dev/ttyUSB0` from a local virtual port (e.g. the Arduino IDE, over the internet).
 - **TCP port forwarding** — `-L 5432:db.internal:5432` to reach LAN-only services.
 - **Remote desktop** — screen over a WebRTC video track, keyboard/mouse over the data channel.
-- **Ad-hoc pairing** — short numeric codes with a human-verified challenge, plus a saved device table (`bitbang connect pi-sensor`).
 - **Network mode** — team/fleet access with enrollment, scoped tokens, device discovery, and audit logging.
 
 ## License

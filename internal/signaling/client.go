@@ -47,22 +47,54 @@ type Client struct {
 	// When unset, connectOnce falls back to a one-line "Ready: ..." log.
 	OnReady func()
 
+	// OnPreempted fires once when the signaling server reports another
+	// instance has registered with this UID and taken over the slot. The
+	// library has already stopped reconnect by the time this is called —
+	// the host application decides what to do (log, exit, restart with a
+	// different identity, etc.). Defaults to a library-supplied function
+	// that logs a single line; host can replace to override the message,
+	// exit the process, suppress entirely (assign func(){}), etc.
+	//
+	// This callback is the *only* user-visible aspect of preemption. The
+	// reconnect-storm prevention (one-way preempted flag → Connect loop
+	// returns) is internal and not configurable: without it, two
+	// instances racing for the same UID would ping-pong forever.
+	OnPreempted func()
+
 	conn *websocket.Conn
 
 	// writeMu serializes WriteJSON. gorilla/websocket forbids concurrent
 	// writes, and we write from both the message-handler goroutine (offers)
 	// and pion's OnICECandidate callback (trickle candidates).
 	writeMu sync.Mutex
+
+	// preempted is set true exactly once when the server reports another
+	// instance has taken over this UID. It is the storm-breaker: the
+	// reconnect loop in Connect checks this and returns instead of
+	// trying again. One-way transition; never cleared.
+	preempted bool
 }
 
 // NewClient creates a signaling client for the given server and identity.
+// OnPreempted is initialized to the library default (one log line); host
+// can replace before calling Connect to override.
 func NewClient(server string, id *identity.Identity) *Client {
 	ws := fmt.Sprintf("wss://%s/ws/device/%s", server, id.UID)
 	return &Client{
-		ID:       id,
-		Server:   server,
-		ServerWS: ws,
+		ID:          id,
+		Server:      server,
+		ServerWS:    ws,
+		OnPreempted: defaultOnPreempted,
 	}
+}
+
+// defaultOnPreempted is the library-default OnPreempted callback. Logs
+// a single line and returns; the storm-breaker (preempted flag check in
+// Connect) is what actually stops the reconnect loop. CLI binaries
+// override this with a print-and-exit closure; library users typically
+// log into their own logger and/or trigger an application-level reset.
+func defaultOnPreempted() {
+	log.Printf("Another instance with the same UID has registered. Stopping reconnect.")
 }
 
 // URL returns the canonical user-facing URL for this device:
@@ -82,10 +114,18 @@ func (c *Client) URL(debug bool) string {
 
 // Connect connects to the signaling server and registers. On success, it
 // calls handler for each incoming message. Reconnects automatically on
-// disconnection.
+// disconnection — unless the server reports another instance has
+// preempted us, in which case it returns and stays returned.
 func (c *Client) Connect(handler func(msg Message)) {
 	for {
 		err := c.connectOnce(handler)
+		if c.preempted {
+			// Storm-breaker. Another instance has this UID; reconnecting
+			// would just kick them out and trigger their reconnect, ad
+			// infinitum. The OnPreempted callback has already fired
+			// inside the message loop; nothing more to do here.
+			return
+		}
 		if err != nil {
 			log.Printf("Connection lost: %v, retrying in 3s...", err)
 			time.Sleep(3 * time.Second)
@@ -129,6 +169,21 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 		if err := conn.ReadJSON(&msg); err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
+
+		// Intercept the typed preempted error before handing the message
+		// to the caller. We don't want the caller to see this — it's a
+		// signaling-layer concern, and the caller's handler probably
+		// doesn't know what to do with it.
+		if mtype, _ := msg["type"].(string); mtype == "error" {
+			if reason, _ := msg["message"].(string); reason == "preempted" {
+				c.preempted = true
+				if c.OnPreempted != nil {
+					c.OnPreempted()
+				}
+				return fmt.Errorf("preempted by another instance")
+			}
+		}
+
 		handler(msg)
 	}
 }

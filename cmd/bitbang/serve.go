@@ -224,6 +224,14 @@ func startListener(cfg serveConfig) {
 	signalingClient := signaling.NewClient(cfg.server, id)
 	signalingClient.Verbose = cfg.verbose
 	signalingClient.WantCode = !cfg.nocode
+	// Override the library default: for a CLI listener, the right
+	// response to preemption is to print a clear line and exit. The
+	// library-internal reconnect-storm prevention is unaffected by this
+	// override (it runs before the callback fires).
+	signalingClient.OnPreempted = func() {
+		fmt.Fprintln(os.Stderr, "Another instance with the same UID has taken over. Exiting.")
+		os.Exit(2)
+	}
 	url := signalingClient.URL(cfg.verbose)
 
 	printReady := func() {

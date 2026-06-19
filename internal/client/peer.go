@@ -237,6 +237,45 @@ func (p *Peer) HandleOffer(msg Message) (string, string, error) {
 	return localSDP, encrypted, nil
 }
 
+// SetICEServers updates the peer connection's ICE configuration in place —
+// used by the tier-2 fallback to add the relay credentials the signaling
+// server pushed. The new servers take effect on the next gathering, which a
+// subsequent ICE-restart re-offer (HandleReoffer) triggers. Leaves the DTLS
+// certificate (hence fingerprint) untouched, so no re-verify is needed.
+func (p *Peer) SetICEServers(servers []webrtc.ICEServer) error {
+	cfg := p.PC.GetConfiguration()
+	cfg.ICEServers = servers
+	return p.PC.SetConfiguration(cfg)
+}
+
+// HandleReoffer answers a listener's ICE-restart re-offer. Unlike HandleOffer
+// it does no pubkey check and produces no encrypted_request: an ICE restart
+// keeps the same DTLS fingerprint, so the original bidirectional-verify
+// payload still stands and is never re-sent. Returns the answer SDP, which
+// the caller forwards via SendAnswerRestart. Re-gathered candidates (now
+// including relay, if SetICEServers added a TURN server) trickle out through
+// the existing OnLocalCandidate callback.
+func (p *Peer) HandleReoffer(msg Message) (string, error) {
+	offerSDP, _ := msg["sdp"].(string)
+	if offerSDP == "" {
+		return "", fmt.Errorf("re-offer missing sdp")
+	}
+	if err := p.PC.SetRemoteDescription(webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP:  offerSDP,
+	}); err != nil {
+		return "", fmt.Errorf("set remote description (re-offer): %w", err)
+	}
+	answer, err := p.PC.CreateAnswer(nil)
+	if err != nil {
+		return "", fmt.Errorf("create answer (re-offer): %w", err)
+	}
+	if err := p.PC.SetLocalDescription(answer); err != nil {
+		return "", fmt.Errorf("set local description (re-offer): %w", err)
+	}
+	return p.PC.LocalDescription().SDP, nil
+}
+
 // AddICECandidate adds an inbound trickle candidate from the device.
 func (p *Peer) AddICECandidate(candidateData map[string]interface{}) error {
 	candidateStr, _ := candidateData["candidate"].(string)

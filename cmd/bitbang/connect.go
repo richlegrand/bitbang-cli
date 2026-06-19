@@ -16,14 +16,21 @@ import (
 	"github.com/richlegrand/bitbang/internal/client"
 )
 
-// runConnect implements `bitbang connect <URL-or-pair-code> [-- argv...]`.
+// runConnect implements `bitbang connect <name-or-URL-or-pair-code> [-- argv...]`.
 //
-// Two arg shapes are accepted:
+// Three arg shapes are accepted, disambiguated by the deviceNamePattern rule
+// (a name starts with a letter and has no URL/code punctuation, so the shapes
+// never overlap):
 //
-//   - A 6-digit numeric code → pair flow against /ws/pair. Walks the
-//     SAS-display dance, saves uid+access_code to ~/.bitbang/devices.json
-//     on success, exits. Subsequent connects use the saved URL.
+//   - A bare name → look it up in the known-hosts table (~/.bitbang/devices.json)
+//     and connect directly with the stored uid+access_code.
+//   - A 6-digit numeric code → pair flow against /ws/pair. Walks the SAS dance,
+//     then continues into the same direct connect using the obtained creds.
 //   - Anything else → URL flow. Opens a remote shell to the listener.
+//
+// Every successful connection is recorded in the table (see recordDevice).
+// Pass -name to choose the stored name; without it an auto name (device<N>)
+// is assigned and printed.
 //
 // Mode auto-detection (URL flow only):
 //   - Interactive: stdin is a TTY and no argv is given. Allocate a PTY
@@ -45,6 +52,8 @@ func runConnect(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "Dial timeout")
 	pin := fs.String("pin", "", "PIN (skips the interactive prompt)")
 	server := fs.String("server", "bitba.ng", "Signaling server (pair-code mode only; URL form carries its own server)")
+	name := fs.String("name", "", "Name to remember this device under (new devices only; auto-assigned if omitted)")
+	relay := fs.Bool("relay", false, "Request a TURN relay up front instead of only on fallback (ICE still prefers direct if it succeeds)")
 	fs.Parse(reorderArgs(fs, args))
 
 	posArgs := fs.Args()
@@ -64,18 +73,56 @@ func runConnect(args []string) {
 		}
 	}
 
-	// Decide where the remoteSpec comes from. A 6-digit code triggers the
-	// pair flow first, then falls through with the just-obtained
-	// credentials so we land in a shell exactly like the URL form would.
-	// Otherwise parse the URL form directly.
+	// Validate -name up front so a bad or already-taken name fails fast,
+	// before any pairing or dialing. The authoritative checks live in
+	// recordDevice (it knows the UID), but catching the common mistakes here
+	// spares the operator a pointless handshake.
+	if *name != "" {
+		if err := validateDeviceName(*name); err != nil {
+			fail("connect: %v", err)
+		}
+		if _, taken := lookupDeviceByName(*name); taken {
+			fail("connect: name %q is already used by another device", *name)
+		}
+	}
+
+	// Decide where the remoteSpec comes from. The three shapes are mutually
+	// exclusive by construction (deviceNamePattern excludes digits-only and
+	// URL punctuation), so the order is for clarity, not precedence.
+	//
+	//   bare name  → known-hosts lookup (direct connect with stored creds)
+	//   6 digits   → pair flow, then direct connect with obtained creds
+	//   otherwise  → URL form
+	//
+	// `saved` records whether the host is already persisted, suppressing the
+	// post-connect save: a name-resolved host is already in the table, and a
+	// paired host is saved at approval time (below) so a flaky reconnect
+	// doesn't lose the credentials or burn the one-time code.
 	var rs remoteSpec
-	if pairCodePattern.MatchString(urlArg) {
-		rs = runPairConnect(urlArg, *server, *verbose)
-	} else {
+	var saved bool
+	switch {
+	case looksLikeDeviceName(urlArg):
+		ent, ok := lookupDeviceByName(urlArg)
+		if !ok {
+			fail("connect: no saved device named %q (expected a saved name, a 6-digit pair code, or a URL)", urlArg)
+		}
+		if *name != "" {
+			fail("connect: %q is already a saved device; renaming via connect isn't supported", urlArg)
+		}
+		rs = remoteSpec{Server: ent.Server, UID: ent.UID, Code: ent.AccessCode}
+		saved = true
+	case pairCodePattern.MatchString(urlArg):
+		rs = runPairConnect(urlArg, *server, *verbose, *relay)
+		// Pairing succeeded (runPairConnect exits on failure). Persist now,
+		// before the reconnect dial — the pairing itself was the expensive,
+		// one-shot step, so a reconnect hiccup shouldn't discard the result.
+		recordAndReport(rs, *name)
+		saved = true
+	default:
 		var ok bool
 		rs, ok = parseConnectURL(urlArg)
 		if !ok {
-			fail("connect: invalid URL: %s", urlArg)
+			fail("connect: %q is not a saved device name, a 6-digit pair code, or a valid URL", urlArg)
 		}
 	}
 
@@ -86,9 +133,15 @@ func runConnect(args []string) {
 	interactive := stdinIsTTY && len(argv) == 0
 
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", rs.Server)
-	sess := dialConnect(rs, *verbose, *timeout, *pin)
+	sess := dialConnect(rs, *verbose, *timeout, *pin, *relay)
 	defer sess.Close()
 	fmt.Fprintln(os.Stderr, "Connected.")
+
+	// URL-flow hosts are remembered once we've actually connected. Pair and
+	// name-resolved hosts are already saved (see above).
+	if !saved {
+		recordAndReport(rs, *name)
+	}
 
 	opts := client.ShellOptions{
 		Argv:   argv,
@@ -216,15 +269,32 @@ func setupNonInteractive(opts *client.ShellOptions) {
 	opts.Signals = signals
 }
 
+// recordAndReport persists a connected/paired host to the known-hosts table
+// and prints the outcome. A table failure is never fatal — the session is
+// already up — so it only warns. "Saved as" prints only for a newly-created
+// entry; reconnecting a known host updates its timestamp silently.
+func recordAndReport(rs remoteSpec, name string) {
+	savedName, status, err := recordDevice(rs.Server, rs.UID, rs.Code, name)
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "Connected, but couldn't update device table: %v\n", err)
+	case status == recordCreatedAuto:
+		fmt.Fprintf(os.Stderr, "Saved as %q.  (tip: pass -name <name> to choose your own)\n", savedName)
+	case status == recordCreated:
+		fmt.Fprintf(os.Stderr, "Saved as %q.\n", savedName)
+	}
+}
+
 // dialConnect handles the boilerplate: build DialOptions, run the
 // handshake, sanity-check that the listener advertises "shell."
-func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string) *client.Session {
+func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay bool) *client.Session {
 	opts := client.DialOptions{
 		Server:      r.Server,
 		UID:         r.UID,
 		Code:        r.Code,
 		Caps:        []string{"shell"},
 		DialTimeout: timeout,
+		ForceRelay:  relay,
 		Verbose:     verbose,
 		PINPrompt:   makePINPrompt(suppliedPIN),
 	}

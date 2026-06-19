@@ -35,6 +35,7 @@ func runCp(args []string) {
 	verbose := fs.Bool("v", false, "Verbose logging")
 	timeout := fs.Duration("timeout", 30*time.Second, "Dial timeout")
 	pin := fs.String("pin", "", "PIN (skips the interactive prompt)")
+	relay := fs.Bool("relay", false, "Request a TURN relay up front instead of only on fallback (ICE still prefers direct if it succeeds)")
 	fs.Parse(reorderArgs(fs, args))
 
 	if fs.NArg() != 2 {
@@ -53,14 +54,14 @@ func runCp(args []string) {
 	case !srcRemote && !dstRemote:
 		fail("cp: at least one of src/dst must be a remote spec (URL:/path)")
 	case srcRemote:
-		runCpGet(src, dstArg, *verbose, *timeout, *pin)
+		runCpGet(src, dstArg, *verbose, *timeout, *pin, *relay)
 	case dstRemote:
-		runCpPut(srcArg, dst, *verbose, *timeout, *pin)
+		runCpPut(srcArg, dst, *verbose, *timeout, *pin, *relay)
 	}
 }
 
-func runCpGet(remote remoteSpec, dstLocal string, verbose bool, timeout time.Duration, suppliedPIN string) {
-	sess := dial(remote, verbose, timeout, suppliedPIN)
+func runCpGet(remote remoteSpec, dstLocal string, verbose bool, timeout time.Duration, suppliedPIN string, relay bool) {
+	sess := dial(remote, verbose, timeout, suppliedPIN, relay)
 	defer sess.Close()
 
 	// Pipe mode: `bitbang cp <url>:/file -` streams to stdout, no progress
@@ -102,7 +103,7 @@ func runCpGet(remote remoteSpec, dstLocal string, verbose bool, timeout time.Dur
 	fmt.Fprintf(os.Stderr, "Done (%s in %.1fs)\n", humanBytes(info.Size), elapsed.Seconds())
 }
 
-func runCpPut(srcLocal string, remote remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string) {
+func runCpPut(srcLocal string, remote remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay bool) {
 	var (
 		src      io.Reader
 		size     int64 = -1 // -1 means unknown (stdin)
@@ -138,7 +139,7 @@ func runCpPut(srcLocal string, remote remoteSpec, verbose bool, timeout time.Dur
 		remote.Path = remote.Path + basename
 	}
 
-	sess := dial(remote, verbose, timeout, suppliedPIN)
+	sess := dial(remote, verbose, timeout, suppliedPIN, relay)
 	defer sess.Close()
 
 	if size >= 0 {
@@ -159,13 +160,14 @@ func runCpPut(srcLocal string, remote remoteSpec, verbose bool, timeout time.Dur
 
 // dial composes the connection options and runs client.Dial. Exits on
 // error so callers don't have to re-check.
-func dial(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string) *client.Session {
+func dial(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay bool) *client.Session {
 	opts := client.DialOptions{
 		Server:      r.Server,
 		UID:         r.UID,
 		Code:        r.Code,
 		Caps:        []string{"file"},
 		DialTimeout: timeout,
+		ForceRelay:  relay,
 		Verbose:     verbose,
 		PINPrompt:   makePINPrompt(suppliedPIN),
 	}

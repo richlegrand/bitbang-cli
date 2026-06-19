@@ -45,9 +45,18 @@ type Signaling struct {
 	// OnOffer / OnCandidate / OnError are invoked from the read goroutine
 	// for each matching message. Callbacks must not block the read loop;
 	// they should hand off to another goroutine if they do real work.
+	//
+	// OnOffer fires for the initial offer and again for any ICE-restart
+	// re-offer the listener sends during the tier-2 relay fallback — the
+	// caller distinguishes them by whether a peer connection already exists.
 	OnOffer     func(msg Message)
 	OnCandidate func(msg Message)
 	OnError     func(message string)
+
+	// OnICEServers fires when the signaling server pushes relay credentials
+	// in response to our request_ice (tier-2 fallback). The message carries
+	// `ice_servers` and `turn_unavailable`. nil under flows that never ask.
+	OnICEServers func(msg Message)
 
 	// Pair-flow callbacks. Set only when the caller is driving a pair
 	// flow (typically via NewForPair). nil under the URL flow.
@@ -116,12 +125,30 @@ func (s *Signaling) Connect() error {
 // SendRequest sends the initial "request" message that asks the device to
 // produce an offer. SWSP v3 adds caps + version; the listener uses caps
 // to know whether the client speaks the stream types it intends to use.
-func (s *Signaling) SendRequest(caps []string, version int) error {
-	return s.send(Message{
+//
+// forceRelay sets the `force_relay` flag, which tells the signaling server
+// to stamp tier-2 TURN credentials onto the initial offer instead of the
+// default STUN-only (lazy) ICE. Use it to skip the direct attempt on a
+// network known to need a relay.
+func (s *Signaling) SendRequest(caps []string, version int, forceRelay bool) error {
+	msg := Message{
 		"type":    "request",
 		"caps":    caps,
 		"version": version,
-	})
+	}
+	if forceRelay {
+		msg["force_relay"] = true
+	}
+	return s.send(msg)
+}
+
+// SendRequestICE asks the signaling server for relay credentials — the
+// tier-2 fallback when the direct (STUN-only) attempt hasn't connected. The
+// server replies with an `ice_servers` push (→ OnICEServers) and triggers an
+// ICE restart on the listener, which re-offers. Mirrors the browser's
+// request_ice path in client_ws.go.
+func (s *Signaling) SendRequestICE() error {
+	return s.send(Message{"type": "request_ice"})
 }
 
 // SendPairInit sends the pair-flow initial message with a 6-digit code.
@@ -130,11 +157,15 @@ func (s *Signaling) SendRequest(caps []string, version int) error {
 // replies pair_routed to us, or returns an "error" message with
 // {"message":"unknown_code"}. Only meaningful on a Signaling constructed
 // via NewForPair.
-func (s *Signaling) SendPairInit(code string) error {
-	return s.send(Message{
+func (s *Signaling) SendPairInit(code string, forceRelay bool) error {
+	msg := Message{
 		"type": "pair_init",
 		"code": code,
-	})
+	}
+	if forceRelay {
+		msg["force_relay"] = true
+	}
+	return s.send(msg)
 }
 
 // SendAnswer sends the SDP answer + encrypted_request (bidirectional
@@ -145,6 +176,18 @@ func (s *Signaling) SendAnswer(sdp, encryptedRequestB64 string) error {
 		"type":              "answer",
 		"sdp":               sdp,
 		"encrypted_request": encryptedRequestB64,
+	})
+}
+
+// SendAnswerRestart sends the re-answer to an ICE-restart re-offer. It
+// carries `ice_restart: true` and no encrypted_request — the listener
+// routes it to its renegotiation path, which skips bidirectional verify
+// because the DTLS fingerprint is unchanged across an ICE restart.
+func (s *Signaling) SendAnswerRestart(sdp string) error {
+	return s.send(Message{
+		"type":        "answer",
+		"sdp":         sdp,
+		"ice_restart": true,
 	})
 }
 
@@ -206,6 +249,10 @@ func (s *Signaling) readLoop() {
 		case "offer":
 			if s.OnOffer != nil {
 				s.OnOffer(msg)
+			}
+		case "ice_servers":
+			if s.OnICEServers != nil {
+				s.OnICEServers(msg)
 			}
 		case "candidate":
 			if s.OnCandidate != nil {

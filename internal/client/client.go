@@ -40,9 +40,22 @@ type DialOptions struct {
 	// open + verify + ready to land. Zero means no timeout.
 	DialTimeout time.Duration
 
+	// ForceRelay requests tier-2 TURN credentials on the initial offer
+	// instead of trying direct (STUN-only) first. Skips the lazy fallback
+	// for networks known to need a relay. Wired to the `--relay` CLI flag.
+	ForceRelay bool
+
 	// Verbose toggles progress logging to stderr.
 	Verbose bool
 }
+
+// messageTimeoutMs mirrors MESSAGE_TIMEOUT_MS in web/bootstrap.js
+// (bitbang-server): the per-phase delay, in milliseconds, before the
+// TURN-withhold fallback escalates. The browser runs two phases (a
+// "Negotiating…" banner after 1×, then request_ice after 2×); the CLI has no
+// banner phase, so it requests relay credentials after 2× the timeout,
+// matching the browser's total time-to-fallback. Keep the two in sync.
+const messageTimeoutMs = 3000
 
 // Dial opens a signaling session, negotiates WebRTC, runs bidirectional
 // verify, completes the SWSP connect handshake, and returns a Session the
@@ -70,9 +83,11 @@ func Dial(opts DialOptions) (*Session, error) {
 	offerCh := make(chan Message, 1)
 	candCh := make(chan Message, 16)
 	errCh := make(chan error, 1)
+	iceServersCh := make(chan Message, 1)
 
 	sig.OnOffer = func(m Message) { offerCh <- m }
 	sig.OnCandidate = func(m Message) { candCh <- m }
+	sig.OnICEServers = func(m Message) { iceServersCh <- m }
 	sig.OnError = func(msg string) {
 		select {
 		case errCh <- fmt.Errorf("signaling: %s", msg):
@@ -80,8 +95,9 @@ func Dial(opts DialOptions) (*Session, error) {
 		}
 	}
 
-	// Request the offer.
-	if err := sig.SendRequest(opts.Caps, 3); err != nil {
+	// Request the offer. force_relay (if set) asks the server to stamp TURN
+	// onto the initial offer so we skip the direct attempt entirely.
+	if err := sig.SendRequest(opts.Caps, 3, opts.ForceRelay); err != nil {
 		sig.Close()
 		return nil, fmt.Errorf("send request: %w", err)
 	}
@@ -102,7 +118,7 @@ func Dial(opts DialOptions) (*Session, error) {
 
 	// Build the Peer with the ICE servers the signaling server included
 	// in the offer (relay creds, STUN URLs, or empty for direct-only).
-	iceServers := parseICEServers(offer)
+	iceServers := ParseICEServers(offer)
 	peer, err := NewPeer(opts.UID, opts.Code, iceServers)
 	if err != nil {
 		sig.Close()
@@ -149,21 +165,71 @@ func Dial(opts DialOptions) (*Session, error) {
 		}
 	}()
 
-	// Wait for the data channel to open within the dial timeout.
-	select {
-	case <-peer.DCReady():
-	case err := <-errCh:
+	// Wait for the data channel to open within the dial timeout, escalating
+	// to a relay (tier 2) if the direct attempt stalls. The loop handles:
+	//   - DCReady          → connected, done
+	//   - fallback timer   → ask the server for relay creds (request_ice)
+	//   - ice_servers push → apply the relay creds to the peer connection
+	//   - re-offer (offer) → the listener's ICE-restart re-offer; re-answer
+	// When ForceRelay is set the server already put TURN on the initial
+	// offer, so the fallback timer is a no-op (guarded below).
+	fallback := time.NewTimer(2 * messageTimeoutMs * time.Millisecond)
+	defer fallback.Stop()
+	deadline := time.After(opts.DialTimeout)
+	requestedRelay := false
+	dialFail := func(reason string, err error) (*Session, error) {
 		close(candDone)
-		sendConnectionPath(sig, "failed", "signaling_error")
+		sendConnectionPath(sig, "failed", reason)
 		peer.Close()
 		sig.Close()
 		return nil, err
-	case <-time.After(opts.DialTimeout):
-		close(candDone)
-		sendConnectionPath(sig, "failed", "ice_timeout")
-		peer.Close()
-		sig.Close()
-		return nil, errors.New("timeout waiting for data channel")
+	}
+waitLoop:
+	for {
+		select {
+		case <-peer.DCReady():
+			break waitLoop
+		case <-fallback.C:
+			if requestedRelay || opts.ForceRelay {
+				continue
+			}
+			requestedRelay = true
+			if opts.Verbose {
+				fmt.Fprintln(stderr, "[client] direct path stalled; requesting relay")
+			}
+			if err := sig.SendRequestICE(); err != nil && opts.Verbose {
+				fmt.Fprintf(stderr, "[client] request_ice failed: %v\n", err)
+			}
+		case m := <-iceServersCh:
+			servers := ParseICEServers(m)
+			unavailable, _ := m["turn_unavailable"].(bool)
+			if unavailable || len(servers) == 0 {
+				if opts.Verbose {
+					fmt.Fprintln(stderr, "[client] relay unavailable (server at capacity); staying on direct")
+				}
+				continue
+			}
+			if err := peer.SetICEServers(servers); err != nil && opts.Verbose {
+				fmt.Fprintf(stderr, "[client] apply relay creds failed: %v\n", err)
+			}
+		case m := <-offerCh:
+			// ICE-restart re-offer from the listener (it re-gathered with
+			// relay). Re-answer with ice_restart so the listener skips verify.
+			ansSDP, err := peer.HandleReoffer(m)
+			if err != nil {
+				if opts.Verbose {
+					fmt.Fprintf(stderr, "[client] handle re-offer failed: %v\n", err)
+				}
+				continue
+			}
+			if err := sig.SendAnswerRestart(ansSDP); err != nil && opts.Verbose {
+				fmt.Fprintf(stderr, "[client] send re-answer failed: %v\n", err)
+			}
+		case err := <-errCh:
+			return dialFail("signaling_error", err)
+		case <-deadline:
+			return dialFail("ice_timeout", errors.New("timeout waiting for data channel"))
+		}
 	}
 
 	// Data channel is up — fire one connection_path report with the
@@ -190,11 +256,12 @@ func Dial(opts DialOptions) (*Session, error) {
 	return sess, nil
 }
 
-// parseICEServers converts the "ice_servers" field of the offer message
+// ParseICEServers converts the "ice_servers" field of the offer message
 // into pion's []webrtc.ICEServer. Mirrors internal/peer/connection.go
-// (parseICEServers) so the client side sees TURN exactly the way the
-// listener side does.
-func parseICEServers(msg Message) []webrtc.ICEServer {
+// (ParseICEServers) so the client side sees TURN exactly the way the
+// listener side does. Exported so the pair-flow connector (cmd/bitbang)
+// can reuse the identical parse for the offer it receives.
+func ParseICEServers(msg Message) []webrtc.ICEServer {
 	raw, ok := msg["ice_servers"]
 	if !ok {
 		return nil

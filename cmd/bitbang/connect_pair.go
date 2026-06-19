@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -36,11 +35,13 @@ type pairOutcome struct {
 // hear and BitBang on that side compares against its independently-computed
 // SAS.
 //
-// On pair_approved we save uid+access_code to ~/.bitbang/devices.json,
-// surface a stable URL for future direct connects, and return the
-// remoteSpec so the caller can continue immediately into a normal shell
-// session against the just-paired device. On pair_rejected the function
-// surfaces the reason and exits the process non-zero.
+// On pair_approved we surface a stable URL for future direct connects and
+// return the remoteSpec so the caller can continue immediately into a normal
+// shell session against the just-paired device. Persisting the device to
+// ~/.bitbang/devices.json happens once in runConnect, after the subsequent
+// direct connection actually succeeds — pairings and URL connects share that
+// one save path. On pair_rejected the function surfaces the reason and exits
+// the process non-zero.
 //
 // Connector plumbing (signaling WS + WebRTC dance) reuses
 // internal/client.Signaling and internal/client.Peer in pair mode so that
@@ -48,7 +49,7 @@ type pairOutcome struct {
 // for offer/answer/candidate exchange. The flow-specific bits live in
 // this function: the initial pair_init message, the pair_routed ack,
 // SAS display, and the pair_approved / pair_rejected handling.
-func runPairConnect(code, server string, verbose bool) remoteSpec {
+func runPairConnect(code, server string, verbose, relay bool) remoteSpec {
 	if !pairCodePattern.MatchString(code) {
 		fail("connect: pair code must be 6 digits")
 	}
@@ -99,7 +100,7 @@ func runPairConnect(code, server string, verbose bool) remoteSpec {
 	}
 	defer sig.Close()
 
-	if err := sig.SendPairInit(code); err != nil {
+	if err := sig.SendPairInit(code, relay); err != nil {
 		fail("connect: send pair_init: %v", err)
 	}
 
@@ -134,14 +135,14 @@ func runPairConnect(code, server string, verbose bool) remoteSpec {
 		fail("connect: pair attempt timed out waiting for offer (90s)")
 	}
 
-	// Build a pair-mode Peer (no UID/code, no encrypted_request). ICE
-	// servers are nil because the server's pair_request path does not
-	// attach them today — pairing assumes reachable peers. If/when TURN
-	// is added to the pair flow, client.ParseICEServers (currently
-	// unexported in internal/client) would need exporting and threading
-	// in here.
-	_ = offer // ice_servers field is unused at present
-	p, err := client.NewPairPeer(nil)
+	// Build a pair-mode Peer (no UID/code, no encrypted_request). Use the
+	// ICE servers the signaling server stamped on the offer — phase-1 STUN
+	// by default, so both peers gather srflx and can connect through NAT
+	// instead of only on the same LAN. (The CLI has no lazy request_ice
+	// fallback, just like the direct flow, so the hard ~25% would need
+	// force_relay; that isn't wired into pairing yet.)
+	iceServers := client.ParseICEServers(offer)
+	p, err := client.NewPairPeer(iceServers)
 	if err != nil {
 		fail("connect: new peer: %v", err)
 	}
@@ -222,10 +223,11 @@ func displayConnectorSAS(sas string) {
 }
 
 // handlePairOutcome surfaces the final state to the user. On failure it
-// prints the reason and exits non-zero. On success it saves the
-// uid+access_code to ~/.bitbang/devices.json, prints the URL the operator
-// can use directly next time, and returns a remoteSpec so the caller can
-// continue immediately into a normal connect flow.
+// prints the reason and exits non-zero. On success it prints the URL the
+// operator can use directly next time and returns a remoteSpec so the caller
+// can continue immediately into a normal connect flow. Persisting the device
+// to the known-hosts table is the caller's job (runConnect), so that pairings
+// and URL connects share a single save-on-success path.
 func handlePairOutcome(r pairOutcome, server string) remoteSpec {
 	if !r.ok {
 		switch r.reason {
@@ -243,11 +245,6 @@ func handlePairOutcome(r pairOutcome, server string) remoteSpec {
 		os.Exit(1)
 	}
 
-	if err := saveDevice(server, r.uid, r.accessCode); err != nil {
-		fmt.Fprintf(os.Stderr, "Paired, but failed to save device table: %v\n", err)
-		os.Exit(1)
-	}
-
 	url := fmt.Sprintf("https://%s/%s#%s", server, r.uid, r.accessCode)
 	fmt.Println()
 	fmt.Println("Paired.")
@@ -258,79 +255,5 @@ func handlePairOutcome(r pairOutcome, server string) remoteSpec {
 		UID:    r.uid,
 		Code:   r.accessCode,
 	}
-}
-
-// saveDevice appends the paired device to ~/.bitbang/devices.json. If a
-// device with the same UID is already present, its access_code is
-// updated in place (rotation case). Concurrent writers are not handled
-// here — this is a single-user CLI tool, not a daemon.
-func saveDevice(server, uid, accessCode string) error {
-	dir, err := bitbangDir()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	path := dir + "/devices.json"
-
-	type entry struct {
-		UID        string `json:"uid"`
-		AccessCode string `json:"access_code"`
-		Server     string `json:"server"`
-		PairedAt   string `json:"paired_at"`
-	}
-	type table struct {
-		Devices []entry `json:"devices"`
-	}
-
-	var t table
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &t) // best-effort; corrupt file → reset
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	updated := false
-	for i := range t.Devices {
-		if t.Devices[i].UID == uid {
-			t.Devices[i].AccessCode = accessCode
-			t.Devices[i].Server = server
-			t.Devices[i].PairedAt = now
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		t.Devices = append(t.Devices, entry{
-			UID:        uid,
-			AccessCode: accessCode,
-			Server:     server,
-			PairedAt:   now,
-		})
-	}
-
-	out, err := json.MarshalIndent(t, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename %s: %w", path, err)
-	}
-	return nil
-}
-
-// bitbangDir returns ~/.bitbang. We don't reuse internal/identity's path
-// helpers because those are program-name-scoped (~/.bitbang/<program>/),
-// and the device table is shared across all program names.
-func bitbangDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return home + "/.bitbang", nil
 }
 
