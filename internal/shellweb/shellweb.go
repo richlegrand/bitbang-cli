@@ -137,7 +137,7 @@ func renderCapBar(items []CapBarItem) string {
 #bb-cap-bar {
   position: fixed; top: 0; left: 0; right: 0; height: 22px;
   background: #000;
-  display: flex; align-items: center; padding: 0 8px;
+  display: flex; align-items: center; padding: 0 8px 0 2px;
   font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
   color: #ccc; z-index: 100;
 }
