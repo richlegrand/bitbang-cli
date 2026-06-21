@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 	"github.com/richlegrand/bitbang/internal/identity"
@@ -50,12 +51,16 @@ type Connection struct {
 	// HandlePairRequest rather than HandleRequest. In pair mode the
 	// access-code check in HandleAnswer is skipped (the connector does not
 	// yet have an access code — that's what pairing delivers) and the
-	// data-channel OnOpen runs the SAS confirmation flow instead of
-	// sending verify_nonce_hash. The connector reads its computed SAS
-	// aloud; the listener types it; BitBang compares the typed value to
-	// its own SAS. Match → pair_approved with uid+access_code. Mismatch →
-	// pair_rejected with reason.
+	// data-channel OnOpen runs the commitment + SAS confirmation flow
+	// (handlePairRequestOnOpen) instead of sending verify_nonce_hash.
 	PairingMode bool
+
+	// dcInbox carries inbound data-channel frames to the pairing handshake
+	// goroutine. Non-nil only in pair mode; the regular flow routes inbound
+	// frames to OnMessage instead. The pairing handshake (commit/challenge/
+	// reveal) needs to *read* from the data channel, which OnMessage (a
+	// fire-and-forget callback) can't model.
+	dcInbox chan []byte
 
 	// identity holds the device's private key, used to decrypt the
 	// browser's encrypted_request payload riding on the SDP answer.
@@ -134,6 +139,9 @@ func setupConnection(s connSetup) (*Connection, error) {
 		browserIP:   s.browserIP,
 		PairingMode: s.pairingMode,
 	}
+	if s.pairingMode {
+		conn.dcInbox = make(chan []byte, 8)
+	}
 
 	dc, err := pc.CreateDataChannel("http", nil)
 	if err != nil {
@@ -162,6 +170,15 @@ func setupConnection(s connSetup) (*Connection, error) {
 	})
 
 	dc.OnMessage(func(m webrtc.DataChannelMessage) {
+		// Pair mode: hand frames to the handshake goroutine via dcInbox.
+		// Regular mode: fire the session's OnMessage callback.
+		if conn.dcInbox != nil {
+			select {
+			case conn.dcInbox <- m.Data:
+			default: // handshake not reading / done — drop
+			}
+			return
+		}
 		if conn.OnMessage != nil {
 			conn.OnMessage(m.Data)
 		}
@@ -390,26 +407,24 @@ func (c *Connection) markVerifyFailed() {
 
 // HandlePairRequest creates a peer connection in response to a "pair_request"
 // from the signaling server. Wire-shape is the same as a regular request
-// (offer / answer / candidate); the difference is in what happens after the
-// data channel opens: instead of sending verify_nonce_hash, the listener
-// computes the Short Authentication String (SAS) from the two negotiated DTLS
-// fingerprints, prompts its operator to enter the SAS that the connector is
-// reading aloud, and sends pair_approved (with the listener's UID and access
-// code) or pair_rejected (with the reason) through signaling.
+// (offer / answer / candidate); the difference is what happens once the data
+// channel opens (handlePairRequestOnOpen): instead of sending verify_nonce_hash,
+// the listener runs the commit→challenge→reveal exchange, computes the 6-digit
+// SAS, prompts its operator to type what the connector reads aloud, and on a
+// match delivers {uid, public_key, access_code} over the SAS-verified *data
+// channel* (plus a bare pair_approved over signaling). On any failure it sends
+// pair_rejected over signaling.
 //
 // prompt is the PromptFunc used to read each SAS attempt; pass
 // pairing.DefaultTTYPrompt for interactive listeners. The SAS itself is
-// never written to the terminal — the whole design point is that there is
-// nothing to blindly approve.
+// never written to the terminal — there is nothing to blindly approve.
 //
-// The connection closes itself in all post-DTLS outcomes (approved, rejected,
-// timeout, abort). The connector never sends application traffic over this
-// connection; once it receives pair_approved on signaling, it reconnects via
-// the standard /ws/client/<uid> direct flow using the delivered access code.
+// The connection closes itself in all post-DTLS outcomes. The connector never
+// sends application traffic over this connection; once it has the credentials
+// it reconnects via the standard /ws/client/<uid> direct flow.
 //
-// pair_request currently carries no ice_servers — pairing assumes
-// reachable peers (typically interactive co-location). If the server
-// later attaches TURN here, ParseICEServers picks it up unchanged.
+// pair_request carries phase-1 STUN ice_servers (stamped by the signaling
+// server, mirroring a regular request); ParseICEServers picks them up.
 func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, prompt pairing.PromptFunc, verbose bool) (*Connection, error) {
 	clientID, _ := msg["client_id"].(string)
 	if clientID == "" {
@@ -434,16 +449,46 @@ func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identit
 		logTag:      "Pair",
 		pairingMode: true,
 		onOpen: func(conn *Connection, dc *webrtc.DataChannel) {
-			handlePairRequestOnOpen(conn, prompt, id)
+			// Run the handshake off the OnOpen goroutine so dc.OnMessage can
+			// keep delivering the connector's commit/reveal frames into
+			// dcInbox while the handshake (and the blocking SAS prompt) runs.
+			go handlePairRequestOnOpen(conn, prompt, id)
 		},
 	})
 }
 
-// handlePairRequestOnOpen is the post-DTLS body for the pair flow. Extracts
-// both DTLS fingerprints from the negotiated SDPs, computes the SAS, prompts
-// the listener operator to type the value the connector is reading aloud,
-// and signals pair_approved / pair_rejected accordingly. Closes the PC in
-// all outcomes — the connector reconnects via the standard direct flow.
+// pairStepTimeout bounds each wait for a connector data-channel frame during
+// the commitment handshake. The connector sends commit/reveal back-to-back, so
+// this only needs to cover network + the connector's own SAS display; generous.
+const pairStepTimeout = 30 * time.Second
+
+// recvDC blocks for the next inbound data-channel frame on a pairing
+// connection, or returns ok=false on timeout / channel teardown.
+func (c *Connection) recvDC(timeout time.Duration) ([]byte, bool) {
+	select {
+	case data, ok := <-c.dcInbox:
+		return data, ok
+	case <-time.After(timeout):
+		return nil, false
+	}
+}
+
+// handlePairRequestOnOpen is the post-DTLS body for the pair flow, run on its
+// own goroutine. It:
+//
+//  1. runs the commit→challenge→reveal exchange over the data channel (the
+//     connector commits its nonce r_c; the listener challenges with a fresh
+//     r_d; the connector reveals r_c, which the listener verifies against the
+//     commitment) — this is what makes the short SAS non-grindable,
+//  2. computes the 6-digit SAS from (r_c, r_d, both fingerprints),
+//  3. prompts the listener operator to type the value the connector is reading
+//     aloud (blind entry — the SAS is never displayed here),
+//  4. on a match, delivers {uid, public_key, access_code} over the *data
+//     channel* (DTLS-encrypted, now SAS-verified — the server can't read it)
+//     and a bare pair_approved over signaling; on any failure, pair_rejected.
+//
+// Closes the PC in all outcomes — the connector reconnects via the standard
+// direct flow with the delivered access code.
 func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *identity.Identity) {
 	localFp := extractFingerprint(conn.PC.LocalDescription().SDP)
 	remoteFp := extractFingerprint(conn.PC.RemoteDescription().SDP)
@@ -455,11 +500,56 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 		conn.PC.Close()
 		return
 	}
-	sas := ComputeSAS(localFp, remoteFp)
-	// Don't log the SAS — even verbose mode shouldn't leak it to the
-	// operator (who would then have nothing to type, since the design
-	// assumes they hear it from the connector).
 
+	// 1a. Receive the connector's commitment.
+	data, ok := conn.recvDC(pairStepTimeout)
+	if !ok || pairing.PairMessageType(data) != pairing.MsgPairCommit {
+		log.Printf("Pair %s: no pair_commit", conn.ClientID)
+		conn.sendPairRejected("timeout")
+		conn.PC.Close()
+		return
+	}
+	commit, ok := pairing.ParsePairCommit(data)
+	if !ok {
+		conn.sendPairRejected("user_declined")
+		conn.PC.Close()
+		return
+	}
+
+	// 1b. Challenge with a fresh device nonce.
+	rd, err := pairing.NewNonce()
+	if err != nil {
+		log.Printf("Pair %s: nonce: %v", conn.ClientID, err)
+		conn.sendPairRejected("user_declined")
+		conn.PC.Close()
+		return
+	}
+	if err := conn.DC.Send(pairing.BuildPairChallenge(rd)); err != nil {
+		conn.PC.Close()
+		return
+	}
+
+	// 1c. Receive the reveal and verify it opens the commitment.
+	data, ok = conn.recvDC(pairStepTimeout)
+	if !ok || pairing.PairMessageType(data) != pairing.MsgPairReveal {
+		log.Printf("Pair %s: no pair_reveal", conn.ClientID)
+		conn.sendPairRejected("timeout")
+		conn.PC.Close()
+		return
+	}
+	rc, ok := pairing.ParsePairReveal(data)
+	if !ok || !pairing.VerifyCommitment(commit, rc) {
+		log.Printf("Pair %s: commitment did not open", conn.ClientID)
+		conn.sendPairRejected("sas_mismatch")
+		conn.PC.Close()
+		return
+	}
+
+	// 2. Compute the SAS. Never logged — the operator must hear it from the
+	//    connector, not read it here.
+	sas := pairing.ComputeSAS(rc, rd, localFp, remoteFp)
+
+	// 3. Blind operator entry.
 	reason, ok := pairing.PromptForSAS(sas, prompt)
 	if !ok {
 		log.Printf("Pair rejected for %s: %s", conn.ClientID, reason)
@@ -468,10 +558,18 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 		return
 	}
 
+	// 4. Deliver credentials over the verified data channel, plus a bare
+	//    approval over signaling.
 	log.Printf("Pair approved for %s", conn.ClientID)
-	conn.sendPairApproved(id.UID, id.Code)
-	// Close the pair-flow PC: the connector now has uid+access_code and
-	// will reconnect via the standard direct request flow.
+	if err := conn.DC.Send(pairing.BuildPairCredentials(id.UID, id.PublicB64, id.Code)); err != nil {
+		log.Printf("Pair %s: send credentials: %v", conn.ClientID, err)
+	}
+	conn.sendPairApproved()
+	// Let the credentials frame flush before tearing down, so the connector
+	// reliably receives it (it reads creds, then closes its side).
+	for i := 0; i < 200 && conn.DC.BufferedAmount() > 0; i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
 	conn.PC.Close()
 }
 
@@ -492,15 +590,14 @@ func (c *Connection) HandlePairAnswer(sdp string) error {
 	return nil
 }
 
-// sendPairApproved emits pair_approved through signaling. uid and accessCode
-// are the listener's own — the connector saves them after receiving this and
-// reaches the device directly on subsequent connects.
-func (c *Connection) sendPairApproved(uid, accessCode string) {
+// sendPairApproved emits a bare pair_approved over signaling — a non-secret
+// "approved" ack. The actual credentials (uid, public_key, access_code) are
+// delivered over the SAS-verified data channel, never over signaling, so the
+// server can't read them.
+func (c *Connection) sendPairApproved() {
 	if err := c.sig.Send(signaling.Message{
-		"type":        "pair_approved",
-		"client_id":   c.ClientID,
-		"uid":         uid,
-		"access_code": accessCode,
+		"type":      "pair_approved",
+		"client_id": c.ClientID,
 	}); err != nil {
 		log.Printf("Pair %s: send pair_approved: %v", c.ClientID, err)
 	}

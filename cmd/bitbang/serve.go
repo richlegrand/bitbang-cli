@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	qrcode "github.com/skip2/go-qrcode"
+	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
@@ -245,10 +246,17 @@ func startListener(cfg serveConfig) {
 	// the operator shares this verbally so the connector can pair
 	// without the full UID URL. Code may be empty when (a) --nocode is
 	// set, or (b) the server lacks pairing support. In either case the
-	// URL flow still works; we just don't surface a code.
+	// URL flow still works; we just don't surface a code. Bolded on a
+	// TTY so it's easy to spot in the startup block; plain on pipes
+	// so log scrapers/tests aren't confused by escape sequences.
+	stdoutIsTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	bold, reset := "", ""
+	if stdoutIsTTY {
+		bold, reset = "\033[1m", "\033[0m"
+	}
 	printPairCode := func() {
 		if signalingClient.PairingCode != "" {
-			fmt.Printf("Pairing code: %s (valid 5 minutes)\n", signalingClient.PairingCode)
+			fmt.Printf("%sPairing code: %s%s (valid 5 minutes)\n", bold, signalingClient.PairingCode, reset)
 		}
 	}
 

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/richlegrand/bitbang/internal/client"
-	"github.com/richlegrand/bitbang/internal/peer"
+	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/sdp"
 )
 
@@ -86,11 +86,10 @@ func runPairConnect(code, server string, verbose, relay bool) remoteSpec {
 		}
 	}
 	sig.OnPairRouted = func() { routedCh <- struct{}{} }
-	sig.OnPairApproved = func(m client.Message) {
-		uid, _ := m["uid"].(string)
-		ac, _ := m["access_code"].(string)
-		outcomeCh <- pairOutcome{ok: true, uid: uid, accessCode: ac}
-	}
+	// pair_approved over signaling is now a bare, non-secret ack — the real
+	// credentials arrive over the data channel (pair_credentials). We ignore
+	// the signaling ack and treat the data-channel creds as the success
+	// signal; only pair_rejected still flows through signaling.
 	sig.OnPairRejected = func(reason string) {
 		outcomeCh <- pairOutcome{ok: false, reason: reason}
 	}
@@ -177,7 +176,7 @@ func runPairConnect(code, server string, verbose, relay bool) remoteSpec {
 		}
 	}()
 
-	// Wait for the data channel to open, then display the SAS once.
+	// Wait for the data channel to open.
 	select {
 	case <-p.DCReady():
 	case err := <-errCh:
@@ -188,16 +187,67 @@ func runPairConnect(code, server string, verbose, relay bool) remoteSpec {
 		fail("connect: pair attempt timed out waiting for data channel (90s)")
 	}
 
+	// Commitment: the connector commits its nonce first, so a MITM can't grind
+	// the SAS. Send commit, wait for the device's challenge, then reveal.
+	rc, err := pairing.NewNonce()
+	if err != nil {
+		close(candDone)
+		fail("connect: %v", err)
+	}
+	if err := p.DC.Send(pairing.BuildPairCommit(pairing.Commitment(rc))); err != nil {
+		close(candDone)
+		fail("connect: send pair_commit: %v", err)
+	}
+
+	var rd []byte
+	select {
+	case data := <-p.DCMessages():
+		n, ok := pairing.ParsePairChallenge(data)
+		if pairing.PairMessageType(data) != pairing.MsgPairChallenge || !ok {
+			close(candDone)
+			fail("connect: bad pair_challenge from listener")
+		}
+		rd = n
+	case out := <-outcomeCh: // pair_rejected
+		close(candDone)
+		return handlePairOutcome(out, server)
+	case err := <-errCh:
+		close(candDone)
+		fail("connect: %v", err)
+	case <-deadline:
+		close(candDone)
+		fail("connect: pair attempt timed out waiting for challenge (90s)")
+	}
+
+	if err := p.DC.Send(pairing.BuildPairReveal(rc)); err != nil {
+		close(candDone)
+		fail("connect: send pair_reveal: %v", err)
+	}
+
+	// Compute and display the 6-digit SAS for the operator to read aloud.
 	localFp := sdp.ExtractFingerprint(p.PC.LocalDescription().SDP)
 	remoteFp := sdp.ExtractFingerprint(p.PC.RemoteDescription().SDP)
 	if localFp == "" || remoteFp == "" {
 		close(candDone)
 		fail("connect: missing SDP fingerprints (local=%q remote=%q)", localFp, remoteFp)
 	}
-	displayConnectorSAS(peer.ComputeSAS(localFp, remoteFp))
+	displayConnectorSAS(pairing.ComputeSAS(rc, rd, localFp, remoteFp))
 
-	// Wait for the listener's verdict.
+	// Wait for the listener's verdict: credentials over the data channel
+	// (approval) or pair_rejected over signaling.
 	select {
+	case data := <-p.DCMessages():
+		if pairing.PairMessageType(data) != pairing.MsgPairCredentials {
+			close(candDone)
+			fail("connect: unexpected data-channel message during pairing")
+		}
+		uid, _, ac, ok := pairing.ParsePairCredentials(data)
+		if !ok {
+			close(candDone)
+			fail("connect: bad pair_credentials from listener")
+		}
+		close(candDone)
+		return handlePairOutcome(pairOutcome{ok: true, uid: uid, accessCode: ac}, server)
 	case out := <-outcomeCh:
 		close(candDone)
 		return handlePairOutcome(out, server)

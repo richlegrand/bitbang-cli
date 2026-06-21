@@ -9,10 +9,13 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/term"
+
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
@@ -155,10 +158,13 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 	}
 	// Single-word post-register marker so a watcher (test harness, log
 	// scraper, ops dashboard) has a reliable signal that registration
-	// completed. The URL is already printed prominently above (or by the
-	// caller via OnReady on reconnect), so re-emitting it here would
-	// just be noise.
-	log.Printf("Ready")
+	// completed. Suppressed on an interactive terminal — the operator
+	// already sees the URL block and pair code; a stray "Ready" looks
+	// like log noise. Test harnesses pipe stderr, so isatty is false
+	// for them and they still see the marker.
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
+		fmt.Fprintln(os.Stderr, "Ready")
+	}
 	if c.OnReady != nil {
 		c.OnReady()
 	}
