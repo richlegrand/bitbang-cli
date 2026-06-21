@@ -15,41 +15,62 @@ jobs:
     strategy:
       matrix:
         include:
-          - goos: linux
+          - arch: amd64
             goarch: amd64
-            suffix: linux-amd64
-          - goos: linux
+          - arch: arm64
             goarch: arm64
-            suffix: linux-arm64
-          - goos: darwin
-            goarch: amd64
-            suffix: mac-amd64
-          - goos: darwin
-            goarch: arm64
-            suffix: mac-arm64
-          - goos: windows
-            goarch: amd64
-            suffix: windows-amd64.exe
+          - arch: armv7
+            goarch: arm
+            goarm: "7"
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Build
         env:
-          GOOS: ${{ matrix.goos }}
+          GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o bitbangproxy-${{ matrix.suffix }} ./cmd/bitbang/
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: go build -ldflags "-s -w" -o bitbang-linux-${{ matrix.arch }} ./cmd/bitbang/
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: bitbangproxy-${{ matrix.suffix }}
+          subject-path: bitbang-linux-${{ matrix.arch }}
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: bitbangproxy-${{ matrix.suffix }}
+          files: bitbang-linux-${{ matrix.arch }}
+
+  # Aggregates SHA-256 sums of every uploaded binary into a single
+  # checksums.txt and attaches it to the release. install.sh fetches this
+  # file to verify the downloaded binary; absence is treated as "release
+  # predates the convention" and the install proceeds with a warning.
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir release
+          gh release download "${{ github.event.release.tag_name }}" \
+              --repo "${{ github.repository }}" \
+              --pattern 'bitbang-linux-*' \
+              --dir release
+
+      - name: Generate checksums
+        working-directory: release
+        run: sha256sum bitbang-linux-* > checksums.txt
+
+      - name: Upload checksums to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/checksums.txt

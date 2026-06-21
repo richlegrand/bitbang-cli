@@ -1,10 +1,10 @@
 #!/bin/bash
-# Print or set the version in cmd/bitbangproxy/main.go
+# Print or set the version in cmd/bitbang/main.go
 # Usage:
 #   ./version.sh          # prints current version
 #   ./version.sh 0.2.0    # sets version to 0.2.0
 
-FILE="$(dirname "$0")/cmd/bitbangproxy/main.go"
+FILE="$(dirname "$0")/cmd/bitbang/main.go"
 
 if [ -z "$1" ]; then
     grep 'const version' "$FILE" | sed 's/.*"\(.*\)".*/\1/'
