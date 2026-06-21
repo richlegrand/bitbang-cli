@@ -12,6 +12,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
+	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/sdp"
 )
 
@@ -278,18 +279,11 @@ func (p *Peer) HandleReoffer(msg Message) (string, error) {
 
 // AddICECandidate adds an inbound trickle candidate from the device.
 func (p *Peer) AddICECandidate(candidateData map[string]interface{}) error {
-	candidateStr, _ := candidateData["candidate"].(string)
-	if candidateStr == "" {
+	c, ok := icehelper.CandidateInit(candidateData)
+	if !ok {
 		return nil // end-of-candidates marker
 	}
-	sdpMid, _ := candidateData["sdpMid"].(string)
-	sdpMLineIndexFloat, _ := candidateData["sdpMLineIndex"].(float64)
-	sdpMLineIndex := uint16(sdpMLineIndexFloat)
-	return p.PC.AddICECandidate(webrtc.ICECandidateInit{
-		Candidate:     candidateStr,
-		SDPMid:        &sdpMid,
-		SDPMLineIndex: &sdpMLineIndex,
-	})
+	return p.PC.AddICECandidate(c)
 }
 
 // OnLocalCandidate registers a callback fired for each locally-gathered
@@ -300,12 +294,7 @@ func (p *Peer) OnLocalCandidate(cb func(c map[string]interface{})) {
 		if candidate == nil {
 			return
 		}
-		j := candidate.ToJSON()
-		cb(map[string]interface{}{
-			"candidate":     j.Candidate,
-			"sdpMid":        j.SDPMid,
-			"sdpMLineIndex": j.SDPMLineIndex,
-		})
+		cb(icehelper.CandidateMap(candidate))
 	})
 }
 

@@ -67,13 +67,6 @@ type Response struct {
 	Headers map[string]string `json:"headers"`
 }
 
-// WebSocketOpen is the JSON metadata for a WebSocket-stream SYN frame.
-type WebSocketOpen struct {
-	Type     string `json:"type"`
-	Pathname string `json:"pathname"`
-	Cookies  string `json:"cookies,omitempty"`
-}
-
 // FileOp is the JSON metadata for a file-stream SYN frame (SWSP v3).
 // `Op` is one of "get", "put", "list", "stat", "delete".
 type FileOp struct {
@@ -145,27 +138,3 @@ func ParseRequest(payload []byte) (Request, error) {
 	return req, nil
 }
 
-// BuildResponseFrames creates the SWSP frames for an HTTP response:
-// a SYN frame with status/headers, DAT frames for the body, and a FIN frame.
-func BuildResponseFrames(streamID uint32, status int, headers map[string]string, body []byte) [][]byte {
-	var frames [][]byte
-
-	// SYN frame with response metadata
-	resp := Response{Status: status, Headers: headers}
-	respJSON, _ := json.Marshal(resp)
-	frames = append(frames, BuildFrame(streamID, FlagSYN, respJSON))
-
-	// DAT frames for body
-	for i := 0; i < len(body); i += MaxChunkSize {
-		end := i + MaxChunkSize
-		if end > len(body) {
-			end = len(body)
-		}
-		frames = append(frames, BuildFrame(streamID, FlagDAT, body[i:end]))
-	}
-
-	// FIN frame
-	frames = append(frames, BuildFrame(streamID, FlagFIN, nil))
-
-	return frames
-}

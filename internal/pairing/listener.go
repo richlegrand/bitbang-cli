@@ -18,11 +18,12 @@ import (
 	"strings"
 )
 
-// MaxSASAttempts is how many times the operator may try to enter the SAS
-// before BitBang gives up and rejects the pairing. The SAS is only 4 digits
-// — 10 000 possible values — so unbounded retries would brute-force the
-// verify in seconds. Three honest attempts is plenty of headroom for fat
-// fingers without changing the order of magnitude.
+// MaxSASAttempts is how many times the operator may type the SAS before
+// BitBang gives up and rejects the pairing. The 6-digit keyspace (1-in-10⁶
+// per blind MITM) is the actual security defense; the cap is for operator
+// hygiene — three honest attempts catch fat fingers without spamming the
+// operator with prompts or diluting the "wrong code, give up" signal the
+// design relies on. See ~/bitbang/code_exchange.md §"Code B".
 const MaxSASAttempts = 3
 
 // PromptStatus is the outcome reported by a PromptFunc for one attempt.
@@ -57,7 +58,7 @@ var (
 	ErrTimeout      = errors.New("timeout")
 )
 
-// PromptForSAS asks the listener operator to type the 4-digit SAS that the
+// PromptForSAS asks the listener operator to type the 6-digit SAS that the
 // connector is reading aloud. expected is the SAS BitBang independently
 // computed from the negotiated DTLS fingerprints; it is never written to the
 // terminal — the whole point is that the operator must hear it from the
@@ -72,7 +73,7 @@ var (
 func PromptForSAS(expected string, prompt PromptFunc) (reason string, ok bool) {
 	fmt.Println()
 	fmt.Println("Incoming pair request.")
-	fmt.Println("Ask the other party to read the 4-digit code shown on their screen.")
+	fmt.Println("Ask the other party to read the 6-digit code shown on their screen.")
 
 	for attempt := 1; attempt <= MaxSASAttempts; attempt++ {
 		typed, status := prompt(attempt)

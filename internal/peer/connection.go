@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/signaling"
@@ -86,7 +87,7 @@ type Connection struct {
 // connSetup carries the per-flow customization for setupConnection:
 // what to log on first sight, what to do when the data channel opens,
 // and which flow-specific fields to populate on the Connection. The
-// shared boilerplate (ParseICEServers, PC creation, DC creation, trickle
+// shared boilerplate (icehelper.ParseICEServers, PC creation, DC creation, trickle
 // ICE plumbing, offer-send) lives in setupConnection.
 type connSetup struct {
 	clientID string
@@ -124,7 +125,7 @@ type connSetup struct {
 // answer + ICE-candidate handling proceeds normally from the caller's
 // signaling read loop. On failure the partial PC is cleaned up.
 func setupConnection(s connSetup) (*Connection, error) {
-	iceServers := ParseICEServers(s.msg)
+	iceServers := icehelper.ParseICEServers(s.msg)
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		return nil, fmt.Errorf("create peer connection: %w", err)
@@ -201,15 +202,10 @@ func setupConnection(s connSetup) (*Connection, error) {
 		if candidate == nil {
 			return // gathering complete
 		}
-		cj := candidate.ToJSON()
 		s.sig.Send(signaling.Message{
 			"type":      "candidate",
 			"client_id": s.clientID,
-			"candidate": map[string]interface{}{
-				"candidate":     cj.Candidate,
-				"sdpMid":        cj.SDPMid,
-				"sdpMLineIndex": cj.SDPMLineIndex,
-			},
+			"candidate": icehelper.CandidateMap(candidate),
 		})
 	})
 
@@ -424,7 +420,7 @@ func (c *Connection) markVerifyFailed() {
 // it reconnects via the standard /ws/client/<uid> direct flow.
 //
 // pair_request carries phase-1 STUN ice_servers (stamped by the signaling
-// server, mirroring a regular request); ParseICEServers picks them up.
+// server, mirroring a regular request); icehelper.ParseICEServers picks them up.
 func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, prompt pairing.PromptFunc, verbose bool) (*Connection, error) {
 	clientID, _ := msg["client_id"].(string)
 	if clientID == "" {
@@ -617,21 +613,10 @@ func (c *Connection) sendPairRejected(reason string) {
 
 // AddICECandidate adds a trickle ICE candidate from the browser.
 func (c *Connection) AddICECandidate(candidateData map[string]interface{}) error {
-	candidateStr, _ := candidateData["candidate"].(string)
-	if candidateStr == "" {
+	candidate, ok := icehelper.CandidateInit(candidateData)
+	if !ok {
 		return nil // empty candidate = end of candidates
 	}
-
-	sdpMid, _ := candidateData["sdpMid"].(string)
-	sdpMLineIndexFloat, _ := candidateData["sdpMLineIndex"].(float64)
-	sdpMLineIndex := uint16(sdpMLineIndexFloat)
-
-	candidate := webrtc.ICECandidateInit{
-		Candidate:     candidateStr,
-		SDPMid:        &sdpMid,
-		SDPMLineIndex: &sdpMLineIndex,
-	}
-
 	if err := c.PC.AddICECandidate(candidate); err != nil {
 		return fmt.Errorf("add ICE candidate: %w", err)
 	}
@@ -697,53 +682,3 @@ func (c *Connection) Close() {
 	}
 }
 
-// parseICEServers extracts ICE server configuration from the signaling
-// server's request message and converts to Pion's format.
-func ParseICEServers(msg signaling.Message) []webrtc.ICEServer {
-	raw, ok := msg["ice_servers"]
-	if !ok {
-		return nil
-	}
-
-	// ice_servers arrives as []interface{} from JSON unmarshaling
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil
-	}
-
-	// Parse the browser-native iceServers format
-	var servers []struct {
-		URLs       interface{} `json:"urls"`
-		Username   string      `json:"username"`
-		Credential string      `json:"credential"`
-	}
-	if err := json.Unmarshal(data, &servers); err != nil {
-		return nil
-	}
-
-	var iceServers []webrtc.ICEServer
-	for _, s := range servers {
-		// urls can be string or []string
-		var urls []string
-		switch v := s.URLs.(type) {
-		case string:
-			urls = []string{v}
-		case []interface{}:
-			for _, u := range v {
-				if str, ok := u.(string); ok {
-					urls = append(urls, str)
-				}
-			}
-		}
-
-		server := webrtc.ICEServer{URLs: urls}
-		if s.Username != "" {
-			server.Username = s.Username
-			server.Credential = s.Credential
-			server.CredentialType = webrtc.ICECredentialTypePassword
-		}
-		iceServers = append(iceServers, server)
-	}
-
-	return iceServers
-}

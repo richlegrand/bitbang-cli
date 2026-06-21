@@ -17,10 +17,15 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
 // Message is the wire-level JSON envelope used by the signaling server.
-type Message map[string]interface{}
+// Aliased to internal/signaling.Message so values flow between the listener
+// (internal/signaling.Client) and connector (this package's Signaling)
+// sides without conversion.
+type Message = signaling.Message
 
 // Signaling manages a WebSocket connection to a signaling-server endpoint.
 // Owns the read loop; dispatches incoming messages to callbacks registered
@@ -60,8 +65,13 @@ type Signaling struct {
 
 	// Pair-flow callbacks. Set only when the caller is driving a pair
 	// flow (typically via NewForPair). nil under the URL flow.
+	//
+	// No OnPairApproved: the signaling-level ack is intentionally
+	// ignored — the data-channel pair_credentials message is the
+	// success signal (see cmd/bitbang/connect_pair.go). If we ever
+	// need to surface signaling-only approval (e.g. for instrumentation),
+	// add the callback back.
 	OnPairRouted   func()
-	OnPairApproved func(msg Message)
 	OnPairRejected func(reason string)
 
 	conn   *websocket.Conn
@@ -272,9 +282,9 @@ func (s *Signaling) readLoop() {
 				s.OnPairRouted()
 			}
 		case "pair_approved":
-			if s.OnPairApproved != nil {
-				s.OnPairApproved(msg)
-			}
+			// Intentionally a no-op; pair_credentials over the data
+			// channel is the success signal — see the OnPairApproved
+			// note in the Signaling struct.
 		case "pair_rejected":
 			if s.OnPairRejected != nil {
 				reason, _ := msg["reason"].(string)

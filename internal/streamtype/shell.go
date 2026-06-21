@@ -222,16 +222,6 @@ func NewShell(defaultArgv []string, verbose bool) *ShellHandler {
 	}
 }
 
-// NewShellRestricted returns a ShellHandler that ignores client-supplied
-// argv and always exec's the configured one. For `bitbang run`.
-func NewShellRestricted(argv []string, verbose bool) *ShellHandler {
-	return &ShellHandler{
-		ForcedArgv: argv,
-		Verbose:    verbose,
-		streams:    make(map[uint32]*shellSession),
-	}
-}
-
 func (h *ShellHandler) Type() string             { return "shell" }
 func (h *ShellHandler) OnConnect(_ string) error { return nil }
 

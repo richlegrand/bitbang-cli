@@ -13,6 +13,7 @@ import (
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/peer"
@@ -441,7 +442,7 @@ func startListener(cfg serveConfig) {
 			if conn == nil {
 				return
 			}
-			iceServers := peer.ParseICEServers(msg)
+			iceServers := icehelper.ParseICEServers(msg)
 			log.Printf("ICE restart requested for %s — re-offering with relay (%d ice servers)", clientID, len(iceServers))
 			if err := conn.RestartICE(iceServers); err != nil {
 				log.Printf("ICE restart for %s failed: %v", clientID, err)

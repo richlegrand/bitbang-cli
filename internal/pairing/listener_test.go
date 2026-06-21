@@ -20,11 +20,11 @@ func scriptedPrompt(steps []struct {
 }
 
 func TestPromptForSAS_FirstTryMatches(t *testing.T) {
-	reason, ok := PromptForSAS("1234", scriptedPrompt([]struct {
+	reason, ok := PromptForSAS("123456", scriptedPrompt([]struct {
 		typed  string
 		status PromptStatus
 	}{
-		{"1234", PromptOK},
+		{"123456", PromptOK},
 	}))
 	if !ok {
 		t.Fatalf("expected ok=true, got reason=%q", reason)
@@ -35,12 +35,12 @@ func TestPromptForSAS_FirstTryMatches(t *testing.T) {
 }
 
 func TestPromptForSAS_RetryThenMatch(t *testing.T) {
-	reason, ok := PromptForSAS("1234", scriptedPrompt([]struct {
+	reason, ok := PromptForSAS("123456", scriptedPrompt([]struct {
 		typed  string
 		status PromptStatus
 	}{
-		{"1233", PromptOK},
-		{"1234", PromptOK},
+		{"123455", PromptOK},
+		{"123456", PromptOK},
 	}))
 	if !ok {
 		t.Fatalf("expected ok after retry, got reason=%q", reason)
@@ -51,13 +51,13 @@ func TestPromptForSAS_RetryThenMatch(t *testing.T) {
 }
 
 func TestPromptForSAS_ExhaustedRetries(t *testing.T) {
-	reason, ok := PromptForSAS("1234", scriptedPrompt([]struct {
+	reason, ok := PromptForSAS("123456", scriptedPrompt([]struct {
 		typed  string
 		status PromptStatus
 	}{
-		{"1111", PromptOK},
-		{"2222", PromptOK},
-		{"3333", PromptOK},
+		{"111111", PromptOK},
+		{"222222", PromptOK},
+		{"333333", PromptOK},
 	}))
 	if ok {
 		t.Fatalf("expected ok=false after exhausting attempts")
@@ -68,7 +68,7 @@ func TestPromptForSAS_ExhaustedRetries(t *testing.T) {
 }
 
 func TestPromptForSAS_AbortFirstAttempt(t *testing.T) {
-	reason, ok := PromptForSAS("1234", scriptedPrompt([]struct {
+	reason, ok := PromptForSAS("123456", scriptedPrompt([]struct {
 		typed  string
 		status PromptStatus
 	}{
@@ -83,11 +83,11 @@ func TestPromptForSAS_AbortFirstAttempt(t *testing.T) {
 }
 
 func TestPromptForSAS_TimeoutMidAttempt(t *testing.T) {
-	reason, ok := PromptForSAS("1234", scriptedPrompt([]struct {
+	reason, ok := PromptForSAS("123456", scriptedPrompt([]struct {
 		typed  string
 		status PromptStatus
 	}{
-		{"1111", PromptOK},
+		{"111111", PromptOK},
 		{"", PromptTimeout},
 	}))
 	if ok {
@@ -102,11 +102,11 @@ func TestPromptForSAS_TimeoutMidAttempt(t *testing.T) {
 // space from clumsy Scanln behavior doesn't bounce a correct entry. The
 // digits themselves must still match exactly.
 func TestPromptForSAS_WhitespaceTolerated(t *testing.T) {
-	reason, ok := PromptForSAS("1234", scriptedPrompt([]struct {
+	reason, ok := PromptForSAS("123456", scriptedPrompt([]struct {
 		typed  string
 		status PromptStatus
 	}{
-		{"  1234  ", PromptOK},
+		{"  123456  ", PromptOK},
 	}))
 	if !ok {
 		t.Fatalf("expected ok=true with whitespace, got reason=%q", reason)

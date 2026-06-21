@@ -1,12 +1,11 @@
 package client
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/pion/webrtc/v4"
+	"github.com/richlegrand/bitbang/internal/icehelper"
 )
 
 // DialOptions configures a Dial call.
@@ -118,7 +117,7 @@ func Dial(opts DialOptions) (*Session, error) {
 
 	// Build the Peer with the ICE servers the signaling server included
 	// in the offer (relay creds, STUN URLs, or empty for direct-only).
-	iceServers := ParseICEServers(offer)
+	iceServers := icehelper.ParseICEServers(offer)
 	peer, err := NewPeer(opts.UID, opts.Code, iceServers)
 	if err != nil {
 		sig.Close()
@@ -201,7 +200,7 @@ waitLoop:
 				fmt.Fprintf(stderr, "[client] request_ice failed: %v\n", err)
 			}
 		case m := <-iceServersCh:
-			servers := ParseICEServers(m)
+			servers := icehelper.ParseICEServers(m)
 			unavailable, _ := m["turn_unavailable"].(bool)
 			if unavailable || len(servers) == 0 {
 				if opts.Verbose {
@@ -256,48 +255,3 @@ waitLoop:
 	return sess, nil
 }
 
-// ParseICEServers converts the "ice_servers" field of the offer message
-// into pion's []webrtc.ICEServer. Mirrors internal/peer/connection.go
-// (ParseICEServers) so the client side sees TURN exactly the way the
-// listener side does. Exported so the pair-flow connector (cmd/bitbang)
-// can reuse the identical parse for the offer it receives.
-func ParseICEServers(msg Message) []webrtc.ICEServer {
-	raw, ok := msg["ice_servers"]
-	if !ok {
-		return nil
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil
-	}
-	var servers []struct {
-		URLs       interface{} `json:"urls"`
-		Username   string      `json:"username"`
-		Credential string      `json:"credential"`
-	}
-	if err := json.Unmarshal(data, &servers); err != nil {
-		return nil
-	}
-	var out []webrtc.ICEServer
-	for _, s := range servers {
-		var urls []string
-		switch v := s.URLs.(type) {
-		case string:
-			urls = []string{v}
-		case []interface{}:
-			for _, u := range v {
-				if str, ok := u.(string); ok {
-					urls = append(urls, str)
-				}
-			}
-		}
-		entry := webrtc.ICEServer{URLs: urls}
-		if s.Username != "" {
-			entry.Username = s.Username
-			entry.Credential = s.Credential
-			entry.CredentialType = webrtc.ICECredentialTypePassword
-		}
-		out = append(out, entry)
-	}
-	return out
-}

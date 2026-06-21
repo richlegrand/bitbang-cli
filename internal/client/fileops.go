@@ -10,15 +10,12 @@ import (
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
-// FileInfo is the metadata the listener returns at the head of a `get`
-// (and `list` entries). Surface enough for cp to display a progress
-// indicator and a useful one-line summary.
+// FileInfo is the metadata the listener returns at the head of a `get`.
+// Currently only Size is consumed (cp's progress indicator); the listener
+// also reports modified time and mime type, but no caller reads those, so
+// they're omitted here.
 type FileInfo struct {
-	Name     string `json:"name,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Size     int64  `json:"size,omitempty"`
-	Modified int64  `json:"modified,omitempty"`
-	Mime     string `json:"mime,omitempty"`
+	Size int64 `json:"size,omitempty"`
 }
 
 // fileStatus is the JSON shape the listener uses for SYN/FIN status
@@ -67,7 +64,7 @@ func (s *Session) Get(remotePath string, w io.Writer) (FileInfo, error) {
 	if status.Status != "ok" {
 		return FileInfo{}, fmt.Errorf("server: %s", statusErr(status))
 	}
-	info := FileInfo{Size: status.Size, Modified: status.Modified, Mime: status.Mime}
+	info := FileInfo{Size: status.Size}
 
 	// A single-frame SYN|FIN response is valid for empty files.
 	if first.IsFIN() {
@@ -178,54 +175,6 @@ func (s *Session) Put(remotePath string, r io.Reader, overwrite bool) error {
 		return fmt.Errorf("server: %s", statusErr(fin))
 	}
 	return errors.New("stream closed without FIN")
-}
-
-// List enumerates remotePath (which must be a directory on the listener).
-// Returned entries are the listener's FileStat shape — name, type
-// ("file"|"directory"), size (for files), modified.
-func (s *Session) List(remotePath string) ([]FileInfo, error) {
-	st := s.OpenStream()
-	defer st.Close()
-
-	syn, _ := json.Marshal(protocol.FileOp{Type: "file", Op: "list", Path: remotePath})
-	if err := st.s.sendFrame(st.st.id, protocol.FlagSYN|protocol.FlagFIN, syn); err != nil {
-		return nil, fmt.Errorf("send list: %w", err)
-	}
-
-	first, ok := <-st.Inbox()
-	if !ok {
-		return nil, errors.New("stream closed before response")
-	}
-	if !first.IsSYN() {
-		return nil, fmt.Errorf("expected SYN, got flags %#x", first.Flags)
-	}
-	var status fileStatus
-	if err := json.Unmarshal(first.Payload, &status); err != nil {
-		return nil, fmt.Errorf("parse list response: %w", err)
-	}
-	if status.Status != "ok" {
-		return nil, fmt.Errorf("server: %s", statusErr(status))
-	}
-
-	// Body is one DAT frame with {entries:[...]}. (Listener may split if
-	// the JSON ever exceeds MaxChunkSize — accumulate just in case.)
-	var body []byte
-	for frame := range st.Inbox() {
-		if frame.IsFIN() {
-			break
-		}
-		body = append(body, frame.Payload...)
-	}
-	if len(body) == 0 {
-		return nil, nil
-	}
-	var resp struct {
-		Entries []FileInfo `json:"entries"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse list body: %w", err)
-	}
-	return resp.Entries, nil
 }
 
 // statusErr extracts the human-readable error from a fileStatus payload.

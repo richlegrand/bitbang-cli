@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/richlegrand/bitbang/internal/client"
+	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/sdp"
 )
@@ -140,7 +141,7 @@ func runPairConnect(code, server string, verbose, relay bool) remoteSpec {
 	// instead of only on the same LAN. (The CLI has no lazy request_ice
 	// fallback, just like the direct flow, so the hard ~25% would need
 	// force_relay; that isn't wired into pairing yet.)
-	iceServers := client.ParseICEServers(offer)
+	iceServers := icehelper.ParseICEServers(offer)
 	p, err := client.NewPairPeer(iceServers)
 	if err != nil {
 		fail("connect: new peer: %v", err)

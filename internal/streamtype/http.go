@@ -352,15 +352,7 @@ func (h *HTTPHandler) serveLandingPage(s Stream, req protocol.Request) {
 		return
 	}
 	headers := map[string]string{"Content-Type": "text/html"}
-	html := strings.Replace(landingPageHTML, "{{UID}}", h.UID, 1)
-	body := []byte(html)
-	frames := protocol.BuildResponseFrames(s.ID(), 200, headers, body)
-	for _, f := range frames {
-		// frames are pre-built; we have to break them apart to feed Stream.
-		// Easier: just rebuild as SYN + DAT + FIN.
-		_ = f
-	}
-	// Send manually via Stream.
+	body := []byte(strings.Replace(landingPageHTML, "{{UID}}", h.UID, 1))
 	respMeta := map[string]interface{}{
 		"status":  200,
 		"headers": headers,
