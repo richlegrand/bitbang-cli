@@ -13,13 +13,13 @@
   }
   /* xterm.js sizes itself from this container. When the cap bar is
      injected (launcher mode), .with-cap-bar shrinks the terminal by
-     the strip's 32px so xterm + strip together fill the iframe. */
+     the strip's 22px so xterm + strip together fill the iframe. */
   #terminal {
     width: 100%; height: 100%;
     box-sizing: border-box;
   }
   body.with-cap-bar #terminal {
-    height: calc(100% - 32px);
+    height: calc(100% - 22px);
   }
   /* Loading message while xterm boots; removed once the script runs. */
   #boot-msg {
