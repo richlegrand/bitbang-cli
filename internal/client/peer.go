@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 
@@ -65,8 +66,15 @@ const (
 // comparison the operator performs on the listener side is what protects
 // the channel against a rogue relay.
 type Peer struct {
-	PC           *webrtc.PeerConnection
-	DC           *webrtc.DataChannel // populated when listener opens it
+	PC *webrtc.PeerConnection
+	DC *webrtc.DataChannel // populated when listener opens it
+	// ForceRelay mirrors --relay: gather relay-only and skip the
+	// single-phase trickle delay on relay candidates (OnLocalCandidate).
+	ForceRelay bool
+	// trickleDelay is how long a relay candidate is deferred before being
+	// trickled, biasing ICE toward a direct pair (single-phase). Defaults to
+	// messageTimeoutMs; tests set it small for determinism.
+	trickleDelay time.Duration
 	mode         Mode
 	devicePubkey *rsa.PublicKey // ModeURL only
 	uid          string         // ModeURL only
@@ -111,13 +119,14 @@ func newPeer(mode Mode, uid, code string, iceServers []webrtc.ICEServer) (*Peer,
 		return nil, fmt.Errorf("create peer connection: %w", err)
 	}
 	p := &Peer{
-		PC:       pc,
-		mode:     mode,
-		uid:      uid,
-		code:     code,
-		dcReady:  make(chan struct{}),
-		dcMsg:    make(chan []byte, 64),
-		dcClosed: make(chan struct{}),
+		PC:           pc,
+		mode:         mode,
+		uid:          uid,
+		code:         code,
+		trickleDelay: messageTimeoutMs * time.Millisecond,
+		dcReady:      make(chan struct{}),
+		dcMsg:        make(chan []byte, 64),
+		dcClosed:     make(chan struct{}),
 	}
 	pc.OnDataChannel(p.onDataChannel)
 	return p, nil
@@ -238,45 +247,6 @@ func (p *Peer) HandleOffer(msg Message) (string, string, error) {
 	return localSDP, encrypted, nil
 }
 
-// SetICEServers updates the peer connection's ICE configuration in place —
-// used by the tier-2 fallback to add the relay credentials the signaling
-// server pushed. The new servers take effect on the next gathering, which a
-// subsequent ICE-restart re-offer (HandleReoffer) triggers. Leaves the DTLS
-// certificate (hence fingerprint) untouched, so no re-verify is needed.
-func (p *Peer) SetICEServers(servers []webrtc.ICEServer) error {
-	cfg := p.PC.GetConfiguration()
-	cfg.ICEServers = servers
-	return p.PC.SetConfiguration(cfg)
-}
-
-// HandleReoffer answers a listener's ICE-restart re-offer. Unlike HandleOffer
-// it does no pubkey check and produces no encrypted_request: an ICE restart
-// keeps the same DTLS fingerprint, so the original bidirectional-verify
-// payload still stands and is never re-sent. Returns the answer SDP, which
-// the caller forwards via SendAnswerRestart. Re-gathered candidates (now
-// including relay, if SetICEServers added a TURN server) trickle out through
-// the existing OnLocalCandidate callback.
-func (p *Peer) HandleReoffer(msg Message) (string, error) {
-	offerSDP, _ := msg["sdp"].(string)
-	if offerSDP == "" {
-		return "", fmt.Errorf("re-offer missing sdp")
-	}
-	if err := p.PC.SetRemoteDescription(webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  offerSDP,
-	}); err != nil {
-		return "", fmt.Errorf("set remote description (re-offer): %w", err)
-	}
-	answer, err := p.PC.CreateAnswer(nil)
-	if err != nil {
-		return "", fmt.Errorf("create answer (re-offer): %w", err)
-	}
-	if err := p.PC.SetLocalDescription(answer); err != nil {
-		return "", fmt.Errorf("set local description (re-offer): %w", err)
-	}
-	return p.PC.LocalDescription().SDP, nil
-}
-
 // AddICECandidate adds an inbound trickle candidate from the device.
 func (p *Peer) AddICECandidate(candidateData map[string]interface{}) error {
 	c, ok := icehelper.CandidateInit(candidateData)
@@ -286,15 +256,37 @@ func (p *Peer) AddICECandidate(candidateData map[string]interface{}) error {
 	return p.PC.AddICECandidate(c)
 }
 
+// relayTrickleDelay reports how long a locally-gathered candidate of the
+// given type should be deferred before being trickled to the peer.
+//
+// Single-phase ICE: TURN creds are stamped on the offer up front, so a relay
+// candidate is gathered immediately. We delay *trickling* it by base so a
+// direct (host/srflx) pair gets a head start to win the race; if direct
+// connects first the relay candidate is never used. host/srflx (and anything
+// non-relay) trickle immediately. forceRelay is relay-only by policy, so
+// there is nothing to bias toward — no delay.
+func relayTrickleDelay(typ webrtc.ICECandidateType, forceRelay bool, base time.Duration) time.Duration {
+	if typ == webrtc.ICECandidateTypeRelay && !forceRelay {
+		return base
+	}
+	return 0
+}
+
 // OnLocalCandidate registers a callback fired for each locally-gathered
 // ICE candidate. The caller forwards each one via signaling.SendCandidate.
 // A nil candidate (gathering complete) is not delivered to the callback.
+// Relay candidates are deferred per relayTrickleDelay to bias toward direct.
 func (p *Peer) OnLocalCandidate(cb func(c map[string]interface{})) {
 	p.PC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
 			return
 		}
-		cb(icehelper.CandidateMap(candidate))
+		cm := icehelper.CandidateMap(candidate)
+		if d := relayTrickleDelay(candidate.Typ, p.ForceRelay, p.trickleDelay); d > 0 {
+			time.AfterFunc(d, func() { cb(cm) })
+			return
+		}
+		cb(cm)
 	})
 }
 

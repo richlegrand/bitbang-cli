@@ -623,58 +623,6 @@ func (c *Connection) AddICECandidate(candidateData map[string]interface{}) error
 	return nil
 }
 
-// RestartICE reconfigures the connection with the given STUN/TURN servers,
-// regenerates the ICE credentials, re-gathers candidates, and re-offers to the
-// browser. The browser's TURN-withhold fallback triggers this (via the signaling
-// server's request_ice handler) when its direct-only attempt stalls.
-//
-// The iceServers are the same creds the server just pushed to the browser. We
-// need them: without a STUN/TURN server we gather only host candidates, which
-// are unreachable across NATs — and the browser can't even open a TURN
-// permission for our real public address since it never learns it. With them we
-// gather srflx + relay, so our relay ↔ the browser's relay (double relay)
-// connects. DTLS is untouched by an ICE restart, so the verified fingerprint
-// stands and no re-verify runs. New candidates trickle out via OnICECandidate.
-func (c *Connection) RestartICE(iceServers []webrtc.ICEServer) error {
-	if len(iceServers) > 0 {
-		cfg := c.PC.GetConfiguration()
-		cfg.ICEServers = iceServers
-		if err := c.PC.SetConfiguration(cfg); err != nil {
-			return fmt.Errorf("set configuration (ice restart): %w", err)
-		}
-	}
-	offer, err := c.PC.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
-	if err != nil {
-		return fmt.Errorf("create ice-restart offer: %w", err)
-	}
-	if err := c.PC.SetLocalDescription(offer); err != nil {
-		return fmt.Errorf("set local description (ice restart): %w", err)
-	}
-	c.sig.Send(signaling.Message{
-		"type":      "offer",
-		"client_id": c.ClientID,
-		"sdp":       c.PC.LocalDescription().SDP,
-		"streams":   map[string]interface{}{},
-	})
-	return nil
-}
-
-// HandleRenegotiationAnswer applies the browser's answer to an ICE-restart
-// re-offer. Unlike HandleAnswer it skips the bidirectional-verify decrypt: an
-// ICE restart leaves DTLS (hence the verified fingerprint) unchanged, so there
-// is nothing new to verify — only the fresh ICE ufrag/pwd and relay candidates
-// matter.
-func (c *Connection) HandleRenegotiationAnswer(sdp string) error {
-	answer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeAnswer,
-		SDP:  sdp,
-	}
-	if err := c.PC.SetRemoteDescription(answer); err != nil {
-		return fmt.Errorf("set remote description (ice restart): %w", err)
-	}
-	return nil
-}
-
 // Close closes the peer connection.
 func (c *Connection) Close() {
 	if c.PC != nil {
