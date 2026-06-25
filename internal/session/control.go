@@ -16,6 +16,12 @@ import (
 // session (and the client closes the session after 3 misses anyway).
 const pinFailDelay = 2 * time.Second
 
+// maxAuthFails is how many wrong PINs a single session tolerates before
+// its data channel is torn down. Combined with pinFailDelay and the
+// per-listener concurrent-session cap, this bounds brute-force: an
+// attacker gets 3 tries (each paced 2s) per WebRTC handshake.
+const maxAuthFails = 3
+
 // handleControl processes a stream-0 SWSP frame: connect / auth /
 // auth_required / ready / auth_result / error.
 func (s *Session) handleControl(frame protocol.Frame) {
@@ -87,6 +93,7 @@ func (s *Session) handleConnect(path string, _ int) {
 	s.authenticated = true
 	s.ready = true
 	s.mu.Unlock()
+	s.markReady()
 	s.sendReady()
 }
 
@@ -100,6 +107,7 @@ func (s *Session) handleAuth(pin string) {
 		s.authenticated = true
 		s.ready = true
 		s.mu.Unlock()
+		s.markReady()
 		result, _ := json.Marshal(map[string]interface{}{"type": "auth_result", "success": true})
 		_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, result)
 		// The client's handshake loop sits waiting for `ready` after a
@@ -107,10 +115,30 @@ func (s *Session) handleAuth(pin string) {
 		s.sendReady()
 		return
 	}
-	log.Printf("PIN auth failed")
+	s.mu.Lock()
+	s.authFails++
+	fails := s.authFails
+	s.mu.Unlock()
+	log.Printf("PIN auth failed (%d/%d)", fails, maxAuthFails)
 	time.Sleep(pinFailDelay)
 	result, _ := json.Marshal(map[string]interface{}{"type": "auth_result", "success": false})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, result)
+	if fails >= maxAuthFails {
+		log.Printf("Too many failed PIN attempts — closing data channel")
+		// Closing the DC triggers the listener's OnClose teardown (which
+		// also releases the unauth-session slot). Further guesses require a
+		// brand-new WebRTC handshake.
+		if s.DC != nil {
+			_ = s.DC.Close()
+		}
+	}
+}
+
+// markReady fires the one-shot OnReady hook (if set) outside the lock.
+func (s *Session) markReady() {
+	if s.OnReady != nil {
+		s.OnReady()
+	}
 }
 
 func (s *Session) sendReady() {

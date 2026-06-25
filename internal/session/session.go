@@ -32,11 +32,20 @@ type Session struct {
 	// after the data channel opens.
 	handlers map[string]streamtype.StreamHandler
 
+	// OnReady, if set, is invoked exactly once when the session completes
+	// its handshake (connect with no PIN, or a verified auth). Used by the
+	// listener to release the session's unauthenticated-slot reservation.
+	OnReady func()
+
 	// State set during the stream-0 connect handshake.
 	mu            sync.Mutex
 	connectPath   string
 	authenticated bool
 	ready         bool
+	// authFails counts wrong PIN attempts on this session. After
+	// maxAuthFails the data channel is closed, forcing a fresh WebRTC
+	// handshake to make further guesses (rate-limits brute-force).
+	authFails int
 
 	// Per-stream routing: once a SYN dispatches a stream to a handler,
 	// subsequent DAT/FIN frames on that stream go to the same handler.
@@ -55,6 +64,14 @@ type Session struct {
 	// guarded by mu.
 	video        VideoBridge
 	videoStarted bool
+
+	// sendFrame is the function used to write a SWSP frame onto the
+	// data channel. Field rather than method so unit tests can swap in
+	// a capturing implementation without setting up a real WebRTC
+	// peer. Production wiring (New) points it at the default DC-backed
+	// implementation; nothing outside this package should reassign it
+	// in production code.
+	sendFrame func(streamID uint32, flags uint16, payload []byte) error
 }
 
 // New creates a Session bound to the given data channel. The handlers
@@ -69,10 +86,21 @@ func New(dc *webrtc.DataChannel, pin *auth.PINAuth, verbose bool, handlers ...st
 		streamHandler: make(map[uint32]streamtype.StreamHandler),
 		reasm:         make(map[uint32][]byte),
 	}
+	s.sendFrame = s.dcSend
 	for _, h := range handlers {
 		s.handlers[h.Type()] = h
 	}
 	return s
+}
+
+// dcSend is the default sendFrame implementation: writes to the
+// underlying data channel if it's open, otherwise reports an error.
+// Tests override Session.sendFrame; production never does.
+func (s *Session) dcSend(streamID uint32, flags uint16, payload []byte) error {
+	if s.DC.ReadyState() != webrtc.DataChannelStateOpen {
+		return fmt.Errorf("data channel closed")
+	}
+	return s.DC.Send(protocol.BuildFrame(streamID, flags, payload))
 }
 
 // HandleMessage parses a SWSP frame and routes it. Wire this to
@@ -97,6 +125,20 @@ func (s *Session) HandleMessage(data []byte) {
 }
 
 func (s *Session) handleSYN(frame protocol.Frame) {
+	// SECURITY: gate every non-stream-0 SYN on a completed handshake.
+	// Without this check, an attacker who has the WebRTC channel up
+	// (post bidirectional-verify) but has not sent `connect` / `auth`
+	// can open application streams directly — bypassing PIN. Reported
+	// by jacopotediosi against OctoPrint-BitBang 0.2.7, PR #1443.
+	s.mu.Lock()
+	ready := s.ready
+	s.mu.Unlock()
+	if !ready {
+		log.Printf("Rejecting SYN on stream %d: session not ready (auth bypass attempt?)", frame.StreamID)
+		s.sendStreamError(frame.StreamID, "unauthenticated")
+		return
+	}
+
 	// Peek at the type. SYNs without an explicit type default to "http"
 	// for backwards-compatibility with v2 wire format during transition.
 	var peek struct {
@@ -132,10 +174,16 @@ func (s *Session) handleSYN(frame protocol.Frame) {
 }
 
 func (s *Session) handleBody(frame protocol.Frame) {
+	// SECURITY: same gate as handleSYN. The handler-nil short-circuit
+	// below already catches the common bypass shape (no SYN was ever
+	// dispatched, so streamHandler[id] is nil), but checking ready
+	// explicitly is belt-and-suspenders — and gives the right log
+	// signal if something tries it.
 	s.mu.Lock()
+	ready := s.ready
 	handler := s.streamHandler[frame.StreamID]
 	s.mu.Unlock()
-	if handler == nil {
+	if !ready || handler == nil {
 		return
 	}
 
@@ -172,14 +220,6 @@ func (s *Session) handleBody(frame protocol.Frame) {
 	if err := handler.OnDAT(stream, payload); err != nil {
 		log.Printf("Handler OnDAT error (stream %d): %v", frame.StreamID, err)
 	}
-}
-
-// sendFrame is used by streamCtx (and by control.go).
-func (s *Session) sendFrame(streamID uint32, flags uint16, payload []byte) error {
-	if s.DC.ReadyState() != webrtc.DataChannelStateOpen {
-		return fmt.Errorf("data channel closed")
-	}
-	return s.DC.Send(protocol.BuildFrame(streamID, flags, payload))
 }
 
 // sendStreamError sends a single-frame error response (SYN+FIN) on the

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 
@@ -20,7 +21,11 @@ type WSHandler struct {
 	// Resolver supplies the current target + path-rewriting logic. In
 	// proxy mode it's the paired HTTPHandler; other modes can substitute.
 	Resolver TargetResolver
-	Verbose  bool
+	// BrowserIP is the real client IP, stamped as X-Forwarded-For on the
+	// upstream WS handshake for the same reason as HTTPHandler.BrowserIP —
+	// the SockJS upgrade is an HTTP request subject to the same autologin.
+	BrowserIP string
+	Verbose   bool
 
 	mu      sync.Mutex
 	streams map[uint32]*wsStream
@@ -33,11 +38,12 @@ type TargetResolver interface {
 
 // NewWebSocket constructs a WSHandler. resolver is typically the paired
 // HTTPHandler so that WS streams use the same dynamic-target logic.
-func NewWebSocket(resolver TargetResolver, verbose bool) *WSHandler {
+func NewWebSocket(resolver TargetResolver, browserIP string, verbose bool) *WSHandler {
 	return &WSHandler{
-		Resolver: resolver,
-		Verbose:  verbose,
-		streams:  make(map[uint32]*wsStream),
+		Resolver:  resolver,
+		BrowserIP: browserIP,
+		Verbose:   verbose,
+		streams:   make(map[uint32]*wsStream),
 	}
 }
 
@@ -102,6 +108,11 @@ func (h *WSHandler) bridge(s Stream, pathname, cookies string) {
 	header := http.Header{}
 	if cookies != "" {
 		header.Set("Cookie", cookies)
+	}
+	// Only stamped in fixed-target mode (serve.go withholds it otherwise);
+	// validated as a real IP so we never emit a malformed XFF.
+	if ip := net.ParseIP(h.BrowserIP); ip != nil {
+		header.Set("X-Forwarded-For", ip.String())
 	}
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if err != nil {

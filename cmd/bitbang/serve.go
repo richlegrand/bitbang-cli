@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/pairing"
 	"github.com/richlegrand/bitbang/internal/peer"
@@ -24,6 +24,10 @@ import (
 	"github.com/richlegrand/bitbang/internal/streamtype"
 	"github.com/richlegrand/bitbang/internal/videohelper"
 )
+
+// maxUnauthSessions bounds how many sessions may sit pre-PIN-auth at once,
+// limiting parallel brute-force. A single human needs exactly one.
+const maxUnauthSessions int32 = 10
 
 // serveConfig is the assembled per-mode configuration that the shared
 // listener loop in startListener uses. Each mode (all / shell / files /
@@ -56,6 +60,13 @@ type serveConfig struct {
 	// request goes straight to this target — the plain device URL serves the
 	// app directly, no path-based target selection / landing page.
 	target string
+
+	// forwardClientIP stamps the real browser IP as X-Forwarded-For on
+	// proxied requests (fixed-target mode only). Off by default: the
+	// OctoPrint plugin enables it ONLY when OctoPrint is configured to make
+	// localhost-based trust decisions (autologinLocal etc.), so the common
+	// case doesn't trip OctoPrint's "external access" warning needlessly.
+	forwardClientIP bool
 
 	// Caps actually enabled in this mode.
 	shellEnabled bool
@@ -164,6 +175,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
 	fs.StringVar(&cfg.program, "program", "bitbang", "Identity program name (~/.bitbang/<program>/identity.pem)")
 	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
+	fs.BoolVar(&cfg.forwardClientIP, "forward-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
 }
 
 // registerShellFlags wires the shell-specific flags. Used by both
@@ -278,6 +290,10 @@ func startListener(cfg serveConfig) {
 	var mu sync.Mutex
 	connections := make(map[string]*peer.Connection)
 
+	// unauthSessions counts live sessions that haven't completed the PIN
+	// handshake. Bounds parallel brute-force; released on auth or close.
+	var unauthSessions atomic.Int32
+
 	firstReady := true
 	signalingClient.OnReady = func() {
 		if firstReady {
@@ -300,6 +316,21 @@ func startListener(cfg serveConfig) {
 		switch msgType {
 		case "request":
 			clientID, _ := msg["client_id"].(string)
+			// Real browser IP from the signaling server (never client-set);
+			// stamped as X-Forwarded-For on proxied requests so the backend
+			// sees the true origin instead of our localhost socket peer.
+			browserIP, _ := msg["browser_ip"].(string)
+
+			// Cap concurrent un-authenticated sessions to blunt parallel
+			// PIN brute-forcing. A connector must already hold the access
+			// code to get this far, but without a cap they could open many
+			// sessions at once and guess PINs in parallel. Authenticated
+			// sessions release their slot (see OnReady below), so legit
+			// users never hit this.
+			if unauthSessions.Load() >= maxUnauthSessions {
+				log.Printf("Rejecting connection from %s: too many pending sessions (%d)", clientID, maxUnauthSessions)
+				return
+			}
 
 			var handlers []streamtype.StreamHandler
 			if share != nil {
@@ -319,18 +350,30 @@ func startListener(cfg serveConfig) {
 			// request goes straight to --target, so the plain device URL serves
 			// the app directly — no dispatcher, no landing page.
 			if cfg.proxyEnabled && cfg.target != "" && !cfg.shellEnabled && !cfg.filesEnabled {
-				httpProxy := streamtype.NewHTTPProxy(cfg.target, id.UID, cfg.server, cfg.verbose)
+				// Only forward the client IP when explicitly enabled (the
+				// backend trusts localhost for auth); otherwise withhold it so
+				// requests look local and don't trip an external-access warning.
+				xffIP := ""
+				if cfg.forwardClientIP {
+					xffIP = browserIP
+				}
+				httpProxy := streamtype.NewHTTPProxy(cfg.target, id.UID, cfg.server, xffIP, cfg.verbose)
 				// Pair a WebSocket handler so ws:// streams resolve to the same
 				// target as HTTP (otherwise: "no handler for stream type websocket").
 				handlers = append(handlers, httpProxy,
-					streamtype.NewWebSocket(httpProxy, cfg.verbose))
+					streamtype.NewWebSocket(httpProxy, xffIP, cfg.verbose))
 			} else {
 				localHTTP := streamtype.NewHTTPLocal(httpFront, cfg.verbose)
 				var proxyHTTP streamtype.StreamHandler
 				if cfg.proxyEnabled {
-					p := streamtype.NewHTTPProxy("", id.UID, cfg.server, cfg.verbose)
+					// Dynamic-target mode: withhold browser_ip so we DON'T inject
+					// XFF. This mode proxies arbitrary LAN apps that may rely on
+					// requests appearing local; silently forwarding the real IP
+					// could break their access control. (Fixed-target/OctoPrint
+					// mode above passes it — there the backend is known.)
+					p := streamtype.NewHTTPProxy("", id.UID, cfg.server, "", cfg.verbose)
 					proxyHTTP = p
-					handlers = append(handlers, streamtype.NewWebSocket(p, cfg.verbose))
+					handlers = append(handlers, streamtype.NewWebSocket(p, "", cfg.verbose))
 				}
 				handlers = append(handlers, newHTTPDispatcher(localHTTP, proxyHTTP))
 			}
@@ -349,8 +392,17 @@ func startListener(cfg serveConfig) {
 
 			sess = session.New(conn.DC, pinAuth, cfg.verbose, handlers...)
 
+			// Count this session against the unauth cap; release the slot
+			// exactly once, whichever comes first: it authenticates (OnReady)
+			// or it closes. sync.Once makes the double-path idempotent.
+			unauthSessions.Add(1)
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { unauthSessions.Add(-1) }) }
+			sess.OnReady = release
+
 			// Per-connection teardown, run when the data channel closes.
 			var onClose []func()
+			onClose = append(onClose, release)
 			// Kill any shell processes — without this they outlive the
 			// browser tab and keep holding their max-sessions slot.
 			if shellHandler != nil {
@@ -393,14 +445,6 @@ func startListener(cfg serveConfig) {
 			if conn == nil {
 				return
 			}
-			// An answer flagged ice_restart is the reply to our ICE-restart
-			// re-offer (TURN fallback) — apply it without re-running verify.
-			if restart, _ := msg["ice_restart"].(bool); restart {
-				if err := conn.HandleRenegotiationAnswer(sdp); err != nil {
-					log.Printf("Failed to handle ice-restart answer: %v", err)
-				}
-				return
-			}
 			// Pair-flow answers skip the bidirectional-verify decrypt —
 			// SAS comparison (run from the data-channel OnOpen) is the
 			// substitute, since the connector doesn't hold an access
@@ -431,30 +475,6 @@ func startListener(cfg serveConfig) {
 			connections[clientID] = conn
 			mu.Unlock()
 
-		case "ice_restart":
-			// The browser's direct-only ICE stalled; the signaling server has
-			// served it relay creds and asked us to re-offer with an ICE
-			// restart so it can re-answer with relay candidates.
-			clientID, _ := msg["client_id"].(string)
-			mu.Lock()
-			conn := connections[clientID]
-			mu.Unlock()
-			if conn == nil {
-				return
-			}
-			iceServers := icehelper.ParseICEServers(msg)
-			log.Printf("ICE restart requested for %s — re-offering with relay (%d ice servers)", clientID, len(iceServers))
-			if err := conn.RestartICE(iceServers); err != nil {
-				log.Printf("ICE restart for %s failed: %v", clientID, err)
-			}
-			// Hand the same relay creds to the video bridge so a video PC
-			// created after this fallback (its open is sent at session-ready,
-			// which on a relay path follows the fallback) gathers relay too —
-			// otherwise the data channel relays but the video PC is host-only.
-			if videoClient != nil {
-				videoClient.UpdateICEServers(clientID, iceServerMaps(msg))
-			}
-
 		case "candidate":
 			clientID, _ := msg["client_id"].(string)
 			candidateData, _ := msg["candidate"].(map[string]interface{})
@@ -470,21 +490,6 @@ func startListener(cfg serveConfig) {
 			log.Printf("Signaling error: %v", msg["message"])
 		}
 	})
-}
-
-// iceServerMaps extracts the raw browser-native ICE server objects from a
-// signaling message as []map[string]interface{} — the shape the video bridge
-// forwards verbatim to the media helper.
-func iceServerMaps(msg signaling.Message) []map[string]interface{} {
-	var out []map[string]interface{}
-	if raw, ok := msg["ice_servers"].([]interface{}); ok {
-		for _, s := range raw {
-			if m, ok := s.(map[string]interface{}); ok {
-				out = append(out, m)
-			}
-		}
-	}
-	return out
 }
 
 // isAllMode reports whether the listener is running in `serve` (all-

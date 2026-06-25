@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -29,8 +30,18 @@ type HTTPHandler struct {
 	UID string
 	// Server is the signaling server hostname (e.g. "bitba.ng"), used for
 	// X-Forwarded-Host on proxied requests.
-	Server  string
-	Verbose bool
+	Server string
+	// BrowserIP is the real public IP of the connecting browser, supplied
+	// by the signaling server (never client-settable). Stamped onto every
+	// proxied request as X-Forwarded-For so the backend sees the true
+	// origin instead of our localhost socket peer. Critical for OctoPrint:
+	// without it, requests appear to come from 127.0.0.1, which sits in
+	// OctoPrint's trusted localNetworks and (for users who enabled
+	// autologinLocal) silently auto-authenticates a remote attacker.
+	// Empty when the signaling server didn't provide it (older server,
+	// local tests) — in which case we strip XFF rather than forge one.
+	BrowserIP string
+	Verbose   bool
 
 	// Per-session state, set in OnConnect.
 	connTarget    string
@@ -45,13 +56,14 @@ type HTTPHandler struct {
 // NewHTTPProxy returns an HTTPHandler configured for HTTP-proxy mode.
 // In dynamic mode, target is empty and the destination is extracted from
 // the connect-path URL on each session.
-func NewHTTPProxy(target, uid, server string, verbose bool) *HTTPHandler {
+func NewHTTPProxy(target, uid, server, browserIP string, verbose bool) *HTTPHandler {
 	return &HTTPHandler{
-		Target:  target,
-		UID:     uid,
-		Server:  server,
-		Verbose: verbose,
-		streams: make(map[uint32]*pendingStream),
+		Target:    target,
+		UID:       uid,
+		Server:    server,
+		BrowserIP: browserIP,
+		Verbose:   verbose,
+		streams:   make(map[uint32]*pendingStream),
 	}
 }
 
@@ -217,6 +229,13 @@ func (h *HTTPHandler) proxyRequest(s Stream, req protocol.Request, body io.Reade
 
 	skipHeaders := map[string]bool{
 		"host": true, "origin": true, "referer": true, "content-length": true,
+		// Strip any client-supplied forwarding/origin-spoofing headers. The
+		// browser sends an arbitrary header map (see the PoC), so without
+		// this an attacker could send X-Forwarded-For: 127.0.0.1 to forge a
+		// localhost origin and re-trigger OctoPrint's autologinLocal. We
+		// overwrite X-Forwarded-* below with server-known values.
+		"x-forwarded-for": true, "x-real-ip": true, "x-forwarded-host": true,
+		"x-forwarded-proto": true, "x-forwarded-port": true, "forwarded": true,
 	}
 	if req.Headers != nil {
 		for key, value := range req.Headers {
@@ -235,6 +254,19 @@ func (h *HTTPHandler) proxyRequest(s Stream, req protocol.Request, body io.Reade
 	httpReq.Host = target
 	httpReq.Header.Set("X-Forwarded-Host", h.Server)
 	httpReq.Header.Set("X-Forwarded-Proto", "https")
+	// Stamp the real browser origin so the backend doesn't see our localhost
+	// socket peer. BrowserIP is only populated in fixed-target mode (the
+	// OctoPrint plugin) — the wiring in serve.go withholds it in dynamic mode,
+	// where BitBang proxies arbitrary LAN apps that may grant access based on
+	// appearing local and would break if we injected XFF. Validate as a real
+	// IP first: a malformed value (port suffix, garbage) could be rejected by
+	// a strict backend, and forging is worse than omitting. The Set (not Add)
+	// plus the skipHeaders strip means a client cannot influence this.
+	if ip := net.ParseIP(h.BrowserIP); ip != nil {
+		httpReq.Header.Set("X-Forwarded-For", ip.String())
+	} else {
+		httpReq.Header.Del("X-Forwarded-For")
+	}
 	httpReq.Header.Set("Referer", fmt.Sprintf("http://%s/", target))
 
 	client := &http.Client{
