@@ -151,15 +151,32 @@ func runServeFiles(args []string) {
 	startListener(cfg)
 }
 
-// runServeProxy — `bitbang serve proxy` — exposes a dynamic-target
-// HTTP reverse proxy. Landing page asks for a target URL; entered
-// targets open in new browser tabs that the SWSP layer routes through
-// streamtype.HTTPHandler.
+// runServeProxy — `bitbang serve proxy [TARGET]` — exposes an HTTP
+// reverse proxy. Without TARGET, runs in dynamic-target mode (landing
+// page asks for the host). With TARGET, pins to a single host:port and
+// the bare device URL serves that target directly.
+//
+// TARGET can be supplied either positionally (`serve proxy host:port`)
+// or via the shared `-target` flag. If both are given, the positional
+// wins — the user typed it more explicitly.
 func runServeProxy(args []string) {
 	fs := flag.NewFlagSet("serve proxy", flag.ExitOnError)
 	cfg := serveConfig{proxyEnabled: true}
 	registerSharedFlags(fs, &cfg)
 	fs.Parse(reorderArgs(fs, args))
+
+	// Optional positional TARGET. Mirrors `serve files [PATH]`.
+	switch fs.NArg() {
+	case 0:
+		// No positional; cfg.target may already be set via -target flag,
+		// or empty (dynamic-target mode).
+	case 1:
+		cfg.target = fs.Arg(0)
+	default:
+		fmt.Fprintln(os.Stderr, "bitbang serve proxy: at most one TARGET argument")
+		os.Exit(2)
+	}
+
 	startListener(cfg)
 }
 
@@ -567,7 +584,11 @@ func printSharingBlock(cfg serveConfig, share *fileshare.FileShare) {
 		}
 	}
 	if cfg.proxyEnabled {
-		fmt.Println("  • proxy  (any local HTTP service)")
+		if cfg.target != "" {
+			fmt.Printf("  • proxy  (%s)\n", cfg.target)
+		} else {
+			fmt.Println("  • proxy  (target chosen in browser)")
+		}
 	}
 	fmt.Println()
 }

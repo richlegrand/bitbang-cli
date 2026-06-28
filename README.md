@@ -100,8 +100,8 @@ bitbang cp ./firmware.bin https://bitba.ng/<id>#<code>:/tmp/firmware.bin   # loc
 Reach any HTTP / WebSocket service on the machine's network -- a NAS, Jellyfin, Node-RED, a Flask dashboard -- through your browser:
 
 ```bash
-bitbang serve proxy                         # choose the target in the URL
-bitbang serve proxy -target localhost:8080  # or pin a single target
+bitbang serve proxy                  # choose the target in the URL
+bitbang serve proxy localhost:8080   # or pin a single target
 ```
 
 Open the URL, type a LAN address (`nas.local`, `192.168.1.10:8080`, `localhost:3000/admin`), and you're in. Logins, cookies, uploads, downloads, and server-sent events all work -- sessions are handled by a service worker, so apps behave normally.
@@ -157,7 +157,7 @@ Flags accept either form (`-pin` or `--pin`). Boolean flags default off unless n
 bitbang serve [flags]                  All caps: shell + files + proxy on one URL
 bitbang serve shell [flags]            Shell only
 bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)
-bitbang serve proxy [flags]            HTTP/WebSocket reverse proxy only
+bitbang serve proxy [TARGET] [flags]   HTTP/WebSocket reverse proxy (TARGET pins one host:port)
 bitbang connect <target> [-- cmd …]    Client shell (interactive or one-shot)
 bitbang cp <src> <dst>                 Copy files (one side is <URL>:/path, or '-')
 bitbang version                        Print version (also --version)
@@ -175,7 +175,7 @@ bitbang help                           Usage (also --help, -h)
 | `-ephemeral` | off | Temporary identity (a fresh URL each run) |
 | `-nocode` | off | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
 | `-program NAME` | `bitbang` | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem` |
-| `-target HOST:PORT` | (dynamic) | Fixed proxy target (proxy mode); empty = pick the target in the browser |
+| `-target HOST:PORT` | (dynamic) | Fixed proxy target (proxy mode); empty = pick the target in the browser. `serve proxy host:port` is shorthand for this. |
 | `-v` | off | Verbose logging (adds the browser `?debug` overlay) |
 
 **Shell flags** (`serve` and `serve shell`):
