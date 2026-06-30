@@ -1,8 +1,7 @@
 package client
 
-// e2e tests for the connect/dial path: the happy-path handshake, the
-// single-phase relay-candidate deferral timing, and an env-gated integration
-// test against a live signaling server.
+// e2e tests for the connect/dial path: the happy-path handshake and an
+// env-gated integration test against a live signaling server.
 
 import (
 	"log"
@@ -38,82 +37,6 @@ func TestDial_DirectConnect_Success(t *testing.T) {
 		t.Fatal("Dial returned nil session")
 	}
 	sess.Close()
-}
-
-// TestDial_SinglePhase_RelayCandidateDeferred proves the single-phase timing
-// behavior end-to-end through the real connector: with TURN creds stamped on
-// the offer (creds up front), the connector gathers a relay candidate but
-// defers trickling it by trickleDelay, so every direct (host/srflx) candidate
-// reaches the peer first. ICE is blocked from completing so the connector keeps
-// trickling (and the WS stays open) long enough to observe the deferred relay
-// candidate; Dial then times out, which is expected and ignored.
-func TestDial_SinglePhase_RelayCandidateDeferred(t *testing.T) {
-	if testing.Short() {
-		t.Skip("e2e: spins up a TURN server and real pion peers")
-	}
-	id := ephemeralID(t)
-
-	iceServer, stopTURN := startTURNServer(t)
-	defer stopTURN()
-
-	relay := newFakeSignaling()
-	relay.offerICEServers = []interface{}{iceServer}
-	relay.blockICE = true // ICE never completes → WS stays open while we observe trickling
-	defer relay.Close()
-
-	startListener(relay.host(), id)
-	waitRegistered(t, relay)
-
-	const delay = 300 * time.Millisecond
-	// Dial is expected to time out (ICE blocked); we only care about the
-	// candidates the connector trickled to the relay in the meantime.
-	_, _ = Dial(DialOptions{
-		Server:       relay.host(),
-		UID:          id.UID,
-		Code:         id.Code,
-		Path:         "/",
-		Caps:         []string{"file"},
-		DialTimeout:  2 * time.Second,
-		trickleDelay: delay,
-	})
-
-	events := relay.clientCandidateEvents()
-	if len(events) == 0 {
-		t.Fatal("no candidates observed from the connector")
-	}
-
-	var lastNonRelay, firstRelay time.Time
-	for _, e := range events {
-		switch e.typ {
-		case "relay":
-			if firstRelay.IsZero() {
-				firstRelay = e.at
-			}
-		default:
-			if e.at.After(lastNonRelay) {
-				lastNonRelay = e.at
-			}
-		}
-	}
-
-	if firstRelay.IsZero() {
-		t.Fatalf("no relay candidate observed (TURN allocation failed?); saw %d candidates: %v",
-			len(events), typesOf(events))
-	}
-	if lastNonRelay.IsZero() {
-		t.Fatalf("no direct (host/srflx) candidate observed; saw %v", typesOf(events))
-	}
-
-	gap := firstRelay.Sub(lastNonRelay)
-	// Lower-bound assertion (timing tests must not equality-check): the relay
-	// candidate must arrive comfortably after the last direct one. Allow slack
-	// for gather jitter — assert at least half the configured delay.
-	if min := delay / 2; gap < min {
-		t.Errorf("relay candidate not deferred: gap last-direct→first-relay = %v, want >= %v (delay=%v); types=%v",
-			gap, min, delay, typesOf(events))
-	} else {
-		t.Logf("relay candidate deferred by %v after last direct candidate (delay=%v)", gap, delay)
-	}
 }
 
 // TestIntegration_RealServer_Connect drives a real internal/peer listener and a

@@ -284,3 +284,8 @@ func identityDir(programName string) string {
 	}
 	return filepath.Join(home, ".bitbang", programName)
 }
+
+// Dir returns the on-disk directory for a program's identity
+// (~/.bitbang/<programName>/). Exported so callers can place sibling files
+// (e.g. a per-identity process lock) next to the keypair.
+func Dir(programName string) string { return identityDir(programName) }

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/pion/webrtc/v4"
 
@@ -66,15 +65,8 @@ const (
 // comparison the operator performs on the listener side is what protects
 // the channel against a rogue relay.
 type Peer struct {
-	PC *webrtc.PeerConnection
-	DC *webrtc.DataChannel // populated when listener opens it
-	// ForceRelay mirrors --relay: gather relay-only and skip the
-	// single-phase trickle delay on relay candidates (OnLocalCandidate).
-	ForceRelay bool
-	// trickleDelay is how long a relay candidate is deferred before being
-	// trickled, biasing ICE toward a direct pair (single-phase). Defaults to
-	// messageTimeoutMs; tests set it small for determinism.
-	trickleDelay time.Duration
+	PC           *webrtc.PeerConnection
+	DC           *webrtc.DataChannel // populated when listener opens it
 	mode         Mode
 	devicePubkey *rsa.PublicKey // ModeURL only
 	uid          string         // ModeURL only
@@ -99,34 +91,40 @@ type Peer struct {
 
 // NewPeer constructs a Peer in URL mode. The UID and code are the values
 // from the URL the user supplied — UID anchors the pubkey/UID check, code
-// rides on the bidirectional-verify payload.
-func NewPeer(uid, code string, iceServers []webrtc.ICEServer) (*Peer, error) {
-	return newPeer(ModeURL, uid, code, iceServers)
+// rides on the bidirectional-verify payload. forceRelay (from --relay)
+// gathers relay-only.
+func NewPeer(uid, code string, iceServers []webrtc.ICEServer, forceRelay bool) (*Peer, error) {
+	return newPeer(ModeURL, uid, code, iceServers, forceRelay)
 }
 
 // NewPairPeer constructs a Peer in pair mode. The pair flow has no UID
 // or access code at this point — those arrive in pair_approved after SAS
 // verification. Use NewPeer for URL-flow connects where the credentials
-// are already known.
+// are already known. (Pairing never forces relay — force_relay isn't wired
+// into the pair flow.)
 func NewPairPeer(iceServers []webrtc.ICEServer) (*Peer, error) {
-	return newPeer(ModePair, "", "", iceServers)
+	return newPeer(ModePair, "", "", iceServers, false)
 }
 
-func newPeer(mode Mode, uid, code string, iceServers []webrtc.ICEServer) (*Peer, error) {
+func newPeer(mode Mode, uid, code string, iceServers []webrtc.ICEServer, forceRelay bool) (*Peer, error) {
 	cfg := webrtc.Configuration{ICEServers: iceServers}
+	if forceRelay {
+		// --relay: gather and use relay candidates only. Mirrors bootstrap.js
+		// setting iceTransportPolicy:'relay'.
+		cfg.ICETransportPolicy = webrtc.ICETransportPolicyRelay
+	}
 	pc, err := webrtc.NewPeerConnection(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create peer connection: %w", err)
 	}
 	p := &Peer{
-		PC:           pc,
-		mode:         mode,
-		uid:          uid,
-		code:         code,
-		trickleDelay: messageTimeoutMs * time.Millisecond,
-		dcReady:      make(chan struct{}),
-		dcMsg:        make(chan []byte, 64),
-		dcClosed:     make(chan struct{}),
+		PC:       pc,
+		mode:     mode,
+		uid:      uid,
+		code:     code,
+		dcReady:  make(chan struct{}),
+		dcMsg:    make(chan []byte, 64),
+		dcClosed: make(chan struct{}),
 	}
 	pc.OnDataChannel(p.onDataChannel)
 	return p, nil
@@ -256,37 +254,18 @@ func (p *Peer) AddICECandidate(candidateData map[string]interface{}) error {
 	return p.PC.AddICECandidate(c)
 }
 
-// relayTrickleDelay reports how long a locally-gathered candidate of the
-// given type should be deferred before being trickled to the peer.
-//
-// Single-phase ICE: TURN creds are stamped on the offer up front, so a relay
-// candidate is gathered immediately. We delay *trickling* it by base so a
-// direct (host/srflx) pair gets a head start to win the race; if direct
-// connects first the relay candidate is never used. host/srflx (and anything
-// non-relay) trickle immediately. forceRelay is relay-only by policy, so
-// there is nothing to bias toward — no delay.
-func relayTrickleDelay(typ webrtc.ICECandidateType, forceRelay bool, base time.Duration) time.Duration {
-	if typ == webrtc.ICECandidateTypeRelay && !forceRelay {
-		return base
-	}
-	return 0
-}
-
 // OnLocalCandidate registers a callback fired for each locally-gathered
 // ICE candidate. The caller forwards each one via signaling.SendCandidate.
 // A nil candidate (gathering complete) is not delivered to the callback.
-// Relay candidates are deferred per relayTrickleDelay to bias toward direct.
+// Candidates trickle immediately, relay included — the direct-vs-relay bias
+// lives on the device (the ICE-controlling agent), which withholds relay-pair
+// nomination (see internal/peer relayAcceptanceMinWait).
 func (p *Peer) OnLocalCandidate(cb func(c map[string]interface{})) {
 	p.PC.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
 			return
 		}
-		cm := icehelper.CandidateMap(candidate)
-		if d := relayTrickleDelay(candidate.Typ, p.ForceRelay, p.trickleDelay); d > 0 {
-			time.AfterFunc(d, func() { cb(cm) })
-			return
-		}
-		cb(cm)
+		cb(icehelper.CandidateMap(candidate))
 	})
 }
 

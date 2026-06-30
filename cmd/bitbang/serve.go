@@ -190,7 +190,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.BoolVar(&cfg.verbose, "v", false, "Verbose logging")
 	fs.BoolVar(&cfg.nocode, "nocode", false, "Disable code-exchange pairing (operator typed SAS); URL still works")
 	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
-	fs.StringVar(&cfg.program, "program", "bitbang", "Identity program name (~/.bitbang/<program>/identity.pem)")
+	fs.StringVar(&cfg.program, "program", "", "Identity program-name override; default is derived from the mode/target (key at ~/.bitbang/<program>/identity.pem)")
 	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
 	fs.BoolVar(&cfg.forwardClientIP, "forward-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
 }
@@ -230,7 +230,36 @@ func startListener(cfg serveConfig) {
 
 	pinAuth := auth.New(cfg.pin)
 
-	id, err := identity.Load(cfg.program, cfg.ephemeral)
+	// Identity is keyed by access scope: shell-bearing configs share the master
+	// "bitbang" UID; each single non-shell cap (and each fixed proxy target /
+	// file path) gets its own stable UID so distinct tasks coexist on one
+	// machine with distinct, scope-limited URLs. See deriveProgram.
+	program := deriveProgram(cfg)
+
+	// Hold a per-identity lock so a second local process with the same scope
+	// can't silently preempt this one at the signaling server (one connection
+	// per UID). Skipped for ephemeral identities (random UID, no collision).
+	// The OS releases the lock on exit; a same-process reconnect is unaffected.
+	if !cfg.ephemeral {
+		lock, holderPID, lockErr := acquireIdentityLock(identity.Dir(program))
+		if lockErr == errIdentityBusy {
+			who := ""
+			if holderPID > 0 {
+				who = fmt.Sprintf(" (PID %d)", holderPID)
+			}
+			fmt.Fprintf(os.Stderr,
+				"A bitbang listener is already running for identity %q on this machine%s.\n"+
+					"Stop it first, run a different mode/target, or pass --program <name> for a separate identity.\n",
+				program, who)
+			os.Exit(1)
+		} else if lockErr != nil {
+			fmt.Fprintf(os.Stderr, "Identity lock error: %v\n", lockErr)
+			os.Exit(1)
+		}
+		defer lock.release()
+	}
+
+	id, err := identity.Load(program, cfg.ephemeral)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Identity error: %v\n", err)
 		os.Exit(1)

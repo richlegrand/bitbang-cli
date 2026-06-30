@@ -39,27 +39,16 @@ type DialOptions struct {
 	// open + verify + ready to land. Zero means no timeout.
 	DialTimeout time.Duration
 
-	// ForceRelay requests tier-2 TURN credentials on the initial offer
-	// instead of trying direct (STUN-only) first. Skips the lazy fallback
-	// for networks known to need a relay. Wired to the `--relay` CLI flag.
+	// ForceRelay mirrors --relay: gather relay-only on the connector
+	// (ICETransportPolicy:relay) and ask the server to stamp TURN on the
+	// offer, forcing the relay path instead of letting the device's
+	// direct-bias pick. For networks known to need a relay, or for testing
+	// the TURN path.
 	ForceRelay bool
 
 	// Verbose toggles progress logging to stderr.
 	Verbose bool
-
-	// trickleDelay overrides how long a relay candidate is deferred before
-	// being trickled (single-phase direct-bias). Zero uses the production
-	// default (messageTimeoutMs). Test-only seam — kept unexported so it is
-	// not part of the public dial surface.
-	trickleDelay time.Duration
 }
-
-// messageTimeoutMs mirrors MESSAGE_TIMEOUT_MS in web/bootstrap.js
-// (bitbang-server): the single-phase relay-candidate trickle delay, in
-// milliseconds. TURN creds are stamped on the offer up front; the connector
-// gathers a relay candidate immediately but defers trickling it by this long
-// so a direct pair can win the race. Keep the two implementations in sync.
-const messageTimeoutMs = 3000
 
 // Dial opens a signaling session, negotiates WebRTC, runs bidirectional
 // verify, completes the SWSP connect handshake, and returns a Session the
@@ -121,16 +110,13 @@ func Dial(opts DialOptions) (*Session, error) {
 	// Build the Peer with the ICE servers the signaling server included
 	// in the offer (relay creds, STUN URLs, or empty for direct-only).
 	iceServers := icehelper.ParseICEServers(offer)
-	peer, err := NewPeer(opts.UID, opts.Code, iceServers)
+	// --relay forces relay-only gathering on the connector; otherwise we
+	// trickle every candidate immediately and the device (ICE-controlling)
+	// biases toward direct. See internal/peer relayAcceptanceMinWait.
+	peer, err := NewPeer(opts.UID, opts.Code, iceServers, opts.ForceRelay)
 	if err != nil {
 		sig.Close()
 		return nil, err
-	}
-	// Single-phase ICE: bias toward direct by delaying the relay candidate
-	// (unless --relay forces relay-only). See Peer.OnLocalCandidate.
-	peer.ForceRelay = opts.ForceRelay
-	if opts.trickleDelay > 0 {
-		peer.trickleDelay = opts.trickleDelay
 	}
 
 	// Outbound candidates → signaling.
@@ -221,4 +207,3 @@ waitLoop:
 	sess.startDispatcher(peer)
 	return sess, nil
 }
-

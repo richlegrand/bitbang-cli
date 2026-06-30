@@ -37,6 +37,20 @@ import (
 // "Favoring direct on slow & embedded devices" note in bitbang/CONVENTIONS.md.
 const relayAcceptanceMinWait = 8 * time.Second
 
+// relayWaitFor returns how long the device (the ICE-controlling agent)
+// withholds nominating a relay candidate pair. Normally the full grace, so a
+// direct (host/srflx) pair can win the race; but when the connector forced
+// relay (--relay/?relay, surfaced as force_relay on the request) it gathers
+// relay-only — there is no direct path to wait for, so the grace would be dead
+// time and we skip it (0). A missing or non-bool force_relay defaults to the
+// full grace.
+func relayWaitFor(msg signaling.Message) time.Duration {
+	if forceRelay, _ := msg["force_relay"].(bool); forceRelay {
+		return 0
+	}
+	return relayAcceptanceMinWait
+}
+
 // OnMessageFunc is called for each data channel message.
 type OnMessageFunc func(data []byte)
 
@@ -145,8 +159,11 @@ func setupConnection(s connSetup) (*Connection, error) {
 	// device where the always-reachable relay would otherwise win the race.
 	// The relay candidate is the connector's (the device is STUN-only), but
 	// isNominatable keys on candidate *type*, so this gates it correctly.
+	//
+	// Exception: a forced-relay connect (--relay/?relay) gathers relay-only,
+	// so there is no direct path to wait for — relayWaitFor skips the grace.
 	se := webrtc.SettingEngine{}
-	se.SetRelayAcceptanceMinWait(relayAcceptanceMinWait)
+	se.SetRelayAcceptanceMinWait(relayWaitFor(s.msg))
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 
 	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
@@ -684,4 +701,3 @@ func (c *Connection) Close() {
 		c.PC.Close()
 	}
 }
-
