@@ -30,6 +30,13 @@ import (
 	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
+// relayAcceptanceMinWait is how long the device's (ICE-controlling) pion agent
+// withholds nominating a relay candidate pair, giving a direct (host/srflx)
+// pair time to win even on a slow device. Generous on purpose: TURN bandwidth
+// is the scarce resource and we don't mind waiting for a direct path. See the
+// "Favoring direct on slow & embedded devices" note in bitbang/CONVENTIONS.md.
+const relayAcceptanceMinWait = 8 * time.Second
+
 // OnMessageFunc is called for each data channel message.
 type OnMessageFunc func(data []byte)
 
@@ -125,8 +132,24 @@ type connSetup struct {
 // answer + ICE-candidate handling proceeds normally from the caller's
 // signaling read loop. On failure the partial PC is cleaned up.
 func setupConnection(s connSetup) (*Connection, error) {
+	connStart := time.Now()
+
 	iceServers := icehelper.ParseICEServers(s.msg)
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
+
+	// Single-phase ICE bias toward direct: the device is the offerer and thus
+	// the ICE-controlling agent, so the candidate-pair nomination decision is
+	// made here. pion's controlling selector won't nominate a relay pair until
+	// relayAcceptanceMinWait has elapsed since checks began, while a direct
+	// (host/srflx) pair becomes nominatable almost immediately — so a direct
+	// pair wins whenever it can validate within the window, even on a slow
+	// device where the always-reachable relay would otherwise win the race.
+	// The relay candidate is the connector's (the device is STUN-only), but
+	// isNominatable keys on candidate *type*, so this gates it correctly.
+	se := webrtc.SettingEngine{}
+	se.SetRelayAcceptanceMinWait(relayAcceptanceMinWait)
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
+
+	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		return nil, fmt.Errorf("create peer connection: %w", err)
 	}
@@ -192,6 +215,9 @@ func setupConnection(s connSetup) (*Connection, error) {
 		if s.verbose {
 			log.Printf("%s state for %s: %s", s.logTag, s.clientID, state.String())
 		}
+		if state == webrtc.PeerConnectionStateConnected {
+			logSelectedPair(s.logTag, s.clientID, pc, time.Since(connStart))
+		}
 		if state == webrtc.PeerConnectionStateFailed {
 			pc.Close()
 		}
@@ -236,6 +262,35 @@ func setupConnection(s connSetup) (*Connection, error) {
 	})
 
 	return conn, nil
+}
+
+// logSelectedPair logs which ICE candidate pair won and how long it took, so
+// direct-vs-relay outcomes (and the effect of relayAcceptanceMinWait) can be
+// measured on slow devices. Best-effort: a not-yet-ready transport or any
+// lookup error is silently ignored.
+func logSelectedPair(logTag, clientID string, pc *webrtc.PeerConnection, elapsed time.Duration) {
+	sctp := pc.SCTP()
+	if sctp == nil {
+		return
+	}
+	dtls := sctp.Transport()
+	if dtls == nil {
+		return
+	}
+	ice := dtls.ICETransport()
+	if ice == nil {
+		return
+	}
+	pair, err := ice.GetSelectedCandidatePair()
+	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
+		return
+	}
+	kind := "DIRECT"
+	if pair.Local.Typ == webrtc.ICECandidateTypeRelay || pair.Remote.Typ == webrtc.ICECandidateTypeRelay {
+		kind = "RELAY"
+	}
+	log.Printf("%s connected for %s via %s in %v (local=%s remote=%s)",
+		logTag, clientID, kind, elapsed.Round(time.Millisecond), pair.Local.Typ, pair.Remote.Typ)
 }
 
 // HandleRequest creates a new peer connection in response to a connector's
