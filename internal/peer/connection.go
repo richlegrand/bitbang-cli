@@ -37,6 +37,19 @@ import (
 // "Favoring direct on slow & embedded devices" note in bitbang/CONVENTIONS.md.
 const relayAcceptanceMinWait = 8 * time.Second
 
+// iceMaxBindingRequests raises pion's per-candidate-pair connectivity-check
+// budget from its default of 7. It is COUPLED to relayAcceptanceMinWait: a
+// direct pair must keep retrying at least as long as we withhold relay
+// nomination, or a connector behind a port-restricted NAT — whose pinhole only
+// opens when *it* first sends us a check (~1.5-2s in, later on slow links) —
+// has its direct pair marked FAILED before the pinhole opens, and (because its
+// reflexive source equals its advertised srflx) pion won't mint a fresh
+// peer-reflexive pair to retry, so it falls back to relay. pion sends ~1 check
+// per ~200ms, so ~40 ≈ the 8s grace; keep this ≈ relayAcceptanceMinWait/200ms
+// if you change the grace. See "Favoring direct on slow & embedded devices" in
+// bitbang/CONVENTIONS.md.
+const iceMaxBindingRequests = 40
+
 // relayWaitFor returns how long the device (the ICE-controlling agent)
 // withholds nominating a relay candidate pair. Normally the full grace, so a
 // direct (host/srflx) pair can win the race; but when the connector forced
@@ -164,6 +177,7 @@ func setupConnection(s connSetup) (*Connection, error) {
 	// so there is no direct path to wait for — relayWaitFor skips the grace.
 	se := webrtc.SettingEngine{}
 	se.SetRelayAcceptanceMinWait(relayWaitFor(s.msg))
+	se.SetICEMaxBindingRequests(iceMaxBindingRequests)
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 
 	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})

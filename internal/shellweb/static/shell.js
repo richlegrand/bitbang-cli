@@ -32,7 +32,10 @@
   const term = new Terminal({
     cursorBlink: true,
     fontFamily: 'Menlo, Monaco, "DejaVu Sans Mono", monospace',
-    fontSize: 14,
+    fontSize: 15,
+    // Heavier stems so 1px-thin glyph features don't get antialiased away
+    // (quick test before pinning a bundled webfont).
+    fontWeight: 500,
     scrollback: 5000,
     convertEol: false, // remote PTY already emits CRLF
   });
