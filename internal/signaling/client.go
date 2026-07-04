@@ -101,18 +101,20 @@ func defaultOnPreempted() {
 }
 
 // URL returns the canonical user-facing URL for this device:
-// ``https://<server>/<uid>[?debug]#<code>``. Single source of truth — all
+// ``https://<server>/<uid>#<code>[!<flags>]``. Single source of truth — all
 // consumers (CLI banners, reconnect prints, downstream wrappers) should
 // read this rather than reconstruct it from Server/ID.UID/ID.Code, since
-// the exact shape (query params, fragment placement) is the protocol's
-// concern, not theirs. The fragment carries the access code, which the
-// signaling server never sees because browsers don't send fragments.
+// the exact shape (fragment placement, flag syntax) is the protocol's
+// concern, not theirs. The fragment carries the access code and any
+// Bitbang flags; the signaling server never sees any of it because
+// browsers don't transmit fragments. Grammar and flag list live in
+// CONVENTIONS.md.
 func (c *Client) URL(debug bool) string {
-	s := "https://" + c.Server + "/" + c.ID.UID
+	s := "https://" + c.Server + "/" + c.ID.UID + "#" + c.ID.Code
 	if debug {
-		s += "?debug"
+		s += "!debug"
 	}
-	return s + "#" + c.ID.Code
+	return s
 }
 
 // Connect connects to the signaling server and registers. On success, it

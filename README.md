@@ -176,7 +176,7 @@ bitbang help                           Usage (also --help, -h)
 | `-nocode` | off | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
 | `-program NAME` | `bitbang` | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem` |
 | `-target HOST:PORT` | (dynamic) | Fixed proxy target (proxy mode); empty = pick the target in the browser. `serve proxy host:port` is shorthand for this. |
-| `-v` | off | Verbose logging (adds the browser `?debug` overlay) |
+| `-v` | off | Verbose logging (adds the browser `!debug` overlay) |
 
 **Shell flags** (`serve` and `serve shell`):
 

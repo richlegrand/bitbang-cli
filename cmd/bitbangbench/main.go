@@ -157,7 +157,7 @@ func main() {
 
 	client := signaling.NewClient(*server, id)
 	client.Verbose = true
-	url := client.URL(true) // bench always wants ?debug + #code
+	url := client.URL(true) // bench always wants #code!debug
 
 	fmt.Println()
 	fmt.Println("Open this URL in the browser to run the benchmark:")

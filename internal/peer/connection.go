@@ -53,7 +53,7 @@ const iceMaxBindingRequests = 40
 // relayWaitFor returns how long the device (the ICE-controlling agent)
 // withholds nominating a relay candidate pair. Normally the full grace, so a
 // direct (host/srflx) pair can win the race; but when the connector forced
-// relay (--relay/?relay, surfaced as force_relay on the request) it gathers
+// relay (--relay/!relay, surfaced as force_relay on the request) it gathers
 // relay-only — there is no direct path to wait for, so the grace would be dead
 // time and we skip it (0). A missing or non-bool force_relay defaults to the
 // full grace.
@@ -173,7 +173,7 @@ func setupConnection(s connSetup) (*Connection, error) {
 	// The relay candidate is the connector's (the device is STUN-only), but
 	// isNominatable keys on candidate *type*, so this gates it correctly.
 	//
-	// Exception: a forced-relay connect (--relay/?relay) gathers relay-only,
+	// Exception: a forced-relay connect (--relay/!relay) gathers relay-only,
 	// so there is no direct path to wait for — relayWaitFor skips the grace.
 	se := webrtc.SettingEngine{}
 	se.SetRelayAcceptanceMinWait(relayWaitFor(s.msg))

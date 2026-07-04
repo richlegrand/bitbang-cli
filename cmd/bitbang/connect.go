@@ -312,6 +312,10 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 // parseConnectURL parses just the URL form (no `:/path` component).
 // Sibling to parseRemoteSpec in cp.go, but for the connect case the
 // path is meaningless — a shell stream doesn't address a path.
+//
+// Fragment grammar (see CONVENTIONS.md): `<code>[!<flags>][/<device-URL>]`.
+// For `bitbang connect` the flags and device-URL are irrelevant — we take
+// only the code, stopping at the first `!` or `/`.
 func parseConnectURL(arg string) (remoteSpec, bool) {
 	urlPart := arg
 	if !strings.Contains(urlPart, "://") {
@@ -332,9 +336,13 @@ func parseConnectURL(arg string) (remoteSpec, bool) {
 	if uid == "" {
 		return remoteSpec{}, false
 	}
+	code := u.Fragment
+	if i := strings.IndexAny(code, "!/"); i >= 0 {
+		code = code[:i]
+	}
 	return remoteSpec{
 		Server: u.Host,
 		UID:    uid,
-		Code:   u.Fragment,
+		Code:   code,
 	}, true
 }

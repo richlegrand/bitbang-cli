@@ -259,10 +259,17 @@ func parseRemoteSpec(arg string) (remoteSpec, bool) {
 	if uid == "" {
 		return remoteSpec{}, false
 	}
+	// Fragment grammar (see CONVENTIONS.md): `<code>[!<flags>][/<device-URL>]`.
+	// For cp the device-URL is superseded by the `:/path` after the URL,
+	// and flags are irrelevant — take only the code.
+	code := u.Fragment
+	if i := strings.IndexAny(code, "!/"); i >= 0 {
+		code = code[:i]
+	}
 	return remoteSpec{
 		Server: u.Host,
 		UID:    uid,
-		Code:   u.Fragment,
+		Code:   code,
 		Path:   rest,
 	}, true
 }
