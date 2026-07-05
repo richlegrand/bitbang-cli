@@ -153,10 +153,17 @@ func (s *Session) sendReady() {
 	}
 	sort.Strings(caps)
 
+	// routing = "target-prefix" tells the browser bootstrap that the
+	// first path segment in the URL fragment is a LAN target (proxied
+	// hostname), not part of the app's own path. This is what isolates
+	// cookies between different LAN hosts reached through the same UID;
+	// direct adapters (bitbang-python's WSGI/ASGI) declare "direct"
+	// instead, and everything under one UID shares a cookie jar.
 	ready, _ := json.Marshal(map[string]interface{}{
 		"type":           "ready",
 		"server_version": protocol.SWSPVersion,
 		"caps":           caps,
+		"routing":        "target-prefix",
 	})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, ready)
 
