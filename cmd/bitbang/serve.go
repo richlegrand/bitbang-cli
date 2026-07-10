@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/term"
@@ -210,6 +212,61 @@ func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
 // Each mode's runServe* function does mode-specific flag parsing then
 // calls in here. Per-cap state (shell mirror, file share) is built
 // based on which *Enabled fields are set.
+// smallQR renders url as a compact half-block QR for the console. go-qrcode
+// only offers a full 4-module quiet zone or none at all (DisableBorder); a
+// borderless code scans poorly against the adjacent URL text, so we take the
+// borderless bitmap and pad a 1-module quiet zone by hand, then render with the
+// same half-block scheme as qrcode.ToSmallString(false) (false → █ light
+// margin/module, true → space dark module) so the scan polarity is unchanged.
+func smallQR(url string) string {
+	qr, err := qrcode.New(url, qrcode.Low)
+	if err != nil {
+		return ""
+	}
+	qr.DisableBorder = true
+	bits := qr.Bitmap()
+
+	// One light (false) module of quiet zone on every side.
+	n := len(bits)
+	padded := make([][]bool, n+2)
+	for i := range padded {
+		padded[i] = make([]bool, n+2)
+	}
+	for y := 0; y < n; y++ {
+		copy(padded[y+1][1:], bits[y])
+	}
+
+	// Pack two vertical modules per text row via half-block glyphs.
+	var b strings.Builder
+	for y := 0; y+1 < len(padded); y += 2 {
+		for x := range padded[y] {
+			top, bot := padded[y][x], padded[y+1][x]
+			switch {
+			case top == bot && !top:
+				b.WriteString("█")
+			case top == bot:
+				b.WriteString(" ")
+			case !top:
+				b.WriteString("▀")
+			default:
+				b.WriteString("▄")
+			}
+		}
+		b.WriteByte('\n')
+	}
+	if len(padded)%2 == 1 { // odd height — last row is an upper half only
+		for _, dark := range padded[len(padded)-1] {
+			if dark {
+				b.WriteString(" ")
+			} else {
+				b.WriteString("▀")
+			}
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 func startListener(cfg serveConfig) {
 	// Build the file share if files enabled.
 	var share *fileshare.FileShare
@@ -294,9 +351,62 @@ func startListener(cfg serveConfig) {
 	}
 	url := signalingClient.URL(cfg.verbose)
 
+	stdoutIsTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	termWidth := 0
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		termWidth = w
+	}
+	bold, reset := "", ""
+	if stdoutIsTTY {
+		bold, reset = "\033[1m", "\033[0m"
+	}
+
+	// printReady renders the banner, QR code, and URL. On a wide TTY the
+	// banner sits to the right of the QR (vertically centered) so the whole
+	// startup block stays short enough to fit on one screen — handy for a
+	// screen recording. On a narrow or non-TTY output it falls back to the
+	// banner stacked above the QR so pipes, logs, and tests stay readable.
 	printReady := func() {
-		if qr, err := qrcode.New(url, qrcode.Medium); err == nil {
-			fmt.Println(qr.ToSmallString(false))
+		qr := smallQR(url)
+		bannerLines := strings.Split(strings.TrimRight(banner, "\n"), "\n")
+		bannerLines = append(bannerLines, "bitbang-cli v"+version)
+		var qrLines []string
+		if qr != "" {
+			qrLines = strings.Split(strings.TrimRight(qr, "\n"), "\n")
+		}
+
+		bannerWidth := 0
+		for _, l := range bannerLines {
+			if w := utf8.RuneCountInString(l); w > bannerWidth {
+				bannerWidth = w
+			}
+		}
+		const gap = "   "
+		qrWidth := 0
+		if len(qrLines) > 0 {
+			qrWidth = utf8.RuneCountInString(qrLines[0])
+		}
+
+		if len(qrLines) > 0 && stdoutIsTTY && termWidth >= qrWidth+len(gap)+bannerWidth {
+			// QR flush left keeps its quiet zone against the terminal margin;
+			// the banner is centered vertically against the taller QR block.
+			off := (len(qrLines) - len(bannerLines)) / 2
+			if off < 0 {
+				off = 0
+			}
+			for i, ql := range qrLines {
+				if bi := i - off; bi >= 0 && bi < len(bannerLines) {
+					fmt.Println(ql + gap + bannerLines[bi])
+				} else {
+					fmt.Println(ql)
+				}
+			}
+		} else {
+			for _, l := range bannerLines {
+				fmt.Println(l)
+			}
+			fmt.Println()
+			fmt.Print(qr)
 		}
 		fmt.Printf("URL: %s\n", url)
 	}
@@ -308,19 +418,12 @@ func startListener(cfg serveConfig) {
 	// URL flow still works; we just don't surface a code. Bolded on a
 	// TTY so it's easy to spot in the startup block; plain on pipes
 	// so log scrapers/tests aren't confused by escape sequences.
-	stdoutIsTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	bold, reset := "", ""
-	if stdoutIsTTY {
-		bold, reset = "\033[1m", "\033[0m"
-	}
 	printPairCode := func() {
 		if signalingClient.PairingCode != "" {
 			fmt.Printf("%sPairing code: %s%s (valid 5 minutes)\n", bold, signalingClient.PairingCode, reset)
 		}
 	}
 
-	fmt.Println(banner)
-	fmt.Printf("v%s\n\n", version)
 	printReady()
 	printSharingBlock(cfg, share)
 
@@ -331,7 +434,6 @@ func startListener(cfg serveConfig) {
 		fmt.Fprintln(os.Stderr, "⚠ Anyone with this URL gets a shell on this machine.")
 		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
 	}
-	fmt.Println()
 
 	var mu sync.Mutex
 	connections := make(map[string]*peer.Connection)
@@ -580,7 +682,6 @@ func launcherCapBarItems(share *fileshare.FileShare, shellEnabled, proxyEnabled 
 // printSharingBlock prints the "Sharing:" status block listing each
 // enabled cap with its salient configuration.
 func printSharingBlock(cfg serveConfig, share *fileshare.FileShare) {
-	fmt.Println()
 	fmt.Println("Sharing:")
 	if cfg.shellEnabled {
 		shellLine := "  • shell  ("
