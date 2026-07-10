@@ -408,7 +408,7 @@ func startListener(cfg serveConfig) {
 			fmt.Println()
 			fmt.Print(qr)
 		}
-		fmt.Printf("URL: %s\n", url)
+		fmt.Printf("URL: %s%s%s\n", bold, url, reset)
 	}
 
 	// printPairCode renders the issued pairing code on its own line —
@@ -431,7 +431,7 @@ func startListener(cfg serveConfig) {
 	if pinAuth.Required() {
 		fmt.Println("PIN protection enabled.")
 	} else if cfg.shellEnabled {
-		fmt.Fprintln(os.Stderr, "⚠ Anyone with this URL gets a shell on this machine.")
+		fmt.Fprintf(os.Stderr, "%sWarning: anyone with this URL gets a shell on this machine.%s\n", bold, reset)
 		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
 	}
 
