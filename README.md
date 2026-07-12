@@ -5,6 +5,8 @@
 ![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
 
+![Install bitbang, run bitbang serve, and open the printed URL in a browser to get a shell, a file browser, and a proxy to the machine's network](assets/demo.webp)
+
 `bitbang` is a single Go binary. Run `bitbang serve` on a machine -- a Raspberry Pi, a home server, a workstation behind NAT -- and it prints one URL. Open that URL in any browser, or `bitbang connect` to it from another machine, and you get a terminal, a file browser, and a gateway to that machine's network. The connection is peer-to-peer and end-to-end encrypted; the `bitba.ng` signaling server only introduces the two ends, then steps aside.
 
 Part of the [BitBang project](https://github.com/richlegrand/bitbang).
