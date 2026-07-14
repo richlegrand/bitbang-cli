@@ -123,6 +123,12 @@ Same URL, two front ends:
 
 The access code lives in the URL **fragment** (`#…`), which browsers never send to a server -- so `bitba.ng` brokers the connection without ever seeing the secret that authorizes it.
 
+### Pairing with a 6-digit code
+
+When you can't paste a URL -- you're on the phone, or reading it to someone across the room -- `bitbang serve` also prints a short **pairing code**, good for 5 minutes. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. The read-aloud number is a short authentication string (SAS), computed independently on both ends from the negotiated DTLS fingerprints and two committed nonces -- so a machine-in-the-middle, whose fingerprints necessarily differ, can't make the two numbers match.
+
+![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
+
 ## Security
 
 - **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is *derived from* the public key, so it can't be impersonated.
