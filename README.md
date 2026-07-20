@@ -1,6 +1,6 @@
 # bitbang 
 
-`bitbang` is a remote-access multitool: open an interactive shell, browse and transfer files, and use web apps on a remote machine's network -- all from any browser, with no SSH, no port forwarding, and no account.
+`bitbang` is a remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, with no SSH, no port forwarding, and no account.
 
 [![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml)
 ![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
@@ -20,18 +20,20 @@ bitbang serve
 
 ## Pairing with a 6-digit code
 
-When you can't paste a URL or scan a QR code -- you're on the phone, or within yelling distance -- `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.
+When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.
 
 ![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
 
-## Why
+## Why?
 
 - **Nothing to forward or configure.** Works from behind NAT, CGNAT, or a locked-down network -- no router changes, no VPN, no tunnel daemon.
 - **Nothing to install on the connecting side.** A browser is enough. A CLI is there when you want scripting, pipes, and file copy.
 - **Private by design.** Traffic is WebRTC/DTLS, peer-to-peer. The signaling server never sees it; if a direct path isn't possible, a TURN relay carries ciphertext only.
 - **No account, no telemetry.**
 
-**Why not just use SSH?** For a machine you can already SSH into comfortably, `bitbang` has limited utility, unless you want access from outside your network, generic proxying, or a browser as the client. For every other machine, the difference is setup and reach. SSH has to be enabled and configured before it will let you in. For example, it's disabled by default on Raspberry Pi OS, and it's often enabled with key-only access, meaning your public key has to get onto the machine first. And how do you do that? Email or a USB stick are usually the most painless options. `bitbang` can set up the connection with a 6-digit code exchange instead -- something you can do safely over the phone, or even call out across the room. SSH also needs an open port, and opening one to the outside world isn't straightforward. If you want to proxy a web app on the machine's network, SSH gives you a separate tunnel per app, named in advance. The `bitbang` proxy is generic: specify the web app's URL at connection time. In short, `bitbang` requires no root, no open port, and no config to grapple with -- and it offers simple pairing, access from outside your network, generic proxying, and a browser as the client.
+### Why not just use SSH? 
+
+For a machine you can already SSH into comfortably, `bitbang` has limited utility, unless you want access from outside your network, generic web proxying, or a browser as the client. For every other machine, the difference is setup and reach. SSH has to be enabled and configured before it will let you in. For example, it's disabled by default on Raspberry Pi OS, and it's often enabled with key-only access, meaning your public key has to get onto the machine first. And how do you do that? Email or a USB stick are usually the most painless options. `bitbang` can set up the connection with a 6-digit code exchange instead -- something you can do safely over the phone, or even call out across the room. SSH also needs an open port, and opening one to the outside world isn't straightforward. If you want to proxy a web app on the machine's network, SSH gives you a separate tunnel per app, named in advance. The `bitbang` proxy is generic: specify the web app's URL at connection time. In short, `bitbang` requires no root, no open port, and no config to grapple with -- and it offers simple pairing, access from outside your network, generic proxying, and a browser as the client.
 
 ## Using `bitbang`
 
@@ -113,11 +115,11 @@ How the two ends authenticate each other without trusting the signaling server i
 |                                 | ngrok         | Cloudflare Tunnel | Tailscale                | `bitbang`        |
 | ------------------------------- | ------------- | ----------------- | ------------------------ | ---------------- |
 | Account required                | Yes           | Yes               | Yes                      | **No**           |
-| Client install                  | No            | No                | **Yes**                  | **No** (browser) |
-| Port forwarding / router config | No            | No                | No                       | **No**           |
+| Install on the connecting side  | No            | No                | **Yes**                  | **No** (browser) |
+| End-to-end encrypted            | Not by default | No               | Yes                      | **Yes**          |
 | Data path                       | Their servers | Their servers     | P2P                      | **P2P**          |
 | Self-hostable server (open source) | No         | No                | No (Headscale is third-party) | **Yes**     |
-| Configuration                   | CLI flags     | Config + DNS      | Dashboard                | **None**         |
+| Setup before first use          | Account + authtoken | Account + DNS | Account + login on each device | **Run one command** |
 
 
 ## Command reference
@@ -224,6 +226,10 @@ GOOS=linux   GOARCH=arm GOARM=7  go build -o bitbang-armv7 ./cmd/bitbang/
 GOOS=windows GOARCH=amd64        go build -o bitbang.exe   ./cmd/bitbang/
 GOOS=darwin  GOARCH=arm64        go build -o bitbang-macos ./cmd/bitbang/
 ```
+## Diagrams
+
+[bitbang CLI shell and file sharing](bitbang-cli-shell-files.png)
+[bitbang CLI proxy operation](bitbang-cli-proxy.png)
 
 ## Roadmap
 
