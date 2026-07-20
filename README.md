@@ -228,8 +228,8 @@ GOOS=darwin  GOARCH=arm64        go build -o bitbang-macos ./cmd/bitbang/
 ```
 ## Diagrams
 
-[bitbang CLI shell and file sharing](bitbang-cli-shell-files.png)
-[bitbang CLI proxy operation](bitbang-cli-proxy.png)
+[bitbang CLI shell and file sharing](assets/bitbang-cli-shell-files.png)
+[bitbang CLI proxy operation](assets/bitbang-cli-proxy.png)
 
 ## Roadmap
 
