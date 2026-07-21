@@ -1,6 +1,6 @@
-# bitbang 
+# BitBang CLI 
 
-`bitbang` is a remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, with no SSH, no port forwarding, and no account.
+BitBang CLI is a single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
 
 [![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml)
 ![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
@@ -20,8 +20,8 @@ bitbang serve
 
 ## Pairing with a 6-digit code
 
-When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.
-
+When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.  If you know [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole), the shape is similar -- a spoken code that securely introduces two machines.
+	
 ![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
 
 ## Why?
