@@ -29,8 +29,33 @@ func (s *Session) handleControl(frame protocol.Frame) {
 		return
 	}
 
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(frame.Payload, &envelope); err != nil {
+		return
+	}
+
+	switch envelope.Type {
+	case protocol.ControlWindowUpdate:
+		var update protocol.WindowUpdate
+		if err := json.Unmarshal(frame.Payload, &update); err != nil {
+			s.resetMalformedControl(frame.Payload, err)
+			return
+		}
+		s.applyWindowUpdate(update)
+		return
+	case protocol.ControlStreamReset:
+		var reset protocol.StreamReset
+		if err := json.Unmarshal(frame.Payload, &reset); err != nil {
+			s.resetMalformedControl(frame.Payload, err)
+			return
+		}
+		s.applyStreamReset(reset)
+		return
+	}
+
 	var msg struct {
-		Type      string                 `json:"type"`
 		Path      string                 `json:"path"`
 		PIN       string                 `json:"pin"`
 		Version   int                    `json:"version"`
@@ -41,7 +66,7 @@ func (s *Session) handleControl(frame protocol.Frame) {
 		return
 	}
 
-	switch msg.Type {
+	switch envelope.Type {
 	case "connect":
 		s.handleConnect(msg.Path, msg.Version)
 	case "auth":
@@ -63,7 +88,7 @@ func (s *Session) handleControl(frame protocol.Frame) {
 	}
 }
 
-func (s *Session) handleConnect(path string, _ int) {
+func (s *Session) handleConnect(path string, peerVersion int) {
 	if path == "" {
 		path = "/"
 	}
@@ -81,6 +106,15 @@ func (s *Session) handleConnect(path string, _ int) {
 			return
 		}
 	}
+
+	// Lock the transport semantics after the first accepted connect. Browser
+	// navigation can send another connect to update routing, but changing flow
+	// control while streams are live would make byte accounting ambiguous.
+	s.mu.Lock()
+	if s.negotiatedVersion == 0 {
+		s.negotiatedVersion = protocol.NegotiateSWSPVersion(peerVersion)
+	}
+	s.mu.Unlock()
 
 	if s.PIN.Required() {
 		log.Printf("PIN required for connection")
@@ -159,11 +193,15 @@ func (s *Session) sendReady() {
 	// cookies between different LAN hosts reached through the same UID;
 	// direct adapters (bitbang-python's WSGI/ASGI) declare "direct"
 	// instead, and everything under one UID shares a cookie jar.
+	s.mu.Lock()
+	negotiatedVersion := s.negotiatedVersion
+	s.mu.Unlock()
 	ready, _ := json.Marshal(map[string]interface{}{
-		"type":           "ready",
-		"server_version": protocol.SWSPVersion,
-		"caps":           caps,
-		"routing":        "target-prefix",
+		"type":               "ready",
+		"server_version":     protocol.SWSPVersion,
+		"negotiated_version": negotiatedVersion,
+		"caps":               caps,
+		"routing":            "target-prefix",
 	})
 	_ = s.sendFrame(0, protocol.FlagSYN|protocol.FlagFIN, ready)
 

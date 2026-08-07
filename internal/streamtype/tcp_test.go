@@ -210,6 +210,42 @@ func TestTCPHandlerCloseAllCancelsPendingDial(t *testing.T) {
 	}
 }
 
+func TestTCPHandlerResetUnblocksStalledTargetWrite(t *testing.T) {
+	conn, target := net.Pipe()
+	defer target.Close()
+
+	h := NewTCP(false)
+	h.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		return conn, nil
+	}
+	s := newTCPTestStream()
+	tcpSYN(t, h, s, "127.0.0.1", 9000)
+	if ack := nextTCPFrame(t, s); !ack.IsSYN() || ack.IsFIN() {
+		t.Fatalf("ack flags = %#x, want SYN", ack.Flags)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- h.OnDAT(s, bytes.Repeat([]byte("x"), protocol.MaxChunkSize))
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("stalled target write returned early: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	h.OnReset(s, "canceled", "test reset")
+	h.OnReset(s, "canceled", "duplicate reset")
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled target write returned nil after reset")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reset did not unblock stalled target write")
+	}
+}
+
 func TestTCPHandlerRejectsStreamsOverLimit(t *testing.T) {
 	started := make(chan struct{}, 2)
 	finished := make(chan struct{}, 2)
@@ -258,3 +294,4 @@ func TestTCPHandlerRejectsStreamsOverLimit(t *testing.T) {
 
 var _ net.Conn = (*shortConn)(nil)
 var _ io.Writer = (*shortConn)(nil)
+var _ ResetHandler = (*TCPHandler)(nil)

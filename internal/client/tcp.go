@@ -144,6 +144,18 @@ func (f *LocalForwarder) forward(conn net.Conn, forward tcpforward.Forward) erro
 
 	ctx, cancel := context.WithCancel(f.ctx)
 	defer cancel()
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			// A v4 data write may be waiting for stream credit. Closing the
+			// local socket alone cannot wake that wait; abandoning the stream can.
+			st.Close()
+			_ = conn.Close()
+		case <-watchDone:
+		}
+	}()
 	done := make(chan error, 2)
 	go func() {
 		_, err := bytestream.Pump(ctx, conn, st)

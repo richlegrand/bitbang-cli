@@ -39,8 +39,40 @@ const (
 	// stream-0 `connect` (client → device) and `ready` (device → client).
 	// v3 adds typed SYN payloads and capability negotiation while keeping
 	// the byte-level frame format unchanged from v2.
-	SWSPVersion = 3
+	// v4 adds negotiated per-stream flow control and stream-local resets.
+	SWSPVersion = 4
+
+	// Flow-control defaults are deliberately per stream. A v4 SYN implicitly
+	// grants the initial window in both directions; later window updates raise
+	// that cumulative limit. Keeping the update threshold below the window lets
+	// a sender continue while the next grant is in flight. The frame limit
+	// separately bounds queue work for tiny or empty frames that consume little
+	// or no byte credit.
+	InitialStreamWindow         = 1 << 20
+	StreamWindowUpdateThreshold = InitialStreamWindow / 2
+	MaxQueuedStreamFrames       = 256
+
+	ControlWindowUpdate = "window_update"
+	ControlStreamReset  = "stream_reset"
 )
+
+// WindowUpdate raises the cumulative number of payload bytes the peer may
+// send in one direction of a stream. Updates are monotonic, which makes stale
+// or duplicate controls harmless.
+type WindowUpdate struct {
+	Type     string `json:"type"`
+	StreamID uint32 `json:"stream_id"`
+	MaxBytes uint64 `json:"max_bytes"`
+}
+
+// StreamReset terminates both directions of one stream without affecting the
+// other streams multiplexed over the data channel.
+type StreamReset struct {
+	Type     string `json:"type"`
+	StreamID uint32 `json:"stream_id"`
+	Code     string `json:"code,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
 
 // Frame represents a single SWSP frame.
 type Frame struct {
@@ -95,8 +127,8 @@ func ParseFrame(data []byte) (Frame, error) {
 	flags := binary.LittleEndian.Uint16(data[4:6])
 	length := binary.LittleEndian.Uint16(data[6:8])
 
-	if len(data) < HeaderSize+int(length) {
-		return Frame{}, fmt.Errorf("frame truncated: expected %d payload bytes, got %d", length, len(data)-HeaderSize)
+	if len(data) != HeaderSize+int(length) {
+		return Frame{}, fmt.Errorf("frame length mismatch: expected %d payload bytes, got %d", length, len(data)-HeaderSize)
 	}
 
 	payload := make([]byte, length)
@@ -107,6 +139,16 @@ func ParseFrame(data []byte) (Frame, error) {
 		Flags:    flags,
 		Payload:  payload,
 	}, nil
+}
+
+// ValidateFramePayload rejects payloads that cannot be represented as one
+// bounded SWSP data-channel message. Callers must split larger byte streams
+// using their stream type's framing rules.
+func ValidateFramePayload(payload []byte) error {
+	if len(payload) > MaxChunkSize {
+		return fmt.Errorf("frame payload too large: %d bytes (max %d)", len(payload), MaxChunkSize)
+	}
+	return nil
 }
 
 // BuildFrame creates raw bytes for an SWSP frame.
@@ -128,6 +170,28 @@ func (f Frame) IsFIN() bool { return f.Flags&FlagFIN != 0 }
 // IsMORE returns true if the MORE flag is set, i.e. this DAT frame is a
 // non-final fragment of a chunked WebSocket message.
 func (f Frame) IsMORE() bool { return f.Flags&FlagMORE != 0 }
+
+// FlowBytes returns the number of bytes charged against a v4 receive window.
+// SYN metadata and empty FIN frames must remain sendable without credit so
+// stream setup and teardown cannot deadlock.
+func (f Frame) FlowBytes() uint64 {
+	if f.IsSYN() {
+		return 0
+	}
+	return uint64(len(f.Payload))
+}
+
+// NegotiateSWSPVersion selects the highest wire version supported by both
+// peers. A missing version is the legacy v2 wire format.
+func NegotiateSWSPVersion(peerVersion int) int {
+	if peerVersion <= 0 {
+		return 2
+	}
+	if peerVersion > SWSPVersion {
+		return SWSPVersion
+	}
+	return peerVersion
+}
 
 // ParseRequest parses the JSON payload of a SYN frame as a Request.
 func (f Frame) ParseRequest() (Request, error) {

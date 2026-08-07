@@ -53,3 +53,16 @@ type StreamHandler interface {
 	// handling. The handler should clean up any per-stream state.
 	OnFIN(s Stream, payload []byte) error
 }
+
+// FragmentHandler is implemented by stream types that preserve message
+// boundaries across SWSP MORE frames. The first fragment carries any
+// stream-specific metadata; subsequent fragments contain continuation bytes.
+type FragmentHandler interface {
+	OnFragment(s Stream, payload []byte, more bool) error
+}
+
+// ResetHandler is implemented by handlers with resources that must be released
+// when one stream is aborted without closing the rest of the session.
+type ResetHandler interface {
+	OnReset(s Stream, code, message string)
+}

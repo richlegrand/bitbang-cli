@@ -38,19 +38,19 @@ type TCPHandler struct {
 	active  int
 }
 
-type tcpInbound struct {
-	data []byte
-	fin  bool
-}
-
 type tcpStream struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	stream  Stream
-	inbound chan tcpInbound
+	ctx    context.Context
+	cancel context.CancelFunc
+	stream Stream
+	ready  chan struct{}
 
-	mu   sync.Mutex
-	conn net.Conn
+	mu      sync.Mutex
+	conn    net.Conn
+	dialErr error
+	writeMu sync.Mutex
+
+	writeDone     chan struct{}
+	writeDoneOnce sync.Once
 }
 
 // NewTCP returns a per-WebRTC-session TCP handler.
@@ -90,10 +90,11 @@ func (h *TCPHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	}
 	ctx, cancel := context.WithCancel(h.ctx)
 	ts := &tcpStream{
-		ctx:     ctx,
-		cancel:  cancel,
-		stream:  s,
-		inbound: make(chan tcpInbound, 256),
+		ctx:       ctx,
+		cancel:    cancel,
+		stream:    s,
+		ready:     make(chan struct{}),
+		writeDone: make(chan struct{}),
 	}
 	h.streams[s.ID()] = ts
 	h.active++
@@ -102,10 +103,7 @@ func (h *TCPHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		old.close()
 	}
 
-	if final {
-		ts.inbound <- tcpInbound{fin: true}
-	}
-	go h.runStream(ts, open)
+	go h.runStream(ts, open, final)
 	return nil
 }
 
@@ -114,13 +112,11 @@ func (h *TCPHandler) OnDAT(s Stream, payload []byte) error {
 	if ts == nil {
 		return nil
 	}
-	data := append([]byte(nil), payload...)
-	select {
-	case ts.inbound <- tcpInbound{data: data}:
-		return nil
-	case <-ts.ctx.Done():
-		return ts.ctx.Err()
+	if err := ts.write(payload); err != nil {
+		ts.close()
+		return err
 	}
+	return nil
 }
 
 func (h *TCPHandler) OnFIN(s Stream, payload []byte) error {
@@ -133,15 +129,20 @@ func (h *TCPHandler) OnFIN(s Stream, payload []byte) error {
 			return err
 		}
 	}
-	select {
-	case ts.inbound <- tcpInbound{fin: true}:
-		return nil
-	case <-ts.ctx.Done():
-		return ts.ctx.Err()
+	if err := ts.closeWrite(); err != nil {
+		ts.close()
+		return err
+	}
+	return nil
+}
+
+func (h *TCPHandler) OnReset(s Stream, _, _ string) {
+	if ts := h.lookup(s.ID()); ts != nil {
+		ts.close()
 	}
 }
 
-func (h *TCPHandler) runStream(ts *tcpStream, open protocol.TCPOpen) {
+func (h *TCPHandler) runStream(ts *tcpStream, open protocol.TCPOpen, final bool) {
 	defer h.remove(ts.stream.ID(), ts)
 
 	address := net.JoinHostPort(open.Host, strconv.Itoa(open.Port))
@@ -150,10 +151,11 @@ func (h *TCPHandler) runStream(ts *tcpStream, open protocol.TCPOpen) {
 		if ts.ctx.Err() == nil {
 			h.sendError(ts.stream, "dial "+address+": "+err.Error())
 		}
+		ts.finishDial(nil, err)
 		ts.cancel()
 		return
 	}
-	if !ts.setConn(conn) {
+	if !ts.finishDial(conn, nil) {
 		_ = conn.Close()
 		return
 	}
@@ -168,41 +170,24 @@ func (h *TCPHandler) runStream(ts *tcpStream, open protocol.TCPOpen) {
 		log.Printf("TCP stream %d connected to %s", ts.stream.ID(), address)
 	}
 
-	done := make(chan error, 2)
-	go func() { done <- h.writeTarget(ts, conn) }()
-	go func() {
-		_, err := bytestream.Pump(ts.ctx, conn, ts.stream)
-		done <- err
-	}()
-
-	for i := 0; i < 2; i++ {
-		if pumpErr := <-done; pumpErr != nil && ts.ctx.Err() == nil {
-			ts.cancel()
-			_ = conn.Close()
+	if final {
+		if err := ts.closeWrite(); err != nil {
+			ts.close()
+			return
 		}
 	}
-	ts.cancel()
-	_ = conn.Close()
+
+	_, pumpErr := bytestream.Pump(ts.ctx, conn, ts.stream)
+	if pumpErr == nil {
+		_ = bytestream.CloseRead(conn)
+		select {
+		case <-ts.writeDone:
+		case <-ts.ctx.Done():
+		}
+	}
+	ts.close()
 	if h.Verbose {
 		log.Printf("TCP stream %d closed (%s)", ts.stream.ID(), address)
-	}
-}
-
-func (h *TCPHandler) writeTarget(ts *tcpStream, conn net.Conn) error {
-	for {
-		select {
-		case <-ts.ctx.Done():
-			return ts.ctx.Err()
-		case in := <-ts.inbound:
-			if len(in.data) > 0 {
-				if err := bytestream.WriteFull(conn, in.data); err != nil {
-					return err
-				}
-			}
-			if in.fin {
-				return bytestream.CloseWrite(conn)
-			}
-		}
 	}
 }
 
@@ -221,14 +206,57 @@ func (h *TCPHandler) remove(id uint32, want *tcpStream) {
 	h.mu.Unlock()
 }
 
-func (ts *tcpStream) setConn(conn net.Conn) bool {
+func (ts *tcpStream) finishDial(conn net.Conn, err error) bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if ts.ctx.Err() != nil {
+		ts.dialErr = ts.ctx.Err()
+		close(ts.ready)
 		return false
 	}
 	ts.conn = conn
+	ts.dialErr = err
+	close(ts.ready)
 	return true
+}
+
+func (ts *tcpStream) waitConn() (net.Conn, error) {
+	select {
+	case <-ts.ready:
+		ts.mu.Lock()
+		defer ts.mu.Unlock()
+		if ts.conn != nil {
+			return ts.conn, nil
+		}
+		if ts.dialErr != nil {
+			return nil, ts.dialErr
+		}
+		return nil, net.ErrClosed
+	case <-ts.ctx.Done():
+		return nil, ts.ctx.Err()
+	}
+}
+
+func (ts *tcpStream) write(payload []byte) error {
+	conn, err := ts.waitConn()
+	if err != nil {
+		return err
+	}
+	ts.writeMu.Lock()
+	defer ts.writeMu.Unlock()
+	return bytestream.WriteFull(conn, payload)
+}
+
+func (ts *tcpStream) closeWrite() error {
+	conn, err := ts.waitConn()
+	if err != nil {
+		return err
+	}
+	ts.writeMu.Lock()
+	err = bytestream.CloseWrite(conn)
+	ts.writeMu.Unlock()
+	ts.writeDoneOnce.Do(func() { close(ts.writeDone) })
+	return err
 }
 
 func (ts *tcpStream) close() {

@@ -2,6 +2,8 @@ package client
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -193,6 +195,174 @@ func TestSession_TCPForwardingEndToEnd(t *testing.T) {
 	if conn, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", goodLocal), 100*time.Millisecond); err == nil {
 		_ = conn.Close()
 		t.Fatal("local listener survived session teardown")
+	}
+}
+
+func TestSession_TCPFlowControlIsolatesStalledStream(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: spins up real pion peer connections, a TCP stream, and a shell process")
+	}
+
+	listenerConn, targetConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = listenerConn.Close()
+		_ = targetConn.Close()
+	})
+
+	tcpHandler := streamtype.NewTCP(false)
+	dialed := make(chan struct{})
+	var dialOnce sync.Once
+	tcpHandler.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		dialOnce.Do(func() { close(dialed) })
+		return listenerConn, nil
+	}
+
+	id := ephemeralID(t)
+	relay := newFakeSignaling()
+	t.Cleanup(relay.Close)
+	startListener(relay.host(), id, streamtype.NewShell(nil, false), tcpHandler)
+	waitRegistered(t, relay)
+	sess := mustDial(t, relay.host(), id, "shell", "tcp")
+	t.Cleanup(sess.Close)
+	if sess.NegotiatedVersion != protocol.SWSPVersion {
+		t.Fatalf("negotiated version = %d, want %d", sess.NegotiatedVersion, protocol.SWSPVersion)
+	}
+
+	stalled := sess.OpenStream()
+	defer stalled.Close()
+	syn, _ := json.Marshal(protocol.TCPOpen{Type: "tcp", Host: "stalled.test", Port: 9000})
+	if err := stalled.WriteSYN(syn); err != nil {
+		t.Fatalf("open stalled TCP stream: %v", err)
+	}
+	select {
+	case <-dialed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener did not dial stalled target")
+	}
+	select {
+	case frame := <-stalled.Inbox():
+		if !frame.IsSYN() || frame.IsFIN() {
+			t.Fatalf("TCP response flags = %#x, want SYN", frame.Flags)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for TCP response")
+	}
+
+	chunk := make([]byte, bytestream.FrameSize)
+	for sent := 0; sent < protocol.InitialStreamWindow; sent += len(chunk) {
+		if err := stalled.WriteDAT(chunk); err != nil {
+			t.Fatalf("fill stalled stream window at %d bytes: %v", sent, err)
+		}
+	}
+
+	blockedWrite := make(chan error, 1)
+	go func() { blockedWrite <- stalled.WriteDAT(chunk) }()
+	select {
+	case err := <-blockedWrite:
+		t.Fatalf("write beyond stalled stream window returned early: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	shellInR, shellInW := io.Pipe()
+	shellOutR, shellOutW := io.Pipe()
+	defer shellInR.Close()
+	defer shellInW.Close()
+	defer shellOutR.Close()
+	defer shellOutW.Close()
+
+	type shellResult struct {
+		result *ShellResult
+		err    error
+	}
+	shellDone := make(chan shellResult, 1)
+	argv := shellHelperArgv(t, "cat")
+	go func() {
+		result, err := sess.Shell(ShellOptions{
+			Argv:   argv,
+			Env:    map[string]string{shellHelperEnv: "1"},
+			Stdin:  shellInR,
+			Stdout: shellOutW,
+		})
+		shellDone <- shellResult{result: result, err: err}
+	}()
+
+	marker := []byte("shell-progress-42")
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := shellInW.Write(marker)
+		writeDone <- err
+	}()
+	readDone := make(chan error, 1)
+	go func() {
+		got := make([]byte, len(marker))
+		_, err := io.ReadFull(shellOutR, got)
+		if err == nil && !bytes.Equal(got, marker) {
+			err = fmt.Errorf("shell output %q, want %q", got, marker)
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("shell while TCP stream stalled: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shell stream blocked behind stalled TCP stream")
+	}
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("write shell marker: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shell input write did not complete")
+	}
+	_ = shellInW.Close()
+	select {
+	case got := <-shellDone:
+		if got.err != nil {
+			t.Fatalf("close shell while TCP stream stalled: %v", got.err)
+		}
+		if got.result.ExitCode != 0 {
+			t.Fatalf("shell while TCP stream stalled exit = %d, want 0", got.result.ExitCode)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shell did not exit after stdin closed")
+	}
+
+	drainDone := make(chan error, 1)
+	go func() {
+		_, err := io.CopyN(io.Discard, targetConn, int64(protocol.InitialStreamWindow+len(chunk)))
+		drainDone <- err
+	}()
+	select {
+	case err := <-blockedWrite:
+		if err != nil {
+			t.Fatalf("stalled TCP write after target resumed: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stalled TCP write did not resume after target drained")
+	}
+	if err := stalled.WriteFIN(nil); err != nil {
+		t.Fatalf("close stalled TCP write direction: %v", err)
+	}
+	select {
+	case err := <-drainDone:
+		if err != nil {
+			t.Fatalf("drain stalled target: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stalled target did not receive the complete payload")
+	}
+	_ = targetConn.Close()
+
+	select {
+	case frame, ok := <-stalled.Inbox():
+		if !ok || !frame.IsFIN() {
+			t.Fatalf("stalled TCP teardown frame = %#v, open=%v; want FIN", frame, ok)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stalled TCP stream did not tear down")
 	}
 }
 

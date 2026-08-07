@@ -634,6 +634,20 @@ func (h *ShellHandler) OnFIN(s Stream, _ []byte) error {
 	return nil
 }
 
+func (h *ShellHandler) OnReset(s Stream, _, _ string) {
+	h.mu.Lock()
+	sess := h.streams[s.ID()]
+	h.mu.Unlock()
+	if sess == nil {
+		return
+	}
+	sess.output.cancel()
+	if sess.process != nil {
+		_ = terminateShellProcess(sess.process)
+	}
+	sess.closeInput()
+}
+
 func (h *ShellHandler) closeStdin(streamID uint32) {
 	h.mu.Lock()
 	sess := h.streams[streamID]

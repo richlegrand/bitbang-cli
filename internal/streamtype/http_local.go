@@ -1,6 +1,7 @@
 package streamtype
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -36,7 +37,8 @@ func NewHTTPLocal(h http.Handler, verbose bool) *HTTPLocalHandler {
 }
 
 type localPending struct {
-	pw *io.PipeWriter
+	pw     *io.PipeWriter
+	cancel context.CancelFunc
 }
 
 func (h *HTTPLocalHandler) Type() string             { return "http" }
@@ -48,15 +50,25 @@ func (h *HTTPLocalHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		sendStreamError(s, 400, "Bad request")
 		return nil
 	}
-	if final {
-		go h.dispatch(s, req, nil)
-		return nil
+	ctx, cancel := context.WithCancel(context.Background())
+	ps := &localPending{cancel: cancel}
+	var body io.Reader
+	if !final {
+		pr, pw := io.Pipe()
+		ps.pw = pw
+		body = pr
 	}
-	pr, pw := io.Pipe()
 	h.mu.Lock()
-	h.streams[s.ID()] = &localPending{pw: pw}
+	old := h.streams[s.ID()]
+	h.streams[s.ID()] = ps
 	h.mu.Unlock()
-	go h.dispatch(s, req, pr)
+	if old != nil {
+		old.close()
+	}
+	go func() {
+		defer h.finishStream(s.ID(), ps)
+		h.dispatch(ctx, s, req, body)
+	}()
 	return nil
 }
 
@@ -64,11 +76,12 @@ func (h *HTTPLocalHandler) OnDAT(s Stream, payload []byte) error {
 	h.mu.Lock()
 	ps := h.streams[s.ID()]
 	h.mu.Unlock()
-	if ps == nil {
+	if ps == nil || ps.pw == nil {
 		return nil
 	}
 	if len(payload) > 0 {
-		_, _ = ps.pw.Write(payload)
+		_, err := ps.pw.Write(payload)
+		return err
 	}
 	return nil
 }
@@ -76,23 +89,33 @@ func (h *HTTPLocalHandler) OnDAT(s Stream, payload []byte) error {
 func (h *HTTPLocalHandler) OnFIN(s Stream, payload []byte) error {
 	h.mu.Lock()
 	ps := h.streams[s.ID()]
-	delete(h.streams, s.ID())
 	h.mu.Unlock()
-	if ps == nil {
+	if ps == nil || ps.pw == nil {
 		return nil
 	}
 	if len(payload) > 0 {
-		_, _ = ps.pw.Write(payload)
+		if _, err := ps.pw.Write(payload); err != nil {
+			return err
+		}
 	}
-	_ = ps.pw.Close()
-	return nil
+	return ps.pw.Close()
 }
 
-func (h *HTTPLocalHandler) dispatch(s Stream, req protocol.Request, body io.Reader) {
+func (h *HTTPLocalHandler) OnReset(s Stream, _, _ string) {
+	h.mu.Lock()
+	ps := h.streams[s.ID()]
+	delete(h.streams, s.ID())
+	h.mu.Unlock()
+	if ps != nil {
+		ps.close()
+	}
+}
+
+func (h *HTTPLocalHandler) dispatch(ctx context.Context, s Stream, req protocol.Request, body io.Reader) {
 	if body == nil {
 		body = http.NoBody
 	}
-	httpReq, err := http.NewRequest(req.Method, req.Pathname, body)
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, req.Pathname, body)
 	if err != nil {
 		sendStreamError(s, 500, err.Error())
 		return
@@ -104,12 +127,28 @@ func (h *HTTPLocalHandler) dispatch(s Stream, req protocol.Request, body io.Read
 		httpReq.ContentLength = int64(req.ContentLength)
 	}
 
-	rw := &swspResponseWriter{stream: s, status: 200, headers: http.Header{}}
+	rw := &swspResponseWriter{stream: s, status: 200, headers: http.Header{}, done: ctx.Done()}
 	h.Handler.ServeHTTP(rw, httpReq)
 	rw.Close()
 
 	if h.Verbose {
 		log.Printf("local %s %s -> %d", req.Method, req.Pathname, rw.status)
+	}
+}
+
+func (h *HTTPLocalHandler) finishStream(id uint32, want *localPending) {
+	h.mu.Lock()
+	if h.streams[id] == want {
+		delete(h.streams, id)
+	}
+	h.mu.Unlock()
+	want.close()
+}
+
+func (ps *localPending) close() {
+	ps.cancel()
+	if ps.pw != nil {
+		_ = ps.pw.CloseWithError(context.Canceled)
 	}
 }
 
@@ -123,6 +162,8 @@ type swspResponseWriter struct {
 	headers    http.Header
 	headerSent bool
 	closed     bool
+	writeErr   error
+	done       <-chan struct{}
 }
 
 func (w *swspResponseWriter) Header() http.Header { return w.headers }
@@ -139,14 +180,23 @@ func (w *swspResponseWriter) Write(p []byte) (int, error) {
 	if !w.headerSent {
 		w.sendHeader()
 	}
+	if w.writeErr != nil {
+		return 0, w.writeErr
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
 	// Backpressure: mirror what HTTPHandler does — cap the data channel
 	// send buffer at 8 MB so a slow consumer doesn't blow up memory.
 	const maxBuffered = 8 << 20
+	backpressureTick := time.NewTicker(time.Millisecond)
+	defer backpressureTick.Stop()
 	for w.stream.BufferedAmount() > maxBuffered {
-		time.Sleep(1 * time.Millisecond)
+		select {
+		case <-w.done:
+			return 0, context.Canceled
+		case <-backpressureTick.C:
+		}
 	}
 	// Chunk the write to fit within SWSP's max frame payload.
 	written := 0
@@ -177,7 +227,16 @@ func (w *swspResponseWriter) sendHeader() {
 		"status":  w.status,
 		"headers": headers,
 	})
-	_ = w.stream.WriteSYN(meta)
+	if err := protocol.ValidateFramePayload(meta); err != nil {
+		w.writeErr = err
+		w.closed = true
+		sendStreamError(w.stream, 502, "Response headers are too large")
+		return
+	}
+	if err := w.stream.WriteSYN(meta); err != nil {
+		w.writeErr = err
+		w.closed = true
+	}
 }
 
 // Close finalizes the response: sends headers if not yet sent, then FIN.

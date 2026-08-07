@@ -553,7 +553,7 @@ func startListener(cfg serveConfig) {
 
 			// Per-connection teardown, run when the data channel closes.
 			var onClose []func()
-			onClose = append(onClose, release)
+			onClose = append(onClose, sess.Close, release)
 			// Kill any shell processes — without this they outlive the
 			// browser tab and keep holding their max-sessions slot.
 			if shellHandler != nil {

@@ -18,6 +18,14 @@ import (
 // from this package routes here instead.
 var stderr = os.Stderr
 
+var (
+	errStreamQueueFull       = errors.New("stream receive queue full")
+	errReceiveWindowExceeded = errors.New("stream receive window exceeded")
+	errStreamClosed          = errors.New("stream closed")
+	errStreamFinished        = errors.New("stream direction already finished")
+	errStreamNotStarted      = errors.New("stream has not sent SYN")
+)
+
 // Session wraps the data channel after bidirectional verify has succeeded
 // and the control-stream `ready` message has been received. From here on
 // the caller drives SWSP file (or future shell/tcp/etc.) streams.
@@ -33,8 +41,9 @@ type Session struct {
 	// ServerCaps and ServerVersion come from the listener's `ready` and
 	// let callers gate behavior (e.g. don't try `file` ops if the server
 	// doesn't advertise it).
-	ServerCaps    []string
-	ServerVersion int
+	ServerCaps        []string
+	ServerVersion     int
+	NegotiatedVersion int
 
 	nextStreamID uint32
 	mu           sync.Mutex
@@ -42,17 +51,41 @@ type Session struct {
 	closed       atomic.Bool
 	done         chan struct{}
 	closeOnce    sync.Once
+
+	// sendFrameOverride lets unit tests capture wire output without creating a
+	// real WebRTC data channel. Production sessions leave it nil.
+	sendFrameOverride func(streamID uint32, flags uint16, payload []byte) error
 }
 
-// stream is the per-stream state held by the session: an inbound frame
-// queue the caller drains via the public Inbox method. SYN/DAT/FIN
-// frames all arrive on the same channel — the caller inspects flags.
+// stream is the per-stream state held by the session. The dispatcher writes
+// into pending without waiting for the caller; a dedicated worker preserves
+// frame order while handing frames to the public inbox.
 type stream struct {
 	id        uint32
 	inbox     chan protocol.Frame
+	pending   chan protocol.Frame
 	abandoned chan struct{}
 	abandon   sync.Once
 	closeOnce sync.Once
+
+	queueMu       sync.Mutex
+	queuedBytes   int
+	queuedFrames  int
+	receivedBytes uint64
+	consumedBytes uint64
+	advertisedMax uint64
+	lastUpdateAt  uint64
+	windowActive  bool
+
+	sendMu           sync.Mutex
+	writeMu          sync.Mutex
+	sentBytes        uint64
+	sendLimit        uint64
+	sendWake         chan struct{}
+	streamErr        error
+	inboundFIN       atomic.Bool
+	inboundDelivered atomic.Bool
+	outboundFIN      atomic.Bool
 }
 
 // newSession constructs a Session bound to a data channel. The peer is
@@ -141,25 +174,24 @@ func (s *Session) handshake(p *Peer, path string, caps []string, pinPrompt func(
 			continue
 		}
 		var ctl struct {
-			Type          string   `json:"type"`
-			Message       string   `json:"message"`
-			Success       bool     `json:"success"`
-			Caps          []string `json:"caps"`
-			ServerVersion int      `json:"server_version"`
+			Type              string   `json:"type"`
+			Message           string   `json:"message"`
+			Success           bool     `json:"success"`
+			Caps              []string `json:"caps"`
+			ServerVersion     int      `json:"server_version"`
+			NegotiatedVersion int      `json:"negotiated_version"`
 		}
 		_ = json.Unmarshal(f.Payload, &ctl)
 
 		switch ctl.Type {
 		case "ready":
 			s.ServerCaps = ctl.Caps
-			s.ServerVersion = ctl.ServerVersion
-			if s.ServerVersion == 0 {
-				// v2 listeners send {type:"ready"} with no version.
-				s.ServerVersion = 2
+			if err := s.setNegotiatedVersion(ctl.ServerVersion, ctl.NegotiatedVersion); err != nil {
+				return err
 			}
 			if s.Verbose {
-				fmt.Fprintf(stderr, "[client] device ready (server v%d, caps: %v)\n",
-					s.ServerVersion, s.ServerCaps)
+				fmt.Fprintf(stderr, "[client] device ready (server v%d, negotiated v%d, caps: %v)\n",
+					s.ServerVersion, s.NegotiatedVersion, s.ServerCaps)
 			}
 			return nil
 		case "auth_required":
@@ -203,9 +235,30 @@ func (s *Session) handshake(p *Peer, path string, caps []string, pinPrompt func(
 	}
 }
 
-// startDispatcher takes over the DC message queue from the session layer
-// and routes inbound frames to their owning stream's inbox. Run as a
-// goroutine after handshake completes; exits when the DC closes.
+func (s *Session) setNegotiatedVersion(serverVersion, negotiatedVersion int) error {
+	if serverVersion == 0 {
+		// v2 listeners send {type:"ready"} with no version.
+		serverVersion = 2
+	}
+	maxVersion := protocol.NegotiateSWSPVersion(serverVersion)
+	if maxVersion < 2 {
+		return fmt.Errorf("listener returned unsupported server version %d", serverVersion)
+	}
+	if negotiatedVersion == 0 {
+		negotiatedVersion = maxVersion
+	} else if negotiatedVersion < 2 || negotiatedVersion > maxVersion {
+		return fmt.Errorf("listener returned invalid negotiated version %d", negotiatedVersion)
+	}
+	s.ServerVersion = serverVersion
+	s.NegotiatedVersion = negotiatedVersion
+	return nil
+}
+
+// startDispatcher takes over the DC message queue from the session layer and
+// routes inbound frames to bounded per-stream queues. It never waits for an
+// individual stream consumer, so one stalled stream cannot delay the rest of
+// the session. Run as a goroutine after handshake completes; exits when the DC
+// closes.
 func (s *Session) startDispatcher(p *Peer) {
 	go func() {
 		defer s.finishStreams()
@@ -227,8 +280,11 @@ func (s *Session) startDispatcher(p *Peer) {
 				continue
 			}
 			if frame.StreamID == 0 {
-				// Late stream-0 messages (e.g. a server-initiated error)
-				// are uncommon for v3; log + drop.
+				if s.flowControlEnabled() && s.handleControl(frame) {
+					continue
+				}
+				// Other late stream-0 messages are informational in the
+				// established session and can be ignored.
 				if s.Verbose {
 					fmt.Fprintf(stderr, "[client] ignoring late stream-0 frame flags=%#x\n", frame.Flags)
 				}
@@ -243,23 +299,21 @@ func (s *Session) startDispatcher(p *Peer) {
 				}
 				continue
 			}
-			// Delivery is lossless until the consumer explicitly abandons
-			// the stream or the session closes. The selects make a blocked
-			// delivery teardown-safe without racing a send against close.
-			select {
-			case st.inbox <- frame:
-			case <-st.abandoned:
+			if err := st.enqueue(frame, s.flowControlEnabled()); err != nil {
+				// The stream has exceeded its private queue or was abandoned.
+				// Detach only this stream; the dispatcher must remain available
+				// to every other stream sharing the session.
+				if !errors.Is(err, errStreamClosed) {
+					code := "receive_overflow"
+					switch {
+					case errors.Is(err, errReceiveWindowExceeded):
+						code = "flow_control_violation"
+					case errors.Is(err, errStreamFinished), errors.Is(err, errStreamNotStarted):
+						code = "protocol_error"
+					}
+					s.failStream(st, code, err.Error(), true)
+				}
 				continue
-			case <-p.DCClosed():
-				s.markClosed()
-				return
-			case <-s.done:
-				return
-			}
-			if frame.IsFIN() {
-				// FIN closes the stream's inbox so callers ranging over
-				// it see the channel close instead of blocking forever.
-				s.finishStream(st.id, st)
 			}
 		}
 	}()
@@ -276,37 +330,241 @@ func (s *Session) OpenStream() *Stream {
 	s.nextStreamID += 2
 	st := &stream{
 		id:        id,
-		inbox:     make(chan protocol.Frame, 256),
+		inbox:     make(chan protocol.Frame),
+		pending:   make(chan protocol.Frame, protocol.MaxQueuedStreamFrames),
 		abandoned: make(chan struct{}),
+		sendWake:  make(chan struct{}),
+	}
+	if s.closed.Load() {
+		s.mu.Unlock()
+		st.fail(errors.New("data channel closed"))
+		st.closeOnce.Do(func() { close(st.inbox) })
+		return &Stream{s: s, st: st}
 	}
 	s.streams[id] = st
 	s.mu.Unlock()
+	go s.deliverStream(st)
 	return &Stream{s: s, st: st}
 }
 
-func (s *Session) closeStream(id uint32) {
+func (s *Session) detachStream(id uint32, st *stream) bool {
 	s.mu.Lock()
-	st := s.streams[id]
-	if st != nil {
+	removed := false
+	if s.streams[id] == st {
 		delete(s.streams, id)
+		removed = true
 	}
 	s.mu.Unlock()
-	if st != nil {
-		st.abandon.Do(func() { close(st.abandoned) })
+	return removed
+}
+
+func (s *Session) detachFinishedStream(st *stream) {
+	if st.inboundDelivered.Load() && st.outboundFIN.Load() {
+		s.detachStream(st.id, st)
 	}
 }
 
-// finishStream is called only by the dispatcher, the sole inbox sender.
-func (s *Session) finishStream(id uint32, st *stream) {
+func (s *Session) findStream(id uint32) *stream {
 	s.mu.Lock()
-	if s.streams[id] == st {
-		delete(s.streams, id)
-	}
+	st := s.streams[id]
 	s.mu.Unlock()
-	st.closeOnce.Do(func() { close(st.inbox) })
+	return st
+}
+
+func (s *Session) failStream(st *stream, code, message string, notifyPeer bool) {
+	if !s.detachStream(st.id, st) {
+		return
+	}
+	st.fail(errors.New(message))
+	if notifyPeer {
+		go func() {
+			// Preserve terminal ordering on the reliable data channel: any
+			// frame that already reserved credit completes before the reset,
+			// while blocked/future writers observe st.fail and stop.
+			st.writeMu.Lock()
+			defer st.writeMu.Unlock()
+			if s.flowControlEnabled() {
+				_ = s.sendStreamReset(st.id, code, message)
+				return
+			}
+			_ = s.sendRawFrame(st.id, protocol.FlagFIN, nil)
+		}()
+	}
+}
+
+func (s *Session) deliverStream(st *stream) {
+	defer st.closeOnce.Do(func() { close(st.inbox) })
+	for {
+		select {
+		case frame := <-st.pending:
+			select {
+			case st.inbox <- frame:
+				maxBytes, update := st.consume(frame, s.flowControlEnabled())
+				if update && !frame.IsFIN() {
+					if err := s.sendWindowUpdate(st.id, maxBytes); err != nil {
+						s.failStream(st, "control_send_failed", err.Error(), false)
+						return
+					}
+				}
+				if frame.IsFIN() {
+					// Keep the state session-owned until FIN reaches the caller.
+					// Otherwise an abandoned inbox can strand this worker after
+					// both wire directions have already finished.
+					st.inboundDelivered.Store(true)
+					s.detachFinishedStream(st)
+					return
+				}
+			case <-st.abandoned:
+				st.release(frame)
+				return
+			case <-s.done:
+				st.release(frame)
+				return
+			}
+		case <-st.abandoned:
+			return
+		case <-s.done:
+			return
+		}
+	}
+}
+
+func (st *stream) enqueue(frame protocol.Frame, enforceWindow bool) error {
+	if st.inboundFIN.Load() {
+		return errStreamFinished
+	}
+	flowBytes := frame.FlowBytes()
+	st.queueMu.Lock()
+	if enforceWindow && !st.windowActive {
+		st.queueMu.Unlock()
+		return errStreamNotStarted
+	}
+	if enforceWindow && (st.receivedBytes > st.advertisedMax || flowBytes > st.advertisedMax-st.receivedBytes) {
+		st.queueMu.Unlock()
+		return errReceiveWindowExceeded
+	}
+	if st.queuedFrames >= protocol.MaxQueuedStreamFrames || st.queuedBytes+len(frame.Payload) > protocol.InitialStreamWindow {
+		st.queueMu.Unlock()
+		return errStreamQueueFull
+	}
+	st.queuedFrames++
+	st.queuedBytes += len(frame.Payload)
+	st.receivedBytes += flowBytes
+	if frame.IsFIN() {
+		st.inboundFIN.Store(true)
+	}
+	st.queueMu.Unlock()
+
+	select {
+	case st.pending <- frame:
+		return nil
+	case <-st.abandoned:
+		st.release(frame)
+		return errStreamClosed
+	default:
+		// queuedFrames includes the frame a worker may currently be handing
+		// to the caller, so this should only be reachable during teardown.
+		st.release(frame)
+		return errStreamQueueFull
+	}
+}
+
+func (st *stream) release(frame protocol.Frame) {
+	st.queueMu.Lock()
+	st.queuedFrames--
+	st.queuedBytes -= len(frame.Payload)
+	st.queueMu.Unlock()
+}
+
+func (st *stream) consume(frame protocol.Frame, flowControl bool) (uint64, bool) {
+	flowBytes := frame.FlowBytes()
+	st.queueMu.Lock()
+	st.queuedFrames--
+	st.queuedBytes -= len(frame.Payload)
+	if !flowControl || flowBytes == 0 {
+		st.queueMu.Unlock()
+		return 0, false
+	}
+	st.consumedBytes += flowBytes
+	if st.consumedBytes-st.lastUpdateAt < protocol.StreamWindowUpdateThreshold {
+		st.queueMu.Unlock()
+		return 0, false
+	}
+	st.lastUpdateAt = st.consumedBytes
+	st.advertisedMax = protocol.InitialStreamWindow + st.consumedBytes
+	maxBytes := st.advertisedMax
+	st.queueMu.Unlock()
+	return maxBytes, true
+}
+
+func (st *stream) activateInitialWindow() {
+	st.queueMu.Lock()
+	activate := !st.windowActive
+	if activate {
+		st.advertisedMax = protocol.InitialStreamWindow
+		st.windowActive = true
+	}
+	st.queueMu.Unlock()
+	if activate {
+		st.updateSendLimit(protocol.InitialStreamWindow)
+	}
+}
+
+func (st *stream) initialWindowActive() bool {
+	st.queueMu.Lock()
+	defer st.queueMu.Unlock()
+	return st.windowActive
+}
+
+func (st *stream) reserveSend(n uint64, sessionDone <-chan struct{}) error {
+	for {
+		st.sendMu.Lock()
+		if st.streamErr != nil {
+			err := st.streamErr
+			st.sendMu.Unlock()
+			return err
+		}
+		if n <= st.sendLimit-st.sentBytes {
+			st.sentBytes += n
+			st.sendMu.Unlock()
+			return nil
+		}
+		wake := st.sendWake
+		st.sendMu.Unlock()
+
+		select {
+		case <-wake:
+		case <-st.abandoned:
+			return errStreamClosed
+		case <-sessionDone:
+			return errors.New("data channel closed")
+		}
+	}
+}
+
+func (st *stream) updateSendLimit(maxBytes uint64) {
+	st.sendMu.Lock()
+	if maxBytes > st.sendLimit {
+		st.sendLimit = maxBytes
+		close(st.sendWake)
+		st.sendWake = make(chan struct{})
+	}
+	st.sendMu.Unlock()
+}
+
+func (st *stream) fail(err error) {
+	st.sendMu.Lock()
+	if st.streamErr == nil {
+		st.streamErr = err
+		close(st.sendWake)
+		st.sendWake = make(chan struct{})
+	}
+	st.sendMu.Unlock()
+	st.abandon.Do(func() { close(st.abandoned) })
 }
 
 func (s *Session) finishStreams() {
+	s.markClosed()
 	s.mu.Lock()
 	streams := make([]*stream, 0, len(s.streams))
 	for id, st := range s.streams {
@@ -315,9 +573,8 @@ func (s *Session) finishStreams() {
 	}
 	s.mu.Unlock()
 	for _, st := range streams {
-		st.closeOnce.Do(func() { close(st.inbox) })
+		st.abandon.Do(func() { close(st.abandoned) })
 	}
-	s.markClosed()
 }
 
 func (s *Session) markClosed() {
@@ -327,15 +584,166 @@ func (s *Session) markClosed() {
 	})
 }
 
+func (s *Session) flowControlEnabled() bool {
+	return s.NegotiatedVersion >= 4
+}
+
+func (s *Session) handleControl(frame protocol.Frame) bool {
+	if !frame.IsSYN() {
+		return false
+	}
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(frame.Payload, &header); err != nil {
+		return false
+	}
+
+	switch header.Type {
+	case protocol.ControlWindowUpdate:
+		var update protocol.WindowUpdate
+		if err := json.Unmarshal(frame.Payload, &update); err != nil {
+			s.resetMalformedControl(frame.Payload, err)
+			return true
+		}
+		st := s.findStream(update.StreamID)
+		if st == nil {
+			return true
+		}
+		if update.StreamID == 0 || update.MaxBytes == 0 {
+			s.failStream(st, "invalid_control", "invalid stream window update", true)
+			return true
+		}
+		st.updateSendLimit(update.MaxBytes)
+		return true
+
+	case protocol.ControlStreamReset:
+		var reset protocol.StreamReset
+		if err := json.Unmarshal(frame.Payload, &reset); err != nil {
+			s.resetMalformedControl(frame.Payload, err)
+			return true
+		}
+		st := s.findStream(reset.StreamID)
+		if st == nil {
+			return true
+		}
+		message := reset.Message
+		if message == "" {
+			message = reset.Code
+		}
+		if message == "" {
+			message = "stream reset by peer"
+		}
+		s.failStream(st, reset.Code, message, false)
+		return true
+	}
+
+	return false
+}
+
+func (s *Session) resetMalformedControl(payload []byte, controlErr error) {
+	var target struct {
+		StreamID uint32 `json:"stream_id"`
+	}
+	if json.Unmarshal(payload, &target) != nil || target.StreamID == 0 {
+		return
+	}
+	if st := s.findStream(target.StreamID); st != nil {
+		s.failStream(st, "invalid_control", controlErr.Error(), true)
+	}
+}
+
+func (s *Session) sendWindowUpdate(streamID uint32, maxBytes uint64) error {
+	payload, err := json.Marshal(protocol.WindowUpdate{
+		Type:     protocol.ControlWindowUpdate,
+		StreamID: streamID,
+		MaxBytes: maxBytes,
+	})
+	if err != nil {
+		return err
+	}
+	return s.sendControlSYN(payload)
+}
+
+func (s *Session) sendStreamReset(streamID uint32, code, message string) error {
+	payload, err := json.Marshal(protocol.StreamReset{
+		Type:     protocol.ControlStreamReset,
+		StreamID: streamID,
+		Code:     code,
+		Message:  message,
+	})
+	if err != nil {
+		return err
+	}
+	return s.sendControlSYN(payload)
+}
+
 func (s *Session) sendFrame(streamID uint32, flags uint16, payload []byte) error {
-	if s.closed.Load() || s.DC.ReadyState() != webrtc.DataChannelStateOpen {
+	if err := protocol.ValidateFramePayload(payload); err != nil {
+		return err
+	}
+	frame := protocol.Frame{StreamID: streamID, Flags: flags, Payload: payload}
+	var st *stream
+	if streamID != 0 {
+		st = s.findStream(streamID)
+		if st == nil {
+			return errStreamClosed
+		}
+	}
+	if st != nil {
+		st.writeMu.Lock()
+		defer st.writeMu.Unlock()
+		if st.outboundFIN.Load() {
+			return errStreamFinished
+		}
+	}
+	flowControl := s.flowControlEnabled() && streamID != 0
+	if flowControl {
+		if !frame.IsSYN() && !st.initialWindowActive() {
+			return errStreamNotStarted
+		}
+		if frame.IsSYN() {
+			// Activate receive credit before the ordered SYN goes on the wire,
+			// so an immediate response cannot race the receive-window check.
+			// writeMu keeps later local data behind the SYN itself.
+			st.activateInitialWindow()
+		}
+		if err := st.reserveSend(frame.FlowBytes(), s.done); err != nil {
+			return err
+		}
+	}
+
+	if err := s.sendRawFrame(streamID, flags, payload); err != nil {
+		if flowControl && frame.IsSYN() {
+			s.failStream(st, "send_error", err.Error(), false)
+		}
+		return err
+	}
+	if st != nil && frame.IsFIN() {
+		st.outboundFIN.Store(true)
+		s.detachFinishedStream(st)
+	}
+	return nil
+}
+
+func (s *Session) sendRawFrame(streamID uint32, flags uint16, payload []byte) error {
+	if err := protocol.ValidateFramePayload(payload); err != nil {
+		return err
+	}
+	if s.closed.Load() {
+		return errors.New("data channel closed")
+	}
+	if s.sendFrameOverride != nil {
+		return s.sendFrameOverride(streamID, flags, payload)
+	}
+	if s.DC == nil || s.DC.ReadyState() != webrtc.DataChannelStateOpen {
 		return errors.New("data channel closed")
 	}
 	return s.DC.Send(protocol.BuildFrame(streamID, flags, payload))
 }
 
 func (s *Session) sendControlSYN(payload []byte) error {
-	return s.sendFrame(0, protocol.FlagSYN, payload)
+	return s.sendRawFrame(0, protocol.FlagSYN, payload)
 }
 
 // Close closes the data channel and returns. Anything left in flight
@@ -343,7 +751,7 @@ func (s *Session) sendControlSYN(payload []byte) error {
 // to the OS to reap when the process exits — pion's synchronous
 // PC.Close() path is slow on relay sessions and isn't worth waiting for.
 func (s *Session) Close() {
-	s.markClosed()
+	s.finishStreams()
 	if s.DC != nil {
 		_ = s.DC.Close()
 	}
@@ -387,4 +795,16 @@ func (s *Stream) BufferedAmount() uint64 { return s.s.DC.BufferedAmount() }
 // Close drops the stream from the session's routing table. The caller
 // is expected to have sent FIN already; this is just cleanup if the
 // stream is being abandoned (e.g. on error).
-func (s *Stream) Close() { s.s.closeStream(s.st.id) }
+func (s *Stream) Close() {
+	// A v4 reset is full-duplex, so it also cancels a response that is still
+	// arriving after our FIN (for example, a download whose local writer
+	// failed). Legacy peers only understand directional FIN; avoid sending it
+	// twice when our outbound direction already ended.
+	if s.s.flowControlEnabled() || !s.st.outboundFIN.Load() {
+		s.s.failStream(s.st, "cancelled", "stream closed", true)
+		return
+	}
+	if s.s.detachStream(s.st.id, s.st) {
+		s.st.fail(errStreamClosed)
+	}
+}

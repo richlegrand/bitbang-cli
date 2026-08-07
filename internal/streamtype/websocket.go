@@ -1,15 +1,19 @@
 package streamtype
 
 import (
+	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/localdns"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
@@ -74,7 +78,14 @@ func NewWebSocket(resolver TargetResolver, browserIP string, verbose bool) *WSHa
 }
 
 type wsStream struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu   sync.Mutex
 	conn *websocket.Conn
+
+	writeMu sync.Mutex
+	writer  io.WriteCloser
 }
 
 func (h *WSHandler) Type() string { return "websocket" }
@@ -91,27 +102,36 @@ func (h *WSHandler) OnSYN(s Stream, payload []byte, _ bool) error {
 		log.Printf("Failed to parse WS open: %v", err)
 		return nil
 	}
-	go h.bridge(s, msg.Pathname, msg.Cookies)
+	ctx, cancel := context.WithCancel(context.Background())
+	ws := &wsStream{ctx: ctx, cancel: cancel}
+	h.mu.Lock()
+	old := h.streams[s.ID()]
+	h.streams[s.ID()] = ws
+	h.mu.Unlock()
+	if old != nil {
+		old.close()
+	}
+	go h.bridge(s, ws, msg.Pathname, msg.Cookies)
 	return nil
 }
 
 // OnDAT forwards a message from the browser to the local WS server.
 func (h *WSHandler) OnDAT(s Stream, payload []byte) error {
+	return h.OnFragment(s, payload, false)
+}
+
+// OnFragment streams one browser message into a single upstream WebSocket
+// writer without assembling it in the session receive loop.
+func (h *WSHandler) OnFragment(s Stream, payload []byte, more bool) error {
 	h.mu.Lock()
 	ws := h.streams[s.ID()]
 	h.mu.Unlock()
-	if ws == nil || len(payload) < 1 {
+	if ws == nil {
 		return nil
 	}
-	typeByte := payload[0]
-	data := payload[1:]
-	msgType := websocket.TextMessage
-	if typeByte == 1 {
-		msgType = websocket.BinaryMessage
-	}
-	if err := ws.conn.WriteMessage(msgType, data); err != nil {
-		log.Printf("WS write failed (stream %d): %v", s.ID(), err)
-		ws.conn.Close()
+	if err := ws.writeFragment(payload, more); err != nil {
+		ws.close()
+		return err
 	}
 	return nil
 }
@@ -123,12 +143,22 @@ func (h *WSHandler) OnFIN(s Stream, _ []byte) error {
 	delete(h.streams, s.ID())
 	h.mu.Unlock()
 	if ws != nil {
-		ws.conn.Close()
+		ws.close()
 	}
 	return nil
 }
 
-func (h *WSHandler) bridge(s Stream, pathname, cookies string) {
+func (h *WSHandler) OnReset(s Stream, _, _ string) {
+	h.mu.Lock()
+	ws := h.streams[s.ID()]
+	delete(h.streams, s.ID())
+	h.mu.Unlock()
+	if ws != nil {
+		ws.close()
+	}
+}
+
+func (h *WSHandler) bridge(s Stream, ws *wsStream, pathname, cookies string) {
 	target, wsPath := h.Resolver.ResolveTarget(pathname)
 
 	// An HTTPS session must dial wss://, or the handshake hits a TLS port
@@ -153,66 +183,154 @@ func (h *WSHandler) bridge(s Stream, pathname, cookies string) {
 	if ip := net.ParseIP(h.BrowserIP); ip != nil {
 		header.Set("X-Forwarded-For", ip.String())
 	}
-	conn, _, err := dialer.Dial(wsURL, header)
+	conn, _, err := dialer.DialContext(ws.ctx, wsURL, header)
 	if err != nil {
-		log.Printf("WS connect failed: %s -> %v", pathname, err)
-		_ = s.WriteFIN(nil)
+		if ws.ctx.Err() == nil {
+			log.Printf("WS connect failed: %s -> %v", pathname, err)
+			_ = s.WriteFIN(nil)
+		}
+		h.remove(s.ID(), ws)
+		return
+	}
+	if !ws.setConn(conn) {
+		_ = conn.Close()
+		h.remove(s.ID(), ws)
 		return
 	}
 	log.Printf("WS opened: %s (stream %d)", pathname, s.ID())
 
-	h.mu.Lock()
-	h.streams[s.ID()] = &wsStream{conn: conn}
-	h.mu.Unlock()
-
 	_ = s.WriteSYN(nil)
 
 	defer func() {
-		conn.Close()
-		h.mu.Lock()
-		delete(h.streams, s.ID())
-		h.mu.Unlock()
+		ws.close()
+		h.remove(s.ID(), ws)
 		_ = s.WriteFIN(nil)
 		log.Printf("WS closed: %s (stream %d)", pathname, s.ID())
 	}()
 
 	for {
-		msgType, data, err := conn.ReadMessage()
+		msgType, reader, err := conn.NextReader()
 		if err != nil {
 			return
 		}
-		var typeByte byte
-		if msgType == websocket.TextMessage {
-			typeByte = 0
-		} else {
-			typeByte = 1
-		}
-		buf := make([]byte, 1+len(data))
-		buf[0] = typeByte
-		copy(buf[1:], data)
-		// The data channel caps messages at MaxChunkSize and the SWSP
-		// length field is 16-bit, so a large WS message must be split
-		// across frames. Non-final chunks carry FlagMORE; the receiver
-		// reassembles them into one WS message (the type byte rides in
-		// the first chunk).
-		if err := writeWSChunks(s, buf); err != nil {
+		if err := writeWSReader(s, msgType, reader); err != nil {
 			return
 		}
 	}
 }
 
-// writeWSChunks sends one WebSocket message as one or more SWSP DAT frames,
-// each at most MaxChunkSize bytes. Every chunk but the last carries FlagMORE
-// so the receiver reassembles them back into a single WS message.
-func writeWSChunks(s Stream, buf []byte) error {
-	for off := 0; off < len(buf); off += protocol.MaxChunkSize {
-		end := off + protocol.MaxChunkSize
-		if end >= len(buf) {
-			return s.WriteDAT(buf[off:]) // final chunk: FlagDAT, no MORE
+// writeWSReader sends one WebSocket message as bounded SWSP fragments. The
+// one-byte lookahead determines MORE without reading the whole message.
+func writeWSReader(s Stream, msgType int, src io.Reader) error {
+	reader := bufio.NewReaderSize(src, protocol.MaxChunkSize)
+	buf := make([]byte, protocol.MaxChunkSize)
+	first := true
+	for {
+		start := 0
+		if first {
+			if msgType == websocket.BinaryMessage {
+				buf[0] = 1
+			} else {
+				buf[0] = 0
+			}
+			start = 1
 		}
-		if err := s.SendRaw(protocol.FlagDAT|protocol.FlagMORE, buf[off:end]); err != nil {
+
+		n, err := io.ReadFull(reader, buf[start:])
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return err
 		}
+		payload := buf[:start+n]
+		more := false
+		if err == nil {
+			if _, peekErr := reader.Peek(1); peekErr == nil {
+				more = true
+			} else if peekErr != io.EOF {
+				return peekErr
+			}
+		}
+		if !more {
+			return s.WriteDAT(payload)
+		}
+		if err := s.SendRaw(protocol.FlagDAT|protocol.FlagMORE, payload); err != nil {
+			return err
+		}
+		first = false
 	}
-	return s.WriteDAT(buf) // only reached for an empty message
+}
+
+func (h *WSHandler) remove(id uint32, want *wsStream) {
+	h.mu.Lock()
+	if h.streams[id] == want {
+		delete(h.streams, id)
+	}
+	h.mu.Unlock()
+}
+
+func (ws *wsStream) setConn(conn *websocket.Conn) bool {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	if ws.ctx.Err() != nil {
+		return false
+	}
+	ws.conn = conn
+	return true
+}
+
+func (ws *wsStream) writeFragment(payload []byte, more bool) error {
+	ws.writeMu.Lock()
+	defer ws.writeMu.Unlock()
+
+	ws.mu.Lock()
+	conn := ws.conn
+	ws.mu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("websocket is not connected")
+	}
+
+	data := payload
+	if ws.writer == nil {
+		if len(payload) < 1 {
+			return fmt.Errorf("websocket fragment is missing its message type")
+		}
+		msgType := websocket.TextMessage
+		switch payload[0] {
+		case 0:
+		case 1:
+			msgType = websocket.BinaryMessage
+		default:
+			return fmt.Errorf("invalid websocket message type %d", payload[0])
+		}
+		writer, err := conn.NextWriter(msgType)
+		if err != nil {
+			return err
+		}
+		ws.writer = writer
+		data = payload[1:]
+	}
+	if err := bytestream.WriteFull(ws.writer, data); err != nil {
+		return err
+	}
+	if !more {
+		err := ws.writer.Close()
+		ws.writer = nil
+		return err
+	}
+	return nil
+}
+
+func (ws *wsStream) close() {
+	ws.cancel()
+	ws.mu.Lock()
+	conn := ws.conn
+	ws.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	ws.writeMu.Lock()
+	if ws.writer != nil {
+		_ = ws.writer.Close()
+		ws.writer = nil
+	}
+	ws.writeMu.Unlock()
 }

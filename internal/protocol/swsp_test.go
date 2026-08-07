@@ -87,3 +87,66 @@ func TestParseFrameTooShort(t *testing.T) {
 		t.Error("expected error for short frame")
 	}
 }
+
+func TestParseFrameRejectsOversizedAndMismatchedPayloads(t *testing.T) {
+	// Accept a legacy peer's valid 16-bit frame even though new senders use
+	// the smaller MaxChunkSize bound.
+	legacy := BuildFrame(1, FlagDAT, make([]byte, MaxChunkSize+1))
+	if _, err := ParseFrame(legacy); err != nil {
+		t.Fatalf("ParseFrame rejected a legacy-sized payload: %v", err)
+	}
+
+	valid := BuildFrame(1, FlagDAT, []byte("ok"))
+	if _, err := ParseFrame(append(valid, 0)); err == nil {
+		t.Fatal("ParseFrame accepted trailing bytes")
+	}
+	if _, err := ParseFrame(valid[:len(valid)-1]); err == nil {
+		t.Fatal("ParseFrame accepted a truncated payload")
+	}
+	if err := ValidateFramePayload(make([]byte, MaxChunkSize+1)); err == nil {
+		t.Fatal("ValidateFramePayload accepted an oversized payload")
+	}
+}
+
+func TestFlowBytes(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame Frame
+		want  uint64
+	}{
+		{name: "syn", frame: Frame{Flags: FlagSYN, Payload: []byte("metadata")}},
+		{name: "syn fin", frame: Frame{Flags: FlagSYN | FlagFIN, Payload: []byte("metadata")}},
+		{name: "dat", frame: Frame{Flags: FlagDAT, Payload: []byte("data")}, want: 4},
+		{name: "more", frame: Frame{Flags: FlagMORE, Payload: []byte("part")}, want: 4},
+		{name: "fin payload", frame: Frame{Flags: FlagFIN, Payload: []byte("tail")}, want: 4},
+		{name: "empty fin", frame: Frame{Flags: FlagFIN}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.frame.FlowBytes(); got != tt.want {
+				t.Fatalf("FlowBytes() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNegotiateSWSPVersion(t *testing.T) {
+	tests := []struct {
+		peer int
+		want int
+	}{
+		{peer: -1, want: 2},
+		{peer: 0, want: 2},
+		{peer: 2, want: 2},
+		{peer: 3, want: 3},
+		{peer: 4, want: 4},
+		{peer: 99, want: SWSPVersion},
+	}
+
+	for _, tt := range tests {
+		if got := NegotiateSWSPVersion(tt.peer); got != tt.want {
+			t.Errorf("NegotiateSWSPVersion(%d) = %d, want %d", tt.peer, got, tt.want)
+		}
+	}
+}

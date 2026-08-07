@@ -252,9 +252,10 @@ func startListener(host string, id *identity.Identity, handlers ...streamtype.St
 				log.Printf("[e2e listener] HandleRequest: %v", err)
 				return
 			}
+			newSession := session.New(c.DC, auth.New(""), false, handlers...)
 			mu.Lock()
 			conn = c
-			sess = session.New(c.DC, auth.New(""), false, handlers...)
+			sess = newSession
 			mu.Unlock()
 			var closeHandlers []func()
 			for _, handler := range handlers {
@@ -262,11 +263,10 @@ func startListener(host string, id *identity.Identity, handlers ...streamtype.St
 					closeHandlers = append(closeHandlers, closer.CloseAll)
 				}
 			}
-			if len(closeHandlers) > 0 {
-				c.OnClose = func() {
-					for _, closeHandler := range closeHandlers {
-						closeHandler()
-					}
+			c.OnClose = func() {
+				newSession.Close()
+				for _, closeHandler := range closeHandlers {
+					closeHandler()
 				}
 			}
 		case "answer":

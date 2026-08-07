@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/protocol"
@@ -58,16 +59,29 @@ func newTestSession(t *testing.T, pin string, handler streamtype.StreamHandler) 
 	t.Helper()
 	captured = &atomic.Int64{}
 	sess = &Session{
-		PIN:           auth.New(pin),
-		handlers:      map[string]streamtype.StreamHandler{handler.Type(): handler},
-		streamHandler: make(map[uint32]streamtype.StreamHandler),
-		reasm:         make(map[uint32][]byte),
+		PIN:      auth.New(pin),
+		handlers: map[string]streamtype.StreamHandler{handler.Type(): handler},
+		streams:  make(map[uint32]*streamState),
+		done:     make(chan struct{}),
 	}
 	sess.sendFrame = func(streamID uint32, flags uint16, payload []byte) error {
 		captured.Add(1)
 		return nil
 	}
+	t.Cleanup(sess.Close)
 	return sess, captured
+}
+
+func waitFor(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 // TestSYNBeforeAuth_Rejected is the regression test for the
@@ -89,9 +103,7 @@ func TestSYNBeforeAuth_Rejected(t *testing.T) {
 	if h.onSYN != 0 {
 		t.Errorf("handler.OnSYN called %d times before auth — gate is broken", h.onSYN)
 	}
-	if sent.Load() == 0 {
-		t.Errorf("session did not emit an error frame for unauthenticated SYN")
-	}
+	waitFor(t, func() bool { return sent.Load() > 0 })
 
 	// Belt-and-suspenders: a DAT on a stream never opened must also
 	// be dropped silently. (handler-nil short-circuit already handles
@@ -164,6 +176,13 @@ func TestSYNAfterAuth_Dispatched(t *testing.T) {
 	syn := protocol.BuildFrame(1, protocol.FlagSYN, []byte(`{"type":"http"}`))
 	sess.HandleMessage(syn)
 
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.onSYN == 1
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.onSYN != 1 {
 		t.Errorf("handler.OnSYN calls = %d, want 1 after ready=true", h.onSYN)
 	}
