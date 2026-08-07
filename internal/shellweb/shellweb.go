@@ -45,11 +45,23 @@ type CapBarItem struct {
 // plain shell, or New(WithCapBar(items)) to inject a hamburger strip
 // at the top of the page (for the launcher tab in serve-all mode).
 type ShellWeb struct {
-	capBar []CapBarItem
+	capBar   []CapBarItem
+	viewOnly bool
 }
 
 // Option configures a ShellWeb at construction time.
 type Option func(*ShellWeb)
+
+// WithViewOnly serves the watch-only variant of the terminal page:
+// shell.js shows a VIEW ONLY badge, disables stdin, and never
+// transmits keystrokes or signals. This is a UX affordance; the
+// listener drops input from view peers regardless (ShellHandler.
+// ViewOnly), and the tmux client is attached read-only behind that.
+func WithViewOnly() Option {
+	return func(s *ShellWeb) {
+		s.viewOnly = true
+	}
+}
 
 // WithCapBar enables the launcher hamburger strip with the given
 // dropdown entries. The strip has no current-cap label next to the
@@ -104,6 +116,12 @@ func (s *ShellWeb) serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := string(raw)
+	if s.viewOnly {
+		// Flag script must land before shell.js so the terminal boots
+		// straight into view mode (no input hooks to un-register).
+		out = strings.Replace(out, `<script src="shell.js"></script>`,
+			"<script>window.BB_VIEW_ONLY = true;</script>\n<script src=\"shell.js\"></script>", 1)
+	}
 	if len(s.capBar) > 0 {
 		out = strings.Replace(out, "<!-- CAP_BAR -->", renderCapBar(s.capBar), 1)
 		// Mark the body so its #terminal shrinks to leave room for the strip.

@@ -60,6 +60,50 @@ bitbang serve proxy localhost:8080   # ...or pin a single target
 
 Each prints a QR code, URL and a pairing code.
 
+### Sharing a running session: `bitbang share`
+
+`serve shell` starts a new shell. `share` publishes a tmux session that is
+already running:
+
+```
+bitbang share                    # publish the current tmux session
+bitbang share --read-only        # publish without a control URL
+bitbang share status|stop|rotate
+```
+
+The command returns after publishing, so `Ctrl-Z`, `bitbang share`, `fg`
+works for a task already in progress. Hosting requires tmux 3.2+ on Unix or
+WSL. Native Windows clients can open the URLs but cannot host a share.
+
+By default, the command prints two bearer URLs:
+
+- The **Control URL** can type with the same authority as the local keyboard.
+  One controller may connect at a time.
+- The **View URL** is watch-only. Input is dropped before it reaches tmux, and
+  up to `--max-viewers` viewers may connect at once (default 16).
+
+`--read-only` omits the control credential entirely. Viewer and controller
+limits are held for each connection's lifetime, even before it opens a shell.
+
+Shares expire after `--ttl` (default `1h`); `--ttl 0` runs until stopped.
+Share URLs are ephemeral and are never saved to `devices.json`. `share stop`,
+TTL expiry, or removal of the source session disconnects remote peers without
+stopping the source session.
+
+Re-running `bitbang share` reprints the running share's URLs. If you
+pass a flag that disagrees with what is running (say `--read-only`
+against a share that has a control URL), it says so rather than
+handing back the old URLs; `bitbang share rotate` replaces the share
+with one that uses the new flags.
+
+A background worker runs in a detached `_bbshare_*` tmux management session,
+so there is no daemon or PID file to manage.
+
+Sharing changes no tmux options. With tmux's default `window-size latest`, the
+window follows the active read-write client; a lone viewer still supplies the
+only available size. If `window-size` has been overridden, `share` reports it
+but does not change the user's configuration.
+
 ### Connecting from a browser
 
 Open the URL. Depending on what's served, you get:
@@ -167,6 +211,8 @@ bitbang serve [flags]                  All capabilities: shell + files + proxy o
 bitbang serve shell [flags]            Shell only
 bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)
 bitbang serve proxy [TARGET] [flags]   HTTP/WebSocket reverse proxy (TARGET pins one host:port)
+bitbang share [flags]                  Publish a running tmux session
+bitbang share status|stop|rotate       Inspect, stop, or replace a share
 bitbang connect <target> [-- cmd …]    Client shell (interactive or one-shot)
 bitbang cp <src> <dst>                 Copy files (one side is <URL>:/path, or '-')
 bitbang version                        Print version (also --version)
@@ -203,6 +249,21 @@ bitbang help                           Usage (also --help, -h)
 | `serve files [PATH]`       | positional `PATH` (default cwd) | `-upload`       |
 
 *(Advanced: `-video-fd N` passes an inherited socketpair FD to an external video helper; for internal/embedding use.)*
+
+### `bitbang share` -- publish a running tmux session
+
+| Flag               | Default           | Description                                                  |
+| ------------------ | ----------------- | ------------------------------------------------------------ |
+| `-read-only`       | off               | Do not generate a control credential                         |
+| `-ttl DURATION`    | `1h`              | Lifetime up to `8760h`; `0` means until stopped              |
+| `-target SESSION`  | enclosing session | Session name or `$id`; required when run outside tmux        |
+| `-socket PATH`     | enclosing server  | tmux socket; needed for a non-default server outside tmux    |
+| `-max-viewers N`   | `16`              | Maximum concurrent view-only peers                           |
+| `-server HOST`     | `bitba.ng`        | Signaling server hostname                                    |
+| `-v`               | off               | Verbose logging                                              |
+
+`share status`, `share stop`, and `share rotate` accept the same target and
+socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 
 ### `bitbang connect <target> [-- command …]` -- client shell
 
@@ -287,11 +348,9 @@ Windows 10 version 1809 or Windows Server 2019 or later.
 
 ## Roadmap
 
-Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus scp-style file copy and **ad-hoc pairing** with a saved device table. Designed and on the way:
+Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, and **terminal sharing** (`bitbang share`). Designed and on the way:
 
 - **Serial bridging** -- drive a remote `/dev/ttyUSB0` from a local virtual port (e.g. run Arduino IDE over the internet). An issue has been opened [here](https://github.com/richlegrand/bitbang-cli/issues/3).
-- **TCP port forwarding** -- `-L 5432:db.internal:5432` to reach LAN-only services. An issue has been opened [here](https://github.com/richlegrand/bitbang-cli/issues/4).
-- **Terminal sharing** -- turn a *running* terminal session into a URL -- walk away mid-task and reopen it on your phone, or hand the link to someone else, perhaps useful for AI coding sessions. An issue has been opened [here](https://github.com/richlegrand/bitbang-cli/issues/5).
 - **Remote desktop** -- screen over a WebRTC video track, keyboard/mouse over the data channel.
 
 ## License
@@ -301,4 +360,3 @@ MIT -- see [LICENSE](LICENSE).
 ## Contributing
 
 Issues and PRs welcome.
-

@@ -6,10 +6,13 @@
 package signaling
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +25,9 @@ import (
 
 // Message is a generic signaling message.
 type Message map[string]interface{}
+
+// ErrPreempted means the server accepted another registration for this UID.
+var ErrPreempted = errors.New("signaling registration was preempted")
 
 // Client manages the WebSocket connection to the signaling server.
 type Client struct {
@@ -64,7 +70,10 @@ type Client struct {
 	// instances racing for the same UID would ping-pong forever.
 	OnPreempted func()
 
-	conn *websocket.Conn
+	ctx    context.Context
+	cancel context.CancelFunc
+	connMu sync.RWMutex
+	conn   *websocket.Conn
 
 	// writeMu serializes WriteJSON. gorilla/websocket forbids concurrent
 	// writes, and we write from both the message-handler goroutine (offers)
@@ -83,11 +92,14 @@ type Client struct {
 // can replace before calling Connect to override.
 func NewClient(server string, id *identity.Identity) *Client {
 	ws := fmt.Sprintf("wss://%s/ws/device/%s", server, id.UID)
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		ID:          id,
 		Server:      server,
 		ServerWS:    ws,
 		OnPreempted: defaultOnPreempted,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -101,7 +113,7 @@ func defaultOnPreempted() {
 }
 
 // URL returns the canonical user-facing URL for this device:
-// ``https://<server>/<uid>#<code>[!<flags>]``. Single source of truth — all
+// "https://<server>/<uid>#<code>[!<flags>]". All
 // consumers (CLI banners, reconnect prints, downstream wrappers) should
 // read this rather than reconstruct it from Server/ID.UID/ID.Code, since
 // the exact shape (fragment placement, flag syntax) is the protocol's
@@ -110,18 +122,35 @@ func defaultOnPreempted() {
 // browsers don't transmit fragments. Grammar and flag list live in
 // CONVENTIONS.md.
 func (c *Client) URL(debug bool) string {
-	s := "https://" + c.Server + "/" + c.ID.UID + "#" + c.ID.Code
 	if debug {
-		s += "!debug"
+		return c.CodeURL(c.ID.Code, "debug")
+	}
+	return c.CodeURL(c.ID.Code)
+}
+
+// CodeURL composes a device URL carrying an explicit access code and
+// fragment flags. Listeners that issue more than one code per identity
+// (bitbang share: control + view) use it directly; URL is the
+// single-code case.
+//
+// Flags are named bare ("ephemeral", "debug") or as "name=value"; the
+// grammar uses one "!" followed by a comma-separated list, as defined by
+// CONVENTIONS.md and bootstrap.js's parseUrlFlags. Keeping it here means no
+// caller has to reproduce it:
+//
+//	https://<server>/<uid>#<code>[!<flag>[,<flag>]*]
+func (c *Client) CodeURL(code string, flags ...string) string {
+	s := "https://" + c.Server + "/" + c.ID.UID + "#" + code
+	if len(flags) > 0 {
+		s += "!" + strings.Join(flags, ",")
 	}
 	return s
 }
 
 // Connect connects to the signaling server and registers. On success, it
-// calls handler for each incoming message. Reconnects automatically on
-// disconnection — unless the server reports another instance has
-// preempted us, in which case it returns and stays returned.
-func (c *Client) Connect(handler func(msg Message)) {
+// calls handler for each incoming message. It reconnects automatically until
+// Stop is called or another instance preempts this registration.
+func (c *Client) Connect(handler func(msg Message)) error {
 	for {
 		err := c.connectOnce(handler)
 		if c.preempted {
@@ -129,11 +158,20 @@ func (c *Client) Connect(handler func(msg Message)) {
 			// would just kick them out and trigger their reconnect, ad
 			// infinitum. The OnPreempted callback has already fired
 			// inside the message loop; nothing more to do here.
-			return
+			return ErrPreempted
+		}
+		if c.ctx.Err() != nil {
+			return nil
 		}
 		if err != nil {
 			log.Printf("Connection lost: %v, retrying in 3s...", err)
-			time.Sleep(3 * time.Second)
+			timer := time.NewTimer(3 * time.Second)
+			select {
+			case <-timer.C:
+			case <-c.ctx.Done():
+				timer.Stop()
+				return nil
+			}
 		}
 	}
 }
@@ -147,15 +185,29 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
 		HandshakeTimeout: 10 * time.Second,
 	}
-	conn, _, err := dialer.Dial(c.ServerWS, nil)
+	conn, _, err := dialer.DialContext(c.ctx, c.ServerWS, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	defer conn.Close()
+	c.connMu.Lock()
+	if c.ctx.Err() != nil {
+		c.connMu.Unlock()
+		_ = conn.Close()
+		return c.ctx.Err()
+	}
 	c.conn = conn
+	c.connMu.Unlock()
+	defer func() {
+		c.connMu.Lock()
+		if c.conn == conn {
+			c.conn = nil
+		}
+		c.connMu.Unlock()
+		_ = conn.Close()
+	}()
 
 	// Register
-	if err := c.register(); err != nil {
+	if err := c.register(conn); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
 	// Single-word post-register marker so a watcher (test harness, log
@@ -198,15 +250,30 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 
 // Send sends a JSON message to the signaling server.
 func (c *Client) Send(msg Message) error {
-	if c.conn == nil {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+	if conn == nil {
 		return fmt.Errorf("not connected")
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.conn.WriteJSON(msg)
+	return conn.WriteJSON(msg)
 }
 
-func (c *Client) register() error {
+// Stop interrupts an active connection or reconnect delay. It is safe to call
+// more than once.
+func (c *Client) Stop() {
+	c.cancel()
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
+func (c *Client) register(conn *websocket.Conn) error {
 	// Send registration with public key and protocol version. want_code is
 	// additive in v3.x — the server returns a 6-digit code in the
 	// registered reply when both we set it and the server has the pairing
@@ -222,14 +289,14 @@ func (c *Client) register() error {
 		reg["want_code"] = true
 	}
 	c.writeMu.Lock()
-	err := c.conn.WriteJSON(reg)
+	err := conn.WriteJSON(reg)
 	c.writeMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("send register: %w", err)
 	}
 
 	var msg Message
-	if err := c.conn.ReadJSON(&msg); err != nil {
+	if err := conn.ReadJSON(&msg); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
 

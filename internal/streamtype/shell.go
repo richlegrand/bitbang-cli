@@ -236,10 +236,33 @@ type ShellHandler struct {
 	// /bin/bash`). Empty means "use $SHELL, or /bin/sh if unset."
 	DefaultArgv []string
 
-	// ForcedArgv, if non-nil, locks every connection to this exact
-	// argv. Set by `bitbang run` for service-style listeners that
-	// expose only one command. Client-supplied argv is ignored.
+	// ForcedArgv, when non-empty, locks every connection to this exact
+	// command. It also ignores client-supplied argv, environment, and cwd.
 	ForcedArgv []string
+
+	// ForcedEnv is the environment used verbatim when ForcedArgv is
+	// set. Nil means "inherit the listener's own environment". Ignored
+	// when ForcedArgv is empty.
+	ForcedEnv []string
+
+	// ViewOnly drops stdin, signals, and stdin EOF at the transport layer.
+	// Resize stays enabled so each viewer's own PTY matches their terminal;
+	// that is per-peer and only becomes a shared-state question when peers
+	// attach to one terminal (bitbang share). There the cross-peer guarantee
+	// is tmux's, not ours: viewers attach with `tmux attach -r`, which since
+	// tmux 3.2 is an alias for read-only,ignore-size, and ignore-size means a
+	// client cannot affect the size of other clients. The >= 3.2 floor is
+	// enforced by share.CheckVersion (wired at cmd/bitbang/share.go), so -r
+	// always carries ignore-size. Pinned by TestViewerAttachesReadOnly and
+	// TestViewerCannotResizeWhileControlAttached.
+	ViewOnly bool
+
+	// AcquireSlot, if non-nil, replaces the process-wide MaxConcurrent
+	// gate with a caller-owned admission policy (bitbang share: one
+	// controller slot, N viewer slots). Return a non-nil release func
+	// to admit the stream. It is called exactly once when the stream
+	// finishes. Return nil plus a client-facing message to refuse it.
+	AcquireSlot func() (release func(), errMsg string)
 
 	// MaxConcurrent caps the number of simultaneously-active shell
 	// streams across the whole process (not per-session). 0 = no
@@ -260,6 +283,7 @@ type ShellHandler struct {
 
 	mu                 sync.Mutex
 	streams            map[uint32]*shellSession
+	closed             bool
 	outputDrainTimeout time.Duration
 }
 
@@ -275,6 +299,7 @@ type shellSession struct {
 	ptyFile ptylib.Pty     // PTY mode: master side, used for read + write
 	stdin   io.WriteCloser // pipe mode: dedicated stdin pipe
 	output  *shellOutput   // drain output before FIN and terminal close
+	done    chan struct{}
 }
 
 func (s *shellSession) wait() error {
@@ -333,19 +358,16 @@ func NewShell(defaultArgv []string, verbose bool) *ShellHandler {
 func (h *ShellHandler) Type() string             { return "shell" }
 func (h *ShellHandler) OnConnect(_ string) error { return nil }
 
-// KillAll sends SIGHUP to every active shell process this handler is
-// tracking. Called by the listener wire-up when the underlying data
-// channel closes — without it, processes outlive the connection,
-// keep holding their max-sessions slot, and the next connector hits
-// "listener is busy."
-//
-// SIGHUP is the conventional "your terminal went away" signal. bash
-// and most shells exit cleanly on it. The actual cleanup (FIN
-// emission, slot release, map removal) still flows through
-// waitAndFinish — that goroutine unblocks once cmd.Wait sees the
-// process exit.
-func (h *ShellHandler) KillAll() {
+// Close prevents future spawns and terminates every active process. It first
+// requests platform-appropriate termination, then force-kills after a bounded
+// grace period. The lock covers process start and registration.
+func (h *ShellHandler) Close() {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
 	sessions := make([]*shellSession, 0, len(h.streams))
 	for _, sess := range h.streams {
 		sessions = append(sessions, sess)
@@ -354,6 +376,35 @@ func (h *ShellHandler) KillAll() {
 	for _, sess := range sessions {
 		if sess.process != nil {
 			_ = terminateShellProcess(sess.process)
+		}
+	}
+	if len(sessions) == 0 {
+		return
+	}
+
+	grace := time.NewTimer(2 * time.Second)
+	defer grace.Stop()
+	for i, sess := range sessions {
+		select {
+		case <-sess.done:
+		case <-grace.C:
+			// A process may ignore SIGHUP. Do not let it retain a shell or
+			// admission slot after its connection is gone.
+			for _, remaining := range sessions[i:] {
+				if remaining.process != nil {
+					_ = remaining.process.Kill()
+				}
+			}
+			killWait := time.NewTimer(time.Second)
+			defer killWait.Stop()
+			for _, remaining := range sessions[i:] {
+				select {
+				case <-remaining.done:
+				case <-killWait.C:
+					return
+				}
+			}
+			return
 		}
 	}
 }
@@ -378,30 +429,39 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		return nil
 	}
 
-	// Max-concurrent gate. Atomic check-then-increment with rollback
-	// if we lose the race; on the happy path waitAndFinish decrements.
-	// slotTaken tracks whether we own a slot that still needs
-	// releasing; the defer below releases it on any early-return path
-	// (spawn failed, bad config, …) but we clear slotTaken once
-	// waitAndFinish is launched and assumes ownership.
-	slotTaken := false
-	if h.MaxConcurrent > 0 {
+	// Admission gate. AcquireSlot (caller-owned policy) wins when set;
+	// otherwise the process-wide MaxConcurrent atomic. Either way,
+	// `release` owns the slot: the defer below releases it on any
+	// early-return path (spawn failed or bad config) and is cleared
+	// once waitAndFinish is launched and assumes ownership.
+	var release func()
+	if h.AcquireSlot != nil {
+		rel, errMsg := h.AcquireSlot()
+		if rel == nil {
+			log.Printf("Shell rejected: %s", errMsg)
+			h.sendShellError(s, errMsg)
+			return nil
+		}
+		release = rel
+	} else if h.MaxConcurrent > 0 {
 		if int(activeShellCount.Add(1)) > h.MaxConcurrent {
 			activeShellCount.Add(-1)
 			log.Printf("Shell rejected: at max-sessions=%d", h.MaxConcurrent)
 			h.sendShellError(s, fmt.Sprintf("listener is busy (max %d concurrent shell session(s))", h.MaxConcurrent))
 			return nil
 		}
-		slotTaken = true
+		release = func() { activeShellCount.Add(-1) }
 	}
+	deferredRelease := release
 	defer func() {
-		if slotTaken {
-			activeShellCount.Add(-1)
+		if deferredRelease != nil {
+			deferredRelease()
 		}
 	}()
 
 	// Resolve argv: restricted-mode ours, otherwise client's, otherwise
 	// default, otherwise $SHELL, otherwise /bin/sh.
+	restricted := len(h.ForcedArgv) > 0
 	argv := h.ForcedArgv
 	if len(argv) == 0 {
 		argv = open.Argv
@@ -414,12 +474,23 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = os.Environ()
-	for k, v := range open.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	if open.Cwd != "" {
-		cmd.Dir = open.Cwd
+	if restricted {
+		// Forced argv forces the whole spawn: the client's env and cwd
+		// are ignored, or a connector could still steer the pinned
+		// command via PATH, loader variables, or its working directory.
+		if h.ForcedEnv != nil {
+			cmd.Env = h.ForcedEnv
+		} else {
+			cmd.Env = os.Environ()
+		}
+	} else {
+		cmd.Env = os.Environ()
+		for k, v := range open.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		if open.Cwd != "" {
+			cmd.Dir = open.Cwd
+		}
 	}
 
 	// Defaults: PTY off if the client didn't set it (non-interactive is
@@ -433,8 +504,23 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		rows = 24
 	}
 
-	sess := &shellSession{output: newShellOutput()}
+	sess := &shellSession{output: newShellOutput(), done: make(chan struct{})}
 	var stdout, stderr io.Reader
+
+	// Starting and publishing a process is one operation with respect to
+	// Close. If Close wins this lock, no command is executed; if OnSYN wins,
+	// the process is registered before Close can take its snapshot.
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		h.sendShellError(s, "connection is closed")
+		return nil
+	}
+	if h.streams[s.ID()] != nil {
+		h.mu.Unlock()
+		h.sendShellError(s, "a shell is already open on this stream")
+		return nil
+	}
 
 	ptyMode := open.PTY && platformSupportsPTY
 	if ptyMode {
@@ -443,11 +529,13 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		// reads passwords with echo off, etc.
 		terminal, err := ptylib.New()
 		if err != nil {
+			h.mu.Unlock()
 			h.sendShellError(s, "pty failed: "+err.Error())
 			return nil
 		}
 		if err := terminal.Resize(cols, rows); err != nil {
 			_ = terminal.Close()
+			h.mu.Unlock()
 			h.sendShellError(s, "pty resize failed: "+err.Error())
 			return nil
 		}
@@ -456,6 +544,7 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		ptyCmd.Dir = cmd.Dir
 		if err := ptyCmd.Start(); err != nil {
 			_ = terminal.Close()
+			h.mu.Unlock()
 			h.sendShellError(s, "spawn failed: "+err.Error())
 			return nil
 		}
@@ -469,23 +558,31 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		// `bitbang connect URL -- ls /var/log`).
 		sin, err := cmd.StdinPipe()
 		if err != nil {
+			h.mu.Unlock()
 			h.sendShellError(s, "stdin pipe: "+err.Error())
 			return nil
 		}
 		sout, err := cmd.StdoutPipe()
 		if err != nil {
 			_ = sin.Close()
+			h.mu.Unlock()
 			h.sendShellError(s, "stdout pipe: "+err.Error())
 			return nil
 		}
 		serr, err := cmd.StderrPipe()
 		if err != nil {
 			_ = sin.Close()
+			h.mu.Unlock()
 			h.sendShellError(s, "stderr pipe: "+err.Error())
 			return nil
 		}
 		if err := cmd.Start(); err != nil {
+			// Wait never runs, so the parent ends of the pipes are
+			// ours to close.
 			_ = sin.Close()
+			_ = sout.Close()
+			_ = serr.Close()
+			h.mu.Unlock()
 			h.sendShellError(s, "spawn failed: "+err.Error())
 			return nil
 		}
@@ -496,7 +593,6 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		stderr = serr
 	}
 
-	h.mu.Lock()
 	h.streams[s.ID()] = sess
 	h.mu.Unlock()
 
@@ -504,9 +600,9 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 
 	// Spin up the output pumps and the wait/FIN goroutine. Each runs
 	// independently; the wait goroutine cleans up shared state and
-	// releases the max-concurrent slot. We clear slotTaken here so
+	// releases the admission slot. We clear deferredRelease here so
 	// the local defer doesn't double-release.
-	slotTaken = false
+	deferredRelease = nil
 	sess.output.Add(1)
 	go func() {
 		defer sess.output.Done()
@@ -519,9 +615,9 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 			h.pumpReader(s, stderr, shellTagStderr, sess.output.cancelled())
 		}()
 	}
-	go h.waitAndFinish(s, sess, argv, h.MaxConcurrent > 0)
+	go h.waitAndFinish(s, sess, argv, release)
 
-	if final {
+	if final && !h.ViewOnly {
 		// SYN|FIN means the client won't send any stdin. For pipe mode
 		// we close the stdin pipe so the process sees EOF; for PTY mode
 		// the process gets nothing on the input fd but the master stays
@@ -606,12 +702,18 @@ func (h *ShellHandler) OnDAT(s Stream, payload []byte) error {
 
 	switch tag {
 	case shellTagStdin:
+		if h.ViewOnly {
+			return nil
+		}
 		sess.writeInput(body)
 	case shellTagSignal:
 		// In PTY mode, Ctrl-C usually arrives as byte 0x03 in stdin and
 		// the kernel converts it to SIGINT — this explicit path is
 		// mostly for non-PTY clients and for signals that don't map to
 		// a control character (SIGHUP, SIGUSR1, etc.).
+		if h.ViewOnly {
+			return nil
+		}
 		if sig := signalFromName(string(body)); sig != nil && sess.process != nil {
 			_ = sess.process.Signal(sig)
 		}
@@ -628,8 +730,12 @@ func (h *ShellHandler) OnDAT(s Stream, payload []byte) error {
 
 // OnFIN closes the process's stdin (signaling EOF for non-interactive
 // commands like `cat` to finish). The process exit is tracked
-// separately by waitAndFinish.
+// separately by waitAndFinish. View-only peers get no stdin-EOF side
+// effect either; their FIN is just "stopped watching".
 func (h *ShellHandler) OnFIN(s Stream, _ []byte) error {
+	if h.ViewOnly {
+		return nil
+	}
 	h.closeStdin(s.ID())
 	return nil
 }
@@ -659,14 +765,14 @@ func (h *ShellHandler) detachSession(streamID uint32, running *shellSession) pty
 
 // waitAndFinish blocks on cmd.Wait(), then emits the FIN trailer with
 // the exit code and any terminating signal. Also cleans up per-stream
-// state (PTY fd, map entry) and — if releaseSlot is true — releases
-// the max-concurrent slot that OnSYN reserved.
-func (h *ShellHandler) waitAndFinish(s Stream, running *shellSession, argv []string, releaseSlot bool) {
+// state and releases the admission slot reserved by OnSYN.
+func (h *ShellHandler) waitAndFinish(s Stream, running *shellSession, argv []string, release func()) {
 	err := running.wait()
 	terminal := h.detachSession(s.ID(), running)
-	if releaseSlot {
-		activeShellCount.Add(-1)
+	if release != nil {
+		release()
 	}
+	close(running.done)
 
 	// Process exit and output EOF are separate events. Platform-specific PTY
 	// shutdown drains the final bytes before FIN closes the browser stream.

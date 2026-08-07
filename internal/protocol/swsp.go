@@ -42,6 +42,17 @@ const (
 	SWSPVersion = 3
 )
 
+// Access is the role granted to a peer during credential verification.
+// Empty access preserves the behavior of listeners with one undifferentiated
+// credential.
+type Access string
+
+const (
+	AccessDefault Access = ""
+	AccessControl Access = "control"
+	AccessView    Access = "view"
+)
+
 // Frame represents a single SWSP frame.
 type Frame struct {
 	StreamID uint32

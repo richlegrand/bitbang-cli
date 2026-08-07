@@ -17,7 +17,10 @@ export BITBANG_TEST_SERVER="${BITBANG_TEST_SERVER:-test.bitba.ng}"
 case "${1:-all}" in
     unit)
         echo "Running unit tests..."
-        go test ./internal/... -v
+        # ./... rather than ./internal/...; the latter silently skips
+        # every test under cmd/bitbang (arg reordering, serve-mode
+        # routing, the device table, share state), which is what CI runs.
+        go test ./... -v
         ;;
     e2e)
         echo "Running E2E tests..."
@@ -30,7 +33,10 @@ case "${1:-all}" in
         ;;
     all)
         echo "Running unit tests..."
-        go test ./internal/... -v
+        # ./... rather than ./internal/...; the latter silently skips
+        # every test under cmd/bitbang (arg reordering, serve-mode
+        # routing, the device table, share state), which is what CI runs.
+        go test ./... -v
         echo ""
         echo "Running E2E tests..."
         mkdir -p tests/e2e/screenshots

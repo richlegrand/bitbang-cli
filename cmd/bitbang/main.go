@@ -1,5 +1,6 @@
-// Command bitbang is the BitBang CLI: a single binary with a listener
-// entrypoint (`serve`) and two client subcommands (`cp`, `connect`).
+// Command bitbang is the BitBang CLI. It can serve a shell, files, and
+// HTTP endpoints; connect to another listener; copy files; or publish a
+// running tmux session.
 //
 // Usage:
 //
@@ -7,6 +8,8 @@
 //	bitbang serve shell [flags]                   # shell + TCP forwarding
 //	bitbang serve files [PATH] [flags]            # files only, PATH defaults to cwd
 //	bitbang serve proxy [flags]                   # proxy only (HTTP reverse proxy)
+//	bitbang share [flags]                         # publish the current tmux session
+//	bitbang share status|stop|rotate              # manage a running share
 //	bitbang cp <src> <dst>                        (one side is <URL>:/path, or `-`)
 //	bitbang connect <URL> [-- argv]               # shell or command
 //	bitbang connect <URL> -L port:host:port       # forwarding only
@@ -45,6 +48,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		dispatchServe(os.Args[2:])
+	case "share":
+		dispatchShare(os.Args[2:])
 	case "cp":
 		runCp(os.Args[2:])
 	case "connect":
@@ -91,10 +96,12 @@ func printUsage() {
 	fmt.Println("  bitbang serve shell [flags]            Shell + CLI TCP forwarding")
 	fmt.Println("  bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)")
 	fmt.Println("  bitbang serve proxy [flags]            Proxy only (HTTP reverse proxy)")
+	fmt.Println("  bitbang share [flags]                  Publish the current tmux session as a URL")
+	fmt.Println("  bitbang share status|stop|rotate       Manage a running share")
 	fmt.Println("  bitbang cp <src> <dst>                 Copy files (one side is <URL>:/path, or '-')")
 	fmt.Println("  bitbang connect <URL-or-code> [-- ...]  Open a shell or run a command")
 	fmt.Println("  bitbang connect <URL-or-code> -L port:host:port [-L ...] [-g]")
 	fmt.Println("                                             Hold local TCP forwards without a shell")
 	fmt.Println()
-	fmt.Println("Run `bitbang serve --help` (or with a mode) for the available flags.")
+	fmt.Println("Run a command with `--help` for its available flags.")
 }

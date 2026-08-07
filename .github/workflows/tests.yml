@@ -22,6 +22,10 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Install tmux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
       # ./... rather than ./internal/... -- the latter silently skipped
       # every test under cmd/bitbang (arg reordering, serve-mode routing,
       # the known-hosts device table, remote-spec parsing), which is the

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 
@@ -35,6 +36,12 @@ type Session struct {
 	// doesn't advertise it).
 	ServerCaps    []string
 	ServerVersion int
+
+	// ServerAccess is the per-peer access level from `ready` ("control"
+	// or "view" for a bitbang share; "" from listeners without roles).
+	// Advisory for UX only: a "view" client should stop transmitting
+	// input, but the listener enforces the role regardless.
+	ServerAccess protocol.Access
 
 	nextStreamID uint32
 	mu           sync.Mutex
@@ -68,6 +75,44 @@ func newSession(p *Peer) *Session {
 	}
 }
 
+// handshakeTimeout bounds each wait for a control frame during the
+// post-DTLS handshake. The listener answers verify/connect
+// immediately, so this only has to cover a slow link; the clock is
+// restarted after every frame received and after an interactive PIN
+// prompt returns, so a human typing slowly can't trip it.
+const handshakeTimeout = 30 * time.Second
+
+// recvControl waits for the next handshake frame, distinguishing the
+// three ways the wait can end. Without the DCClosed and timeout arms
+// a listener that rejects the connection (wrong access code, expired
+// share, or fingerprint mismatch) closes the channel without ever
+// sending a frame, and the client blocks forever.
+func recvControl(p *Peer, timeout time.Duration) ([]byte, error) {
+	// Prefer a buffered frame over a close that landed alongside it,
+	// so a listener's final message isn't lost to a random select.
+	select {
+	case msg, ok := <-p.DCMessages():
+		if ok {
+			return msg, nil
+		}
+		return nil, errors.New("data channel closed during handshake")
+	default:
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case msg, ok := <-p.DCMessages():
+		if !ok {
+			return nil, errors.New("data channel closed during handshake")
+		}
+		return msg, nil
+	case <-p.DCClosed():
+		return nil, errors.New("listener closed the connection without completing verification; the access code is wrong or no longer valid")
+	case <-timer.C:
+		return nil, fmt.Errorf("listener did not complete the handshake within %s", timeout)
+	}
+}
+
 // handshake runs the client-side control protocol after the data channel
 // opens: verify_nonce_hash → connect → (auth_required + auth)* → ready.
 // Returns once `ready` arrives or the channel dies.
@@ -77,9 +122,9 @@ func newSession(p *Peer) *Session {
 // implementation that uses golang.org/x/term to hide the input.
 func (s *Session) handshake(p *Peer, path string, caps []string, pinPrompt func(retry int) (string, error)) error {
 	// 1. verify_nonce_hash must be the *first* control frame.
-	first, ok := <-p.DCMessages()
-	if !ok {
-		return errors.New("data channel closed before verify")
+	first, err := recvControl(p, handshakeTimeout)
+	if err != nil {
+		return err
 	}
 	frame, err := protocol.ParseFrame(first)
 	if err != nil {
@@ -123,9 +168,9 @@ func (s *Session) handshake(p *Peer, path string, caps []string, pinPrompt func(
 	// a small cap.
 	retry := 0
 	for {
-		msg, ok := <-p.DCMessages()
-		if !ok {
-			return errors.New("data channel closed during handshake")
+		msg, err := recvControl(p, handshakeTimeout)
+		if err != nil {
+			return err
 		}
 		f, err := protocol.ParseFrame(msg)
 		if err != nil {
@@ -141,11 +186,12 @@ func (s *Session) handshake(p *Peer, path string, caps []string, pinPrompt func(
 			continue
 		}
 		var ctl struct {
-			Type          string   `json:"type"`
-			Message       string   `json:"message"`
-			Success       bool     `json:"success"`
-			Caps          []string `json:"caps"`
-			ServerVersion int      `json:"server_version"`
+			Type          string          `json:"type"`
+			Message       string          `json:"message"`
+			Success       bool            `json:"success"`
+			Caps          []string        `json:"caps"`
+			ServerVersion int             `json:"server_version"`
+			Access        protocol.Access `json:"access"`
 		}
 		_ = json.Unmarshal(f.Payload, &ctl)
 
@@ -153,6 +199,7 @@ func (s *Session) handshake(p *Peer, path string, caps []string, pinPrompt func(
 		case "ready":
 			s.ServerCaps = ctl.Caps
 			s.ServerVersion = ctl.ServerVersion
+			s.ServerAccess = ctl.Access
 			if s.ServerVersion == 0 {
 				// v2 listeners send {type:"ready"} with no version.
 				s.ServerVersion = 2

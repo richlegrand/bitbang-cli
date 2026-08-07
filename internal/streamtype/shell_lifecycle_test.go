@@ -115,7 +115,7 @@ func TestWaitAndFinishBackpressureStillCompletesSession(t *testing.T) {
 	h := NewShell(nil, false)
 	h.outputDrainTimeout = 20 * time.Millisecond
 	terminal := &synchronizedLifecyclePTY{}
-	sess := &shellSession{cmd: cmd, process: cmd.Process, ptyFile: terminal, output: output}
+	sess := &shellSession{cmd: cmd, process: cmd.Process, ptyFile: terminal, output: output, done: make(chan struct{})}
 	h.streams[stream.id] = sess
 	previousActive := activeShellCount.Swap(1)
 	defer activeShellCount.Store(previousActive)
@@ -124,7 +124,7 @@ func TestWaitAndFinishBackpressureStillCompletesSession(t *testing.T) {
 		defer output.Done()
 		h.pumpReader(stream, strings.NewReader("blocked"), shellTagStdout, output.cancelled())
 	}()
-	go h.waitAndFinish(stream, sess, []string{"helper"}, true)
+	go h.waitAndFinish(stream, sess, []string{"helper"}, func() { activeShellCount.Add(-1) })
 
 	select {
 	case <-stream.fin:

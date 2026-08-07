@@ -19,6 +19,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/client"
+	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang/internal/signaling"
 	"github.com/richlegrand/bitbang/internal/tcpforward"
 )
 
@@ -146,9 +148,11 @@ func parseConnectOptions(args []string, output io.Writer) (connectOptions, error
 //     then continues into the same direct connect using the obtained creds.
 //   - Anything else → URL flow. Opens a remote shell to the listener.
 //
-// Every successful connection is recorded in the table (see recordDevice).
-// Pass -name to choose the stored name; without it an auto name (device<N>)
-// is assigned and printed.
+// Successful connections are recorded in the table (see recordDevice),
+// except for URLs carrying the !ephemeral flag: a `bitbang share` link
+// dies with the share, so saving it would leave a device entry that
+// never works again. Pass -name to choose the stored name; without it
+// an auto name (device<N>) is assigned and printed.
 //
 // Mode auto-detection (URL flow only):
 //   - Forwarding: one or more -L mappings are given. Open the local listeners
@@ -180,11 +184,18 @@ func runConnect(args []string) {
 	}
 	urlArg := opts.target
 
+	// Parse the URL shape first, because whether -name means anything
+	// depends on it: an ephemeral share URL is never saved, so its name
+	// is ignored either way and a name clash is not worth failing over.
+	urlSpec, isURL := parseConnectURL(urlArg)
+	isURL = isURL && !looksLikeDeviceName(urlArg) && !pairCodePattern.MatchString(urlArg)
+	ephemeralURL := isURL && urlSpec.Ephemeral
+
 	// Validate -name up front so a bad or already-taken name fails fast,
 	// before any pairing or dialing. The authoritative checks live in
 	// recordDevice (it knows the UID), but catching the common mistakes here
 	// spares the operator a pointless handshake.
-	if opts.name != "" {
+	if opts.name != "" && !ephemeralURL {
 		if err := validateDeviceName(opts.name); err != nil {
 			fail("connect: %v", err)
 		}
@@ -227,7 +238,7 @@ func runConnect(args []string) {
 		saved = true
 	default:
 		var ok bool
-		rs, ok = parseConnectURL(urlArg)
+		rs, ok = urlSpec, isURL
 		if !ok {
 			fail("connect: %q is not a saved device name, a 6-digit pair code, or a valid URL", urlArg)
 		}
@@ -252,9 +263,17 @@ func runConnect(args []string) {
 	fmt.Fprintln(os.Stderr, "Connected.")
 
 	// URL-flow hosts are remembered once we've actually connected. Pair and
-	// name-resolved hosts are already saved (see above).
+	// name-resolved hosts are already saved (see above). !ephemeral URLs
+	// (bitbang share) carry credentials that die with the share; never
+	// saved.
 	if !saved {
-		recordAndReport(rs, opts.name)
+		if rs.Ephemeral {
+			if opts.name != "" {
+				fmt.Fprintln(os.Stderr, "Not saving: this is an ephemeral share URL (-name ignored).")
+			}
+		} else {
+			recordAndReport(rs, opts.name)
+		}
 	}
 	if forwarder != nil {
 		signals := make(chan os.Signal, 1)
@@ -289,9 +308,15 @@ func runConnect(args []string) {
 	// os.Exit, which skips defers — so we call restore explicitly
 	// before each os.Exit (sync.Once inside makes double-calls safe).
 	restore := func() {}
-	if interactive {
+	switch {
+	case sess.ServerAccess == protocol.AccessView:
+		// A share's view URL: output only. No raw mode; the local
+		// terminal keeps cooked semantics, so Ctrl-C disconnects
+		// instead of becoming an input byte nobody transmits.
+		setupViewOnly(&shellOpts)
+	case interactive:
 		restore = setupInteractive(&shellOpts)
-	} else {
+	default:
 		setupNonInteractive(&shellOpts)
 	}
 
@@ -385,6 +410,38 @@ func setupInteractive(opts *client.ShellOptions) func() {
 	return restore
 }
 
+// setupViewOnly configures a watch-only session (a bitbang share view
+// URL, where the listener granted access="view"). Nothing is
+// transmitted but the terminal size: stdin is dropped and no signals
+// are forwarded, matching what the listener would enforce anyway.
+// Resizes still go out because they only size this viewer's own PTY on
+// the far side. Without them the remote grid would not match the local
+// window and the rendering would wrap wrongly.
+func setupViewOnly(opts *client.ShellOptions) {
+	opts.Stdin = nil
+	opts.PTY = true
+	fmt.Fprintln(os.Stderr, "View-only session: watching, input is not transmitted. Ctrl-C to disconnect.")
+
+	if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		opts.Cols = cols
+		opts.Rows = rows
+	}
+	resizes := make(chan client.ShellSize, 4)
+	winch := make(chan os.Signal, 4)
+	notifyWindowChanges(winch)
+	go func() {
+		for range winch {
+			if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+				select {
+				case resizes <- client.ShellSize{Cols: cols, Rows: rows}:
+				default:
+				}
+			}
+		}
+	}()
+	opts.Resizes = resizes
+}
+
 // setupNonInteractive wires Ctrl-C / SIGTERM / SIGHUP to the explicit
 // signal-forwarding channel. The local terminal stays in cooked mode;
 // pipes flow through unmodified.
@@ -463,8 +520,8 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 // path is meaningless — a shell stream doesn't address a path.
 //
 // Fragment grammar (see CONVENTIONS.md): `<code>[!<flags>][/<device-URL>]`.
-// For `bitbang connect` the flags and device-URL are irrelevant — we take
-// only the code, stopping at the first `!` or `/`.
+// The device-URL part is irrelevant for connect; of the flags,
+// "ephemeral" (bitbang share URLs) suppresses the devices.json save.
 func parseConnectURL(arg string) (remoteSpec, bool) {
 	urlPart := arg
 	if !strings.Contains(urlPart, "://") {
@@ -485,13 +542,11 @@ func parseConnectURL(arg string) (remoteSpec, bool) {
 	if uid == "" {
 		return remoteSpec{}, false
 	}
-	code := u.Fragment
-	if i := strings.IndexAny(code, "!/"); i >= 0 {
-		code = code[:i]
-	}
+	code, flags := signaling.ParseFragment(u.Fragment)
 	return remoteSpec{
-		Server: u.Host,
-		UID:    uid,
-		Code:   code,
+		Server:    u.Host,
+		UID:       uid,
+		Code:      code,
+		Ephemeral: signaling.HasFlag(flags, "ephemeral"),
 	}, true
 }

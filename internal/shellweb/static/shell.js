@@ -29,8 +29,13 @@
   const container = document.getElementById("terminal");
   container.innerHTML = ""; // clear loading message
 
+  // View mode disables input in the UI. The device enforces the same role;
+  // resize remains enabled so the remote PTY matches this viewport.
+  const viewOnly = !!window.BB_VIEW_ONLY;
+
   const term = new Terminal({
-    cursorBlink: true,
+    cursorBlink: !viewOnly,
+    disableStdin: viewOnly,
     fontFamily: 'Menlo, Monaco, "DejaVu Sans Mono", monospace',
     fontSize: 15,
     // Heavier stems so 1px-thin glyph features don't get antialiased away
@@ -63,9 +68,20 @@
   const TAG_SIGNAL = 3;
   const TAG_RESIZE = 4;
 
+  if (viewOnly) {
+    const badge = document.createElement("div");
+    badge.textContent = "VIEW ONLY";
+    badge.style.cssText =
+      "position:fixed;top:6px;right:10px;z-index:100;" +
+      "padding:2px 8px;border-radius:3px;background:#333;color:#bbb;" +
+      'font-family:-apple-system,"Segoe UI",Roboto,sans-serif;' +
+      "font-size:11px;letter-spacing:1px;pointer-events:none;";
+    document.body.appendChild(badge);
+  }
+
   ws.onopen = () => {
     fit.fit(); // recompute size now that the WS is up
-    term.focus();
+    if (!viewOnly) term.focus();
   };
 
   // Inbound bytes from the device: [tag][payload]. bootstrap.js
@@ -123,6 +139,7 @@
 
   // User keystrokes → stdin bytes, prefixed with the stdin tag.
   term.onData((data) => {
+    if (viewOnly) return;
     if (ws.readyState !== WebSocket.OPEN) return;
     const stdinBytes = new TextEncoder().encode(data);
     const buf = new Uint8Array(1 + stdinBytes.length);
@@ -144,5 +161,7 @@
   // Window resize → fit, which triggers term.onResize above.
   window.addEventListener("resize", () => fit.fit());
 
-  container.addEventListener("click", () => term.focus());
+  if (!viewOnly) {
+    container.addEventListener("click", () => term.focus());
+  }
 })();

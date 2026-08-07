@@ -27,6 +27,14 @@ type Session struct {
 	PIN     *auth.PINAuth
 	Verbose bool
 
+	// Access is the access level this peer was granted at answer
+	// verification time ("control" or "view" for bitbang share; "" for
+	// listeners without per-peer roles). Set once before the data channel
+	// opens, never after. Non-empty values are advertised additively on
+	// the `ready` message so clients can adapt (e.g. stop transmitting
+	// input in view mode); enforcement lives in the handlers, not here.
+	Access protocol.Access
+
 	// handlers is the set of registered StreamHandlers, keyed by their
 	// Type() string. Populated once at session creation; not modified
 	// after the data channel opens.

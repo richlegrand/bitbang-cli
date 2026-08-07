@@ -464,6 +464,13 @@ func startListener(cfg serveConfig) {
 		switch msgType {
 		case "request":
 			clientID, _ := msg["client_id"].(string)
+			mu.Lock()
+			duplicate := connections[clientID] != nil
+			mu.Unlock()
+			if clientID == "" || duplicate {
+				log.Printf("Rejecting duplicate or empty client ID %q", clientID)
+				return
+			}
 			// Real browser IP from the signaling server (never client-set);
 			// stamped as X-Forwarded-For on proxied requests so the backend
 			// sees the true origin instead of our localhost socket peer.
@@ -549,15 +556,37 @@ func startListener(cfg serveConfig) {
 			unauthSessions.Add(1)
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { unauthSessions.Add(-1) }) }
-			sess.OnReady = release
+
+			forget := func() {
+				mu.Lock()
+				if connections[clientID] == conn {
+					delete(connections, clientID)
+				}
+				mu.Unlock()
+			}
+
+			// Neither of the release paths above can be reached by a peer
+			// that requests a connection and then goes quiet: with no SDP
+			// answer the connection never leaves WebRTC's `new` state, so
+			// there is no data channel to close and no terminal state to
+			// observe. Without a deadline, maxUnauthSessions such peers
+			// wedge the listener for good.
+			deadline := newDeadlineGuard(unreadyPeerTimeout, func() {
+				log.Printf("Dropping %s: handshake not completed within %s", clientID, unreadyPeerTimeout)
+				conn.Close()
+			})
+			sess.OnReady = func() {
+				deadline.Done()
+				release()
+			}
 
 			// Per-connection teardown, run when the data channel closes.
 			var onClose []func()
-			onClose = append(onClose, release)
+			onClose = append(onClose, deadline.Done, release, forget)
 			// Kill any shell processes — without this they outlive the
 			// browser tab and keep holding their max-sessions slot.
 			if shellHandler != nil {
-				onClose = append(onClose, shellHandler.KillAll)
+				onClose = append(onClose, shellHandler.Close)
 			}
 			if tcpHandler != nil {
 				onClose = append(onClose, tcpHandler.CloseAll)
@@ -578,17 +607,14 @@ func startListener(cfg serveConfig) {
 				sess.SetVideoBridge(bridge)
 				onClose = append(onClose, bridge.Close)
 			}
-			if len(onClose) > 0 {
-				conn.OnClose = func() {
-					for _, f := range onClose {
-						f()
-					}
-				}
-			}
-
 			mu.Lock()
 			connections[clientID] = conn
 			mu.Unlock()
+			conn.SetOnClose(func() {
+				for _, f := range onClose {
+					f()
+				}
+			})
 
 		case "answer":
 			clientID, _ := msg["client_id"].(string)
@@ -606,17 +632,26 @@ func startListener(cfg serveConfig) {
 			if conn.PairingMode {
 				if err := conn.HandlePairAnswer(sdp); err != nil {
 					log.Printf("Failed to handle pair answer: %v", err)
+					conn.Close()
 				}
 				return
 			}
 			encrypted, _ := msg["encrypted_request"].(string)
 			if err := conn.HandleAnswer(sdp, encrypted); err != nil {
 				log.Printf("Failed to handle answer: %v", err)
+				conn.Close()
 			}
 
 		case "pair_request":
 			clientID, _ := msg["client_id"].(string)
 			if clientID == "" {
+				return
+			}
+			mu.Lock()
+			duplicate := connections[clientID] != nil
+			mu.Unlock()
+			if duplicate {
+				log.Printf("Rejecting duplicate pair client ID %q", clientID)
 				return
 			}
 			conn, err := peer.HandlePairRequest(msg, signalingClient, id,
@@ -628,6 +663,18 @@ func startListener(cfg serveConfig) {
 			mu.Lock()
 			connections[clientID] = conn
 			mu.Unlock()
+			deadline := newDeadlineGuard(unreadyPeerTimeout, func() {
+				log.Printf("Dropping pair %s: handshake not completed within %s", clientID, unreadyPeerTimeout)
+				conn.Close()
+			})
+			conn.SetOnClose(func() {
+				deadline.Done()
+				mu.Lock()
+				if connections[clientID] == conn {
+					delete(connections, clientID)
+				}
+				mu.Unlock()
+			})
 
 		case "candidate":
 			clientID, _ := msg["client_id"].(string)

@@ -28,6 +28,7 @@ import (
 	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/pairing"
+	"github.com/richlegrand/bitbang/internal/protocol"
 	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
@@ -76,13 +77,6 @@ type Connection struct {
 	sig       *signaling.Client
 	OnMessage OnMessageFunc
 
-	// OnClose, if set, is invoked when the data channel transitions to
-	// closed. Used by listener wire-up to clean up per-session
-	// resources whose lifetime would otherwise outlast the connection
-	// — most importantly, kill any shell processes that would
-	// otherwise keep holding their max-sessions slot.
-	OnClose func()
-
 	// PairingMode is true when this connection was created by
 	// HandlePairRequest rather than HandleRequest. In pair mode the
 	// access-code check in HandleAnswer is skipped (the connector does not
@@ -90,6 +84,18 @@ type Connection struct {
 	// data-channel OnOpen runs the commitment + SAS confirmation flow
 	// (handlePairRequestOnOpen) instead of sending verify_nonce_hash.
 	PairingMode bool
+
+	// Authorize, if set, replaces HandleAnswer's default equality check
+	// against identity.Code: it classifies the presented access code into
+	// an access level ("" plus ok=false rejects). Listeners that issue
+	// more than one code per identity (bitbang share: control + view) set
+	// this after HandleRequest returns, before the answer arrives. Both
+	// run on the signaling read loop, so no lock is needed for the write.
+	// The granted level is readable via Access once HandleAnswer succeeds.
+	// Implementations must compare in constant time against every code
+	// they hold, without early exit, so timing doesn't reveal which role
+	// a guess missed.
+	Authorize func(code string) (access protocol.Access, ok bool)
 
 	// dcInbox carries inbound data-channel frames to the pairing handshake
 	// goroutine. Non-nil only in pair mode; the regular flow routes inbound
@@ -117,6 +123,59 @@ type Connection struct {
 	// this before sending the nonce-hash frame; on failure it closes the
 	// connection without sending anything.
 	verifyFailed bool
+	// access is the level granted by Authorize ("" when the default
+	// single-code check ran instead).
+	access protocol.Access
+
+	closeMu    sync.Mutex
+	closed     bool
+	onCloseSet bool
+	onClose    func()
+}
+
+// SetOnClose installs the connection teardown callback. If the connection
+// already closed, fn runs immediately. This makes callback installation safe
+// against a terminal WebRTC state racing listener setup.
+func (c *Connection) SetOnClose(fn func()) {
+	c.closeMu.Lock()
+	if c.onCloseSet {
+		c.closeMu.Unlock()
+		return
+	}
+	c.onCloseSet = true
+	if !c.closed {
+		c.onClose = fn
+		c.closeMu.Unlock()
+		return
+	}
+	c.closeMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// fireClose runs the installed callback exactly once.
+func (c *Connection) fireClose() {
+	c.closeMu.Lock()
+	if c.closed {
+		c.closeMu.Unlock()
+		return
+	}
+	c.closed = true
+	fn := c.onClose
+	c.closeMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// Access returns the access level granted by the Authorize hook, or "" when
+// the connection was verified by the default single-code check (or not yet
+// verified at all).
+func (c *Connection) Access() protocol.Access {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.access
 }
 
 // connSetup carries the per-flow customization for setupConnection:
@@ -219,9 +278,7 @@ func setupConnection(s connSetup) (*Connection, error) {
 		// resources tied to the data channel (e.g. spawned shell
 		// processes) get torn down while the connection state is
 		// still observable.
-		if conn.OnClose != nil {
-			conn.OnClose()
-		}
+		conn.fireClose()
 		pc.Close()
 	})
 
@@ -250,7 +307,15 @@ func setupConnection(s connSetup) (*Connection, error) {
 		if state == webrtc.PeerConnectionStateConnected {
 			logSelectedPair(s.logTag, s.clientID, pc, time.Since(connStart))
 		}
-		if state == webrtc.PeerConnectionStateFailed {
+		// Failed and Closed are terminal, and a connector that dies
+		// before its data channel ever opens reaches them WITHOUT ever
+		// firing dc.OnClose (see
+		// TestDataChannelCloseDoesNotFireBeforeOpen). Teardown hung off
+		// the data channel alone would therefore never run, stranding
+		// whatever the listener reserved for this peer: a session slot,
+		// a share's controller or viewer slot.
+		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
+			conn.fireClose()
 			pc.Close()
 		}
 	})
@@ -373,7 +438,7 @@ func handleRequestOnOpen(conn *Connection, dc *webrtc.DataChannel) {
 	conn.mu.Unlock()
 	if failed {
 		log.Printf("Verify failed for %s — closing without nonce reply", conn.ClientID)
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 	if nonce == nil {
@@ -381,18 +446,18 @@ func handleRequestOnOpen(conn *Connection, dc *webrtc.DataChannel) {
 		// reject. Connecting clients must use a bootstrap that supports
 		// the encrypted_request field; older browsers won't be served.
 		log.Printf("No bidirectional-verify nonce for %s — closing", conn.ClientID)
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 	frame, err := buildVerifyNonceHashFrame(nonce)
 	if err != nil {
 		log.Printf("Build verify_nonce_hash for %s: %v", conn.ClientID, err)
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 	if err := dc.Send(frame); err != nil {
 		log.Printf("Send verify_nonce_hash for %s: %v", conn.ClientID, err)
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 }
@@ -449,8 +514,22 @@ func (c *Connection) HandleAnswer(sdp, encryptedRequestB64 string) error {
 
 	// Check the access code before anything else — a wrong code should
 	// never reveal whether the fingerprint matched. Constant-time compare
-	// to avoid leaking the code via timing.
-	if subtle.ConstantTimeCompare([]byte(req.Code), []byte(c.identity.Code)) != 1 {
+	// to avoid leaking the code via timing. An Authorize hook, when set,
+	// owns the comparison (and may grant one of several access levels).
+	if c.Authorize != nil {
+		access, ok := c.Authorize(req.Code)
+		if !ok {
+			c.markVerifyFailed()
+			ip := c.browserIP
+			if ip == "" {
+				ip = "?"
+			}
+			return fmt.Errorf("bad access code from %s (browser_ip=%s)", c.ClientID, ip)
+		}
+		c.mu.Lock()
+		c.access = access
+		c.mu.Unlock()
+	} else if subtle.ConstantTimeCompare([]byte(req.Code), []byte(c.identity.Code)) != 1 {
 		c.markVerifyFailed()
 		ip := c.browserIP
 		if ip == "" {
@@ -580,7 +659,7 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 		// modern peer; if it does, refusing is the only safe move.
 		log.Printf("Pair %s: missing SDP fingerprints (local=%q remote=%q)", conn.ClientID, localFp, remoteFp)
 		conn.sendPairRejected("user_declined")
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 
@@ -589,13 +668,13 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 	if !ok || pairing.PairMessageType(data) != pairing.MsgPairCommit {
 		log.Printf("Pair %s: no pair_commit", conn.ClientID)
 		conn.sendPairRejected("timeout")
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 	commit, ok := pairing.ParsePairCommit(data)
 	if !ok {
 		conn.sendPairRejected("user_declined")
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 
@@ -604,11 +683,11 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 	if err != nil {
 		log.Printf("Pair %s: nonce: %v", conn.ClientID, err)
 		conn.sendPairRejected("user_declined")
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 	if err := conn.DC.Send(pairing.BuildPairChallenge(rd)); err != nil {
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 
@@ -617,14 +696,14 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 	if !ok || pairing.PairMessageType(data) != pairing.MsgPairReveal {
 		log.Printf("Pair %s: no pair_reveal", conn.ClientID)
 		conn.sendPairRejected("timeout")
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 	rc, ok := pairing.ParsePairReveal(data)
 	if !ok || !pairing.VerifyCommitment(commit, rc) {
 		log.Printf("Pair %s: commitment did not open", conn.ClientID)
 		conn.sendPairRejected("sas_mismatch")
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 
@@ -637,7 +716,7 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 	if !ok {
 		log.Printf("Pair rejected for %s: %s", conn.ClientID, reason)
 		conn.sendPairRejected(reason)
-		conn.PC.Close()
+		conn.Close()
 		return
 	}
 
@@ -653,7 +732,7 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 	for i := 0; i < 200 && conn.DC.BufferedAmount() > 0; i++ {
 		time.Sleep(5 * time.Millisecond)
 	}
-	conn.PC.Close()
+	conn.Close()
 }
 
 // HandlePairAnswer applies the connector's SDP answer to a pair-flow peer
@@ -712,7 +791,8 @@ func (c *Connection) AddICECandidate(candidateData map[string]interface{}) error
 
 // Close closes the peer connection.
 func (c *Connection) Close() {
+	c.fireClose()
 	if c.PC != nil {
-		c.PC.Close()
+		_ = c.PC.Close()
 	}
 }

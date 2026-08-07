@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/richlegrand/bitbang/internal/client"
+	"github.com/richlegrand/bitbang/internal/signaling"
 )
 
 // runCp implements `bitbang cp <src> <dst>`.
@@ -210,6 +211,9 @@ type remoteSpec struct {
 	UID    string
 	Code   string // access code, may be empty
 	Path   string // path on the remote, leading "/"
+
+	// Ephemeral suppresses device persistence for a share URL.
+	Ephemeral bool
 }
 
 // parseRemoteSpec returns (spec, true) if arg looks like a remote
@@ -260,17 +264,14 @@ func parseRemoteSpec(arg string) (remoteSpec, bool) {
 		return remoteSpec{}, false
 	}
 	// Fragment grammar (see CONVENTIONS.md): `<code>[!<flags>][/<device-URL>]`.
-	// For cp the device-URL is superseded by the `:/path` after the URL,
-	// and flags are irrelevant — take only the code.
-	code := u.Fragment
-	if i := strings.IndexAny(code, "!/"); i >= 0 {
-		code = code[:i]
-	}
+	// For cp the device URL is superseded by the `:/path` after the URL.
+	code, flags := signaling.ParseFragment(u.Fragment)
 	return remoteSpec{
-		Server: u.Host,
-		UID:    uid,
-		Code:   code,
-		Path:   rest,
+		Server:    u.Host,
+		UID:       uid,
+		Code:      code,
+		Path:      rest,
+		Ephemeral: signaling.HasFlag(flags, "ephemeral"),
 	}, true
 }
 
