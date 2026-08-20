@@ -205,3 +205,21 @@ func TestAskOtherExpiry_ConfirmsAndCanBeDeclined(t *testing.T) {
 		t.Errorf("declining should return to the menu, got %v %v", at, err)
 	}
 }
+
+// The menu is ordered least powerful first, so a mis-keyed 1 grants a
+// file browser rather than a terminal.
+func TestGrantQuestions_MenuPutsShellLast(t *testing.T) {
+	a := &scriptedAsker{t: t, answers: []string{"1", "1", "x"}}
+	got, err := grantQuestions(a, links.Terms{}, allScopes, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Scope, ",") != "files" {
+		t.Errorf("option 1 granted %v, want files", got.Scope)
+	}
+	menu := strings.Join(a.said, "\n")
+	files, shell := strings.Index(menu, "files"), strings.Index(menu, "shell")
+	if files < 0 || shell < 0 || files > shell {
+		t.Errorf("shell is not last in the menu:\n%s", menu)
+	}
+}

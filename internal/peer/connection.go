@@ -98,6 +98,21 @@ type Connection struct {
 	// a guess missed.
 	Authorize func(code string) (access protocol.Access, ok bool)
 
+	// GrantPairCredential, if set, chooses the access code a completed
+	// pairing hands over. Called once the SAS has matched and before the
+	// credentials frame is sent, so the operator can be asked what to
+	// grant at the moment they have just established who is asking.
+	//
+	// Returning ok=false declines the pairing after the fact -- the
+	// operator changed their mind, or minting failed.
+	//
+	// Unset means the identity's own code, which is what pairing did
+	// before links existed and is still right for a listener with no link
+	// table (bitbang share). A listener that has one should set this:
+	// handing out id.Code gives away the master credential, which cannot
+	// be revoked without rotating the identity and appears in no listing.
+	GrantPairCredential func() (code string, ok bool)
+
 	// dcInbox carries inbound data-channel frames to the pairing handshake
 	// goroutine. Non-nil only in pair mode; the regular flow routes inbound
 	// frames to OnMessage instead. The pairing handshake (commit/challenge/
@@ -724,8 +739,20 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 
 	// 4. Deliver credentials over the verified data channel, plus a bare
 	//    approval over signaling.
+	code := id.Code
+	if conn.GrantPairCredential != nil {
+		granted, ok := conn.GrantPairCredential()
+		if !ok {
+			log.Printf("Pair declined for %s after verification", conn.ClientID)
+			conn.sendPairRejected(pairing.ErrUserDeclined.Error())
+			conn.Close()
+			return
+		}
+		code = granted
+	}
+
 	log.Printf("Pair approved for %s", conn.ClientID)
-	if err := conn.DC.Send(pairing.BuildPairCredentials(id.UID, id.PublicB64, id.Code)); err != nil {
+	if err := conn.DC.Send(pairing.BuildPairCredentials(id.UID, id.PublicB64, code)); err != nil {
 		log.Printf("Pair %s: send credentials: %v", conn.ClientID, err)
 	}
 	conn.sendPairApproved()

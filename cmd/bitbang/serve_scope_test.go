@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"sort"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func capsFor(t *testing.T, scope []string) []string {
 	cfg, share, id := allCapsConfig(t)
 	terms := links.Terms{Label: "x", Scope: scope}
 	granted := terms.GrantSet(offeredScopes(cfg))
-	h := buildHandlers(cfg, granted, share, nil, id, "")
+	h := buildHandlers(cfg, granted, share, nil, id, "", io.Discard)
 
 	var caps []string
 	for _, handler := range h.all {
@@ -105,7 +106,7 @@ func TestScope_NotServedIsDroppedNotGranted(t *testing.T) {
 		t.Fatal(err)
 	}
 	terms := links.Terms{Label: "s", Scope: []string{links.ScopeShell}}
-	h := buildHandlers(cfg, terms.GrantSet(offeredScopes(cfg)), share, nil, id, "")
+	h := buildHandlers(cfg, terms.GrantSet(offeredScopes(cfg)), share, nil, id, "", io.Discard)
 	for _, handler := range h.all {
 		if handler.Type() == "shell" {
 			t.Fatal("a shell-scoped link conjured a shell on a files-only listener")
@@ -123,7 +124,7 @@ func assertNoProxyBranch(t *testing.T, scope []string) {
 	t.Helper()
 	cfg, share, id := allCapsConfig(t)
 	terms := links.Terms{Label: "x", Scope: scope}
-	h := buildHandlers(cfg, terms.GrantSet(offeredScopes(cfg)), share, nil, id, "")
+	h := buildHandlers(cfg, terms.GrantSet(offeredScopes(cfg)), share, nil, id, "", io.Discard)
 	for _, handler := range h.all {
 		d, ok := handler.(*httpDispatcher)
 		if !ok {

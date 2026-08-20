@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/richlegrand/bitbang/internal/fileshare"
 	"github.com/richlegrand/bitbang/internal/identity"
@@ -35,6 +34,9 @@ type capContext struct {
 	shellArgv []string
 	id        *identity.Identity
 	browserIP string
+	// mirror is where shell output is echoed for the operator, held while
+	// a prompt is on screen.
+	mirror io.Writer
 	// granted is what this peer's link allows, which is what decides
 	// whether a capability contributes at all.
 	granted map[string]bool
@@ -92,8 +94,11 @@ var capabilities = []capability{
 			sh := streamtype.NewShell(x.shellArgv, x.cfg.verbose)
 			sh.MaxConcurrent = x.cfg.shellMaxSessions
 			if x.cfg.shellMirror {
-				sh.StdoutMirror = os.Stdout
-				sh.StderrMirror = os.Stderr
+				// Through the hold, not straight to the terminal: the
+				// mirror is the loudest thing on the console and would
+				// otherwise scroll a prompt away mid-question.
+				sh.StdoutMirror = x.mirror
+				sh.StderrMirror = x.mirror
 			}
 			return []streamtype.StreamHandler{sh}
 		},

@@ -239,3 +239,67 @@ func quoteAll(labels []string) []string {
 	}
 	return out
 }
+
+// add appends a link, mints its code, writes the table back, and swaps in
+// the new one. Returns the minted code.
+//
+// The listener is the writer here, which is the whole reason this is
+// better than telling someone to edit the file: no second process, so no
+// modtime race and no guard to trip over. The file is re-read first so an
+// edit made outside is not lost.
+func (ls *linkState) add(entry links.Terms) (string, error) {
+	if ls.readOnly {
+		return "", fmt.Errorf("this listener has an ephemeral identity, so it keeps no link table")
+	}
+
+	entries, mod, err := links.Load(ls.path)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.Label == entry.Label {
+			return "", fmt.Errorf("a link called %q already exists", entry.Label)
+		}
+	}
+	if entry.Label == links.MeLabel {
+		return "", fmt.Errorf("%q is reserved for this device's own code", links.MeLabel)
+	}
+
+	entry.Code = "" // minted below, never carried in from the caller
+	entries = append(entries, entry)
+
+	now := time.Now()
+	entries, _ = links.DedupeCodes(entries, ls.code)
+	entries, _ = links.RetireExpired(entries, now)
+	entries, _, err = links.Mint(entries, now, identity.NewAccessCode)
+	if err != nil {
+		return "", err
+	}
+	if err := links.Save(ls.path, entries, mod); err != nil {
+		return "", err
+	}
+
+	table, warnings, err := links.Build(entries, ls.offered, ls.code)
+	if err != nil {
+		return "", err
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+	if _, m, err := links.Load(ls.path); err == nil {
+		mod = m
+	}
+
+	ls.mu.Lock()
+	ls.table, ls.mod = table, mod
+	ls.mu.Unlock()
+
+	added, _ := table.ByLabel(entry.Label)
+	return added.Code, nil
+}
+
+// url composes the URL for a code.
+func (ls *linkState) url(code string) string { return ls.codeURL(code) }
+
+// offeredScopes is what a grant may draw from on this listener.
+func (ls *linkState) offeredScopes() []string { return append([]string(nil), ls.offered...) }

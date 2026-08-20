@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -39,6 +40,14 @@ type listener struct {
 
 	peers *peerset.Set[*servePeer]
 
+	// console is the operator's interactive surface, nil when there is no
+	// controlling terminal. Pairing asks it what to grant.
+	console *console
+
+	// mirror is where a shell session's output goes, held while a prompt
+	// is up. Handlers write to it rather than to os.Stdout directly.
+	mirror io.Writer
+
 	// unauthSessions counts peers that have not completed the PIN
 	// handshake. Bounds parallel brute-force; released on auth or close.
 	unauthSessions atomic.Int32
@@ -57,7 +66,7 @@ func (l *listener) watch(bold, reset string) {
 		}
 		if listing := l.links.listing(bold, reset); listing != "" {
 			fmt.Print(listing)
-			fmt.Print(reloadHint())
+			fmt.Print(consoleHint())
 		}
 		poll(time.Now())
 	})
@@ -205,7 +214,7 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		return
 	}
 	granted := terms.GrantSet(offeredScopes(l.cfg))
-	h := buildHandlers(l.cfg, granted, l.share, l.shellArgv, l.id, p.browserIP)
+	h := buildHandlers(l.cfg, granted, l.share, l.shellArgv, l.id, p.browserIP, l.mirror)
 
 	sess := session.New(p.conn.DC, l.pinAuth, l.cfg.verbose, h.all...)
 	sess.OnReady = func() {
@@ -237,11 +246,22 @@ func (l *listener) handlePairRequest(msg signaling.Message) {
 		log.Printf("Rejecting duplicate pair client ID %q", clientID)
 		return
 	}
+	// The SAS prompt runs on the console so its question is not scrolled
+	// away by a mirroring shell session -- it is the one prompt that
+	// cannot be answered if you miss it.
 	conn, err := peer.HandlePairRequest(msg, l.signaling, l.id,
-		pairing.DefaultTTYPrompt, l.cfg.verbose)
+		l.sasPrompt(), l.cfg.verbose)
 	if err != nil {
 		log.Printf("Failed to handle pair request: %v", err)
 		return
+	}
+
+	// Hand over a minted link rather than the identity's own code, so the
+	// pairing is visible in the table, revocable on its own, and can be
+	// limited or made to lapse.
+	remoteIP, _ := msg["remote_ip"].(string)
+	conn.GrantPairCredential = func() (string, bool) {
+		return grantForPairing(l.console, l.links, remoteIP)
 	}
 	p := newServePeer(clientID)
 	p.conn = conn
@@ -268,4 +288,25 @@ func (l *listener) handleCandidate(msg signaling.Message) {
 	}
 	candidate, _ := msg["candidate"].(map[string]interface{})
 	_ = p.conn.AddICECandidate(candidate)
+}
+
+// sasPrompt reads the SAS on the console, falling back to the package
+// default when there is no terminal.
+//
+// The listener never displays the code -- the operator hears it from the
+// connector and types it -- so this stays a free-text prompt rather than
+// becoming a confirmation. A y/n here would be exactly the autopilot
+// approval the pairing design exists to prevent.
+func (l *listener) sasPrompt() pairing.PromptFunc {
+	if !l.console.Available() {
+		return pairing.DefaultTTYPrompt
+	}
+	return func(attempt int) (string, pairing.PromptStatus) {
+		typed, err := l.console.Ask(
+			fmt.Sprintf("Enter code (attempt %d/%d)", attempt, pairing.MaxSASAttempts), "")
+		if err != nil {
+			return "", pairing.PromptAbort
+		}
+		return typed, pairing.PromptOK
+	}
 }

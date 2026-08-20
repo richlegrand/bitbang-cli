@@ -356,6 +356,15 @@ func startListener(cfg serveConfig) {
 		os.Exit(1)
 	}
 
+	// Both terminal streams go through holds so the console can pause
+	// them: log lines (the std logger writes to stderr) and the shell
+	// mirror (stdout). Without this a mirroring session scrolls a prompt
+	// away before it can be read.
+	logHold := newHoldWriter(os.Stderr)
+	mirrorHold := newHoldWriter(os.Stdout)
+	log.SetOutput(logHold)
+	con := newConsole(logHold, mirrorHold)
+
 	out := newDisplay(url)
 	out.ready()
 	printSharingBlock(os.Stdout, cfg, share)
@@ -384,7 +393,7 @@ func startListener(cfg serveConfig) {
 
 	if listing := linkState.listing(out.bold, out.reset); listing != "" {
 		fmt.Print(listing)
-		fmt.Print(reloadHint())
+		fmt.Print(consoleHint())
 	}
 
 	l := &listener{
@@ -397,6 +406,8 @@ func startListener(cfg serveConfig) {
 		links:     linkState,
 		video:     videoClient,
 		peers:     peerset.New[*servePeer](),
+		console:   con,
+		mirror:    mirrorHold,
 	}
 
 	l.watch(out.bold, out.reset)

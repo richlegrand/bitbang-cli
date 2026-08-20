@@ -66,10 +66,39 @@ var scopeHelp = map[string]string{
 	links.ScopeProxy:   "reach web apps on this network",
 }
 
+// menuOrder lists scopes least powerful first, so a mis-keyed 1 grants a
+// file browser rather than a terminal. The capability table's order suits
+// the Sharing block, where it describes a listener; here the numbers are
+// something an operator types in a hurry.
+var menuOrder = []string{links.ScopeFiles, links.ScopeProxy, links.ScopeForward, links.ScopeShell}
+
+// orderForMenu sorts what the listener offers into menuOrder, keeping
+// anything unrecognized at the end rather than dropping it.
+func orderForMenu(offered []string) []string {
+	rank := make(map[string]int, len(menuOrder))
+	for i, name := range menuOrder {
+		rank[name] = i
+	}
+	out := append([]string(nil), offered...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, ok := rank[out[i]]
+		if !ok {
+			ri = len(menuOrder)
+		}
+		rj, ok := rank[out[j]]
+		if !ok {
+			rj = len(menuOrder)
+		}
+		return ri < rj
+	})
+	return out
+}
+
 func askScope(a asker, seed links.Terms, offered []string) ([]string, error) {
 	if len(offered) == 0 {
 		return nil, nil
 	}
+	offered = orderForMenu(offered)
 	a.Say("  Grant which?")
 	for i, name := range offered {
 		a.Say("    %d) %-8s  %s", i+1, name, scopeHelp[name])
@@ -198,7 +227,7 @@ func askExpiry(a asker, seed links.Terms, now time.Time) (*time.Time, error) {
 		case c.dur == 0:
 			return nil, nil
 		default:
-			at := now.Add(c.dur)
+			at := now.Add(c.dur).UTC().Truncate(time.Second)
 			return &at, nil
 		}
 	}
@@ -226,6 +255,7 @@ func askOtherExpiry(a asker, now time.Time) (*time.Time, error) {
 			return nil, err
 		}
 		if strings.EqualFold(strings.TrimSpace(ok), "y") {
+			at = at.UTC().Truncate(time.Second)
 			return &at, nil
 		}
 		return nil, nil
