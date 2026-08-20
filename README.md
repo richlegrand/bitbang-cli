@@ -3,7 +3,18 @@
 [![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml)
 ![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
 
-A single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
+`bitbang` is a single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
+
+## How it compares
+
+|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | frp                                 | `bitbang`           |
+| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ----------------------------------- | ------------------- |
+| Account required                   | Yes                 | Yes               | Yes                            | No                                  | **No**              |
+| Install on the connecting side     | No                  | No                | **Yes**                        | No (**Yes** for P2P mode)           | **No** (browser)    |
+| End-to-end encrypted               | Not by default      | No                | Yes                            | No -- your server sees traffic      | **Yes**             |
+| Data path                          | Their servers       | Their servers     | P2P                            | Your server (P2P optional)          | **P2P**             |
+| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                             | **Yes**             |
+| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | A public-IP server + TOML both ends | **Run one command** |
 
 ![Install bitbang, run bitbang serve, and open the printed URL in a browser to get a shell, a file browser, and a proxy to the machine's network](assets/demo.webp)
 
@@ -18,21 +29,8 @@ bitbang serve
 
 `bitbang` is a single static Go binary. It's part of the [BitBang project](https://github.com/richlegrand/bitbang); this [whitepaper](https://github.com/richlegrand/bitbang/blob/main/whitepaper.md) covers the design in depth.
 
-## How it compares
 
-|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | frp                                 | `bitbang`           |
-| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ----------------------------------- | ------------------- |
-| Account required                   | Yes                 | Yes               | Yes                            | No                                  | **No**              |
-| Install on the connecting side     | No                  | No                | **Yes**                        | No (**Yes** for P2P mode)           | **No** (browser)    |
-| End-to-end encrypted               | Not by default      | No                | Yes                            | No -- your server sees traffic      | **Yes**             |
-| Data path                          | Their servers       | Their servers     | P2P                            | Your server (P2P optional)          | **P2P**             |
-| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                             | **Yes**             |
-| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | A public-IP server + TOML both ends | **Run one command** |
-
-## Recipes
-
-What people actually do with it. Each links into the [BitBang Cookbook](https://github.com/richlegrand/bitbang/blob/main/cookbook.md),
-which covers every project rather than just the CLI.
+## Quickie recipes
 
 **Reach a service at home**
 
@@ -41,7 +39,6 @@ which covers every project rather than just the CLI.
 - [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#use-your-own-llm-from-anywhere-ollama-open-webui)
 - [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-security-cameras-frigate)
 - [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-your-home-automation-without-exposing-it-home-assistant)
-- [Check on a 3D print from work (OctoPrint)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-on-a-3d-print-from-work-octoprint)
 - [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#print-to-your-home-printer-ipp-cups)
 
 **Get on a machine**
@@ -54,6 +51,8 @@ which covers every project rather than just the CLI.
 - [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#set-up-a-headless-raspberry-pi)
 
 **Share with someone else**
+
+Sharing entails simply giving someone a unique URL or QR code that gives them access. Permissions can be tailored and set to expire in minutes, hours, etc. 
 
 - [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#share-files-without-uploading-them-anywhere)
 - [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-your-project)
