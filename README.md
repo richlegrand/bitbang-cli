@@ -18,31 +18,60 @@ bitbang serve
 
 `bitbang` is a single static Go binary. It's part of the [BitBang project](https://github.com/richlegrand/bitbang); this [whitepaper](https://github.com/richlegrand/bitbang/blob/main/whitepaper.md) covers the design in depth.
 
-## Pairing with a 6-digit code
+## How it compares
 
-When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.  If you know [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole), the shape is similar -- a spoken code that securely introduces two machines.
-	
-![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
+|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | frp                                 | `bitbang`           |
+| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ----------------------------------- | ------------------- |
+| Account required                   | Yes                 | Yes               | Yes                            | No                                  | **No**              |
+| Install on the connecting side     | No                  | No                | **Yes**                        | No (**Yes** for P2P mode)           | **No** (browser)    |
+| End-to-end encrypted               | Not by default      | No                | Yes                            | No -- your server sees traffic      | **Yes**             |
+| Data path                          | Their servers       | Their servers     | P2P                            | Your server (P2P optional)          | **P2P**             |
+| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                             | **Yes**             |
+| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | A public-IP server + TOML both ends | **Run one command** |
 
-## Why?
+## Recipes
 
-- **Nothing to forward or configure.** Works from behind NAT, CGNAT, or a locked-down network -- no router changes, no VPN, no tunnel daemon.
-- **Nothing to install on the connecting side.** A browser is enough. A CLI is there when you want scripting, pipes, and file copy.
-- **Private by design.** Traffic is WebRTC/DTLS, peer-to-peer. The signaling server never sees it; if a direct path isn't possible, a TURN relay carries ciphertext only.
-- **No account, no telemetry.**
+What people actually do with it. Each links into the [BitBang Cookbook](https://github.com/richlegrand/bitbang/blob/main/cookbook.md),
+which covers every project rather than just the CLI.
 
+**Reach a service at home**
 
-### Why not just use SSH?
+- [Mount your home NAS from anywhere (SMB)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#mount-your-home-nas-from-anywhere-smb)
+- [Watch your media library from anywhere (Jellyfin)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-your-media-library-from-anywhere-jellyfin)
+- [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#use-your-own-llm-from-anywhere-ollama-open-webui)
+- [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-security-cameras-frigate)
+- [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-your-home-automation-without-exposing-it-home-assistant)
+- [Check on a 3D print from work (OctoPrint)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-on-a-3d-print-from-work-octoprint)
+- [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#print-to-your-home-printer-ipp-cups)
 
-`bitbang` is shaped like ssh: `serve`, `connect`, and `cp` map to `sshd`, `ssh`, and `scp`, with WebRTC as the transport instead of TCP. For a machine you can already SSH into comfortably, that difference doesn't buy you much. But most of `bitbang` came out of annoyances I seem to hit more often than I should:
+**Get on a machine**
 
-**Reach.** Remote SSH access needs an inbound path, and on most networks opening one isn't your call -- CGNAT (cellular, Starlink, many ISPs), corporate, university, municipal. So in practice you bolt on a second system: Tailscale, a VPN, ngrok -- another install, another account, another daemon to keep running. `bitbang serve` needs no open port and works from anywhere.
+- [Get a shell on a machine behind NAT](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-on-a-machine-behind-nat)
+- [Get a shell from your phone](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-from-your-phone)
+- [Remote desktop into a Windows machine (RDP)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#remote-desktop-into-a-windows-machine-rdp)
+- [Reach a Linux or Mac desktop (VNC)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-linux-or-mac-desktop-vnc)
+- [SSH to a machine with no open port (OpenSSH)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#ssh-to-a-machine-with-no-open-port-openssh)
+- [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#set-up-a-headless-raspberry-pi)
 
-**Setup.** SSH has to be enabled and configured before it will let you in. It's disabled by default on Raspberry Pi OS, and often key-only, which means getting your public key onto the machine first. And how do you do that? Email or a USB stick are usually the most painless options. `bitbang` sets up the connection with a 6-digit code exchange instead -- something you can do safely over the phone, or call out across the room. It also runs as an ordinary user -- no root, no daemon, no config file.
+**Share with someone else**
 
-**Proxying.** If you want a web app on that machine's network, SSH gives you a separate tunnel per app, named in advance. The `bitbang` proxy is generic: specify the web app's URL at connection time.
+- [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#share-files-without-uploading-them-anywhere)
+- [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-your-project)
+- [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#give-someone-access-that-expires)
+- [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-agent-session-from-your-phone-claude-code-tmux)
+- [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#fix-someone-elses-router)
 
-**Browser client.** SSH needs an SSH client and a key or password on the connecting side. `bitbang` needs a browser -- which means a phone, a borrowed laptop, or someone who has never opened a terminal. Hand them the URL and they get the access that you've granted them.
+**Development and devices**
+
+- [Reach a database from your dev machine (Postgres, MySQL)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-database-from-your-dev-machine-postgres-mysql)
+- [Sync devices that cannot find each other (Syncthing)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#sync-devices-that-cannot-find-each-other-syncthing)
+- [Watch a robot from a browser (ROS, Foxglove)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-a-robot-from-a-browser-ros-foxglove)
+
+**Techniques**
+
+- [What a forwarding listener exposes](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#what-a-forwarding-listener-exposes)
+- [Let other machines on your LAN use a forward](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#let-other-machines-on-your-lan-use-a-forward)
+- [Known not to work](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#known-not-to-work)
 
 ## Using `bitbang`
 
@@ -150,6 +179,12 @@ and the holder is told why, rather than going quiet. And an expired code is
 retired rather than paused -- renewing an entry mints a new one, so the URL you
 already sent stays dead.
 
+### Pairing with a 6-digit code
+
+When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.  If you know [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole), the shape is similar -- a spoken code that securely introduces two machines.
+	
+![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
+
 ### Connecting from a browser
 
 Open the URL. Depending on what's served, you get:
@@ -175,49 +210,36 @@ bitbang cp - <url>:/tmp/firmware.bin < firmware.bin     # stdin/stdout work too
 
 Every successful connect or pairing is saved to `~/.bitbang/devices.json`, so from then on a short name is enough: `bitbang connect nas1`.
 
-## Recipes
+## Security
 
-What people actually do with it. Each links into the [BitBang Cookbook](https://github.com/richlegrand/bitbang/blob/main/cookbook.md),
-which covers every project rather than just the CLI.
+- **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is derived from the public key, so impersonating a device means finding a second preimage of its UID.
+- **The secret never touches the server.** The access code lives in the URL fragment (`#…`), which browsers never send -- `bitba.ng` brokers the connection without ever seeing the credential that authorizes it.
+- **End-to-end encryption.** All traffic rides WebRTC's DTLS. The signaling server sees only the public key, the derived UID, and connection metadata -- never your data. A TURN relay, if one is needed, sees ciphertext only.
+- **Verified pairing.** The read-aloud number in code pairing is a short authentication string (SAS), computed independently on both ends from the negotiated DTLS fingerprints and two committed nonces -- a machine-in-the-middle, whose fingerprints necessarily differ, can't make the two numbers match.
+- **The URL is a bearer credential.** Anyone who has it gets whatever you chose to serve -- a shell, if you ran `serve shell`. Share it accordingly.
+- **Optional PIN** (`--pin`) for permanent or headless setups, and **throwaway mode** (`-ephemeral`) for a fresh identity each run.
 
-**Reach a service at home**
+How the two ends authenticate each other without trusting the signaling server is covered in detail here: [*Trustless Signaling: Authentication Without a Central Authority*](https://github.com/richlegrand/bitbang/blob/main/trustless-signaling.md).
 
-- [Mount your home NAS from anywhere (SMB)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#mount-your-home-nas-from-anywhere-smb)
-- [Watch your media library from anywhere (Jellyfin)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-your-media-library-from-anywhere-jellyfin)
-- [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#use-your-own-llm-from-anywhere-ollama-open-webui)
-- [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-security-cameras-frigate)
-- [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-your-home-automation-without-exposing-it-home-assistant)
-- [Check on a 3D print from work (OctoPrint)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-on-a-3d-print-from-work-octoprint)
-- [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#print-to-your-home-printer-ipp-cups)
+## Why?
 
-**Get on a machine**
+- **Nothing to forward or configure.** Works from behind NAT, CGNAT, or a locked-down network -- no router changes, no VPN, no tunnel daemon.
+- **Nothing to install on the connecting side.** A browser is enough. A CLI is there when you want scripting, pipes, and file copy.
+- **Private by design.** Traffic is WebRTC/DTLS, peer-to-peer. The signaling server never sees it; if a direct path isn't possible, a TURN relay carries ciphertext only.
+- **No account, no telemetry.**
 
-- [Get a shell on a machine behind NAT](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-on-a-machine-behind-nat)
-- [Get a shell from your phone](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-from-your-phone)
-- [Remote desktop into a Windows machine (RDP)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#remote-desktop-into-a-windows-machine-rdp)
-- [Reach a Linux or Mac desktop (VNC)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-linux-or-mac-desktop-vnc)
-- [SSH to a machine with no open port (OpenSSH)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#ssh-to-a-machine-with-no-open-port-openssh)
-- [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#set-up-a-headless-raspberry-pi)
 
-**Share with someone else**
+### Why not just use SSH?
 
-- [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#share-files-without-uploading-them-anywhere)
-- [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-your-project)
-- [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#give-someone-access-that-expires)
-- [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-agent-session-from-your-phone-claude-code-tmux)
-- [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#fix-someone-elses-router)
+`bitbang` is shaped like ssh: `serve`, `connect`, and `cp` map to `sshd`, `ssh`, and `scp`, with WebRTC as the transport instead of TCP. For a machine you can already SSH into comfortably, that difference doesn't buy you much. But most of `bitbang` came out of annoyances I seem to hit more often than I should:
 
-**Development and devices**
+**Reach.** Remote SSH access needs an inbound path, and on most networks opening one isn't your call -- CGNAT (cellular, Starlink, many ISPs), corporate, university, municipal. So in practice you bolt on a second system: Tailscale, a VPN, ngrok -- another install, another account, another daemon to keep running. `bitbang serve` needs no open port and works from anywhere.
 
-- [Reach a database from your dev machine (Postgres, MySQL)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-database-from-your-dev-machine-postgres-mysql)
-- [Sync devices that cannot find each other (Syncthing)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#sync-devices-that-cannot-find-each-other-syncthing)
-- [Watch a robot from a browser (ROS, Foxglove)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-a-robot-from-a-browser-ros-foxglove)
+**Setup.** SSH has to be enabled and configured before it will let you in. It's disabled by default on Raspberry Pi OS, and often key-only, which means getting your public key onto the machine first. And how do you do that? Email or a USB stick are usually the most painless options. `bitbang` sets up the connection with a 6-digit code exchange instead -- something you can do safely over the phone, or call out across the room. It also runs as an ordinary user -- no root, no daemon, no config file.
 
-**Techniques**
+**Proxying.** If you want a web app on that machine's network, SSH gives you a separate tunnel per app, named in advance. The `bitbang` proxy is generic: specify the web app's URL at connection time.
 
-- [What a forwarding listener exposes](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#what-a-forwarding-listener-exposes)
-- [Let other machines on your LAN use a forward](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#let-other-machines-on-your-lan-use-a-forward)
-- [Known not to work](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#known-not-to-work)
+**Browser client.** SSH needs an SSH client and a key or password on the connecting side. `bitbang` needs a browser -- which means a phone, a borrowed laptop, or someone who has never opened a terminal. Hand them the URL and they get the access that you've granted them.
 
 ## Install
 
@@ -268,29 +290,6 @@ Release tags have no `v` prefix (`0.5.0`, not `v0.5.0`).
 4. Installs to `~/.local/bin` (overridable).
 
 The install script lives in this repo, next to the code it installs -- so you can review it alongside the binary, and the canonical bitba.ng host owns only the short URL. Self-hosters can point their own host's `/install` at whatever script they ship: the signaling server's `INSTALL_URL` env var controls the redirect target (empty → 404).
-
-## Security
-
-- **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is derived from the public key, so impersonating a device means finding a second preimage of its UID.
-- **The secret never touches the server.** The access code lives in the URL fragment (`#…`), which browsers never send -- `bitba.ng` brokers the connection without ever seeing the credential that authorizes it.
-- **End-to-end encryption.** All traffic rides WebRTC's DTLS. The signaling server sees only the public key, the derived UID, and connection metadata -- never your data. A TURN relay, if one is needed, sees ciphertext only.
-- **Verified pairing.** The read-aloud number in code pairing is a short authentication string (SAS), computed independently on both ends from the negotiated DTLS fingerprints and two committed nonces -- a machine-in-the-middle, whose fingerprints necessarily differ, can't make the two numbers match.
-- **The URL is a bearer credential.** Anyone who has it gets whatever you chose to serve -- a shell, if you ran `serve shell`. Share it accordingly.
-- **Optional PIN** (`--pin`) for permanent or headless setups, and **throwaway mode** (`-ephemeral`) for a fresh identity each run.
-
-How the two ends authenticate each other without trusting the signaling server is covered in detail here: [*Trustless Signaling: Authentication Without a Central Authority*](https://github.com/richlegrand/bitbang/blob/main/trustless-signaling.md).
-
-## How it compares
-
-|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | frp                                 | `bitbang`           |
-| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ----------------------------------- | ------------------- |
-| Account required                   | Yes                 | Yes               | Yes                            | No                                  | **No**              |
-| Install on the connecting side     | No                  | No                | **Yes**                        | No (**Yes** for P2P mode)           | **No** (browser)    |
-| End-to-end encrypted               | Not by default      | No                | Yes                            | No -- your server sees traffic      | **Yes**             |
-| Data path                          | Their servers       | Their servers     | P2P                            | Your server (P2P optional)          | **P2P**             |
-| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                             | **Yes**             |
-| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | A public-IP server + TOML both ends | **Run one command** |
-
 
 ## Command reference
 
@@ -453,7 +452,7 @@ Windows 10 version 1809 or Windows Server 2019 or later.
 <p align="center">
   <img src="assets/bitbang-cli-shell-files.png" alt="bitbang CLI shell and file sharing" width="760">
   <img src="assets/bitbang-cli-proxy.png" alt="bitbang CLI proxy operation" width="720">  
-</p> 
+</p>
 
 ## Roadmap
 
