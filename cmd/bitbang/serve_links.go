@@ -78,19 +78,29 @@ func (ls *linkState) reload() error {
 		}
 	}
 
-	// An entry with no code is a mint request: editing the file is how
-	// links are created, so there is no `link new`.
-	minted := []string(nil)
+	// Two passes over the file, and the order matters. Retire first, so a
+	// code whose entry has lapsed is gone before anything can mint over
+	// it; then mint, which fills the entries that are live and codeless
+	// -- including one just renewed, which is how a renewed link gets a
+	// fresh URL rather than reviving the one already handed out.
+	now := time.Now()
+	var changed []string
 	if len(entries) > 0 {
+		var retired, minted []string
+		entries, retired = links.RetireExpired(entries, now)
 		var err error
-		entries, minted, err = links.Mint(entries, identity.NewAccessCode)
+		entries, minted, err = links.Mint(entries, now, identity.NewAccessCode)
 		if err != nil {
 			return err
 		}
+		for _, label := range retired {
+			fmt.Fprintf(os.Stderr, "Link %q expired; its code is retired and a renewal will get a new one.\n", label)
+		}
+		changed = append(append(changed, retired...), minted...)
 	}
-	if len(minted) > 0 {
+	if len(changed) > 0 {
 		if err := links.Save(ls.path, entries, mod); err != nil {
-			return fmt.Errorf("writing minted codes: %w", err)
+			return fmt.Errorf("writing link codes: %w", err)
 		}
 		// Re-stat so the next mint compares against what we just wrote.
 		if _, m, err := links.Load(ls.path); err == nil {
@@ -145,7 +155,12 @@ func (ls *linkState) listing(bold, reset string) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	for i, e := range entries {
-		url := ls.codeURL(e.Code)
+		// A retired or not-yet-minted entry has no code, and printing a
+		// URL whose fragment is empty offers something that cannot work.
+		url := "(no code until renewed)"
+		if e.Code != "" {
+			url = ls.codeURL(e.Code)
+		}
 		fmt.Fprintf(&b, "  %-*s  %-*s  %-14s  %s%s%s\n",
 			labelW, rows[i][0], scopeW, rows[i][1], rows[i][2], bold, url, reset)
 	}

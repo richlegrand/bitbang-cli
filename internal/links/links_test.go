@@ -267,7 +267,7 @@ func TestSave_RoundTrips(t *testing.T) {
 func TestMint_FillsOnlyMissingCodes(t *testing.T) {
 	n := 0
 	gen := func() (string, error) { n++; return "MINTED", nil }
-	out, minted, err := Mint([]Terms{{Label: "has", Code: "KEEP"}, {Label: "needs"}}, gen)
+	out, minted, err := Mint([]Terms{{Label: "has", Code: "KEEP"}, {Label: "needs"}}, time.Now(), gen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,5 +276,53 @@ func TestMint_FillsOnlyMissingCodes(t *testing.T) {
 	}
 	if out[1].Code != "MINTED" || len(minted) != 1 || minted[0] != "needs" {
 		t.Errorf("mint did not fill the empty code: %+v %v", out, minted)
+	}
+}
+
+// An expired code must die rather than sleep: left in place, extending
+// the entry brings back the same fragment, so renewing a link for one
+// person silently readmits everyone who was ever sent it.
+func TestRetireExpired_ClearsTheCodeSoRenewalMintsAFreshOne(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	entries := []Terms{
+		{Label: "lapsed", Code: "OLDCODE", Expires: &past},
+		{Label: "live", Code: "LIVECODE", Expires: &future},
+		{Label: "forever", Code: "FOREVER"},
+	}
+
+	out, retired := RetireExpired(entries, time.Now())
+	if len(retired) != 1 || retired[0] != "lapsed" {
+		t.Fatalf("retired = %v, want just the lapsed one", retired)
+	}
+	if out[0].Code != "" {
+		t.Errorf("lapsed entry kept its code %q", out[0].Code)
+	}
+	if out[1].Code != "LIVECODE" || out[2].Code != "FOREVER" {
+		t.Error("retiring touched an entry that had not expired")
+	}
+
+	// Still expired, so minting must leave it alone -- otherwise every
+	// reload hands a dead link a fresh code and rewrites the file.
+	out, minted, err := Mint(out, time.Now(), func() (string, error) { return "NEW", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minted) != 0 {
+		t.Errorf("minted %v for an entry that is still expired", minted)
+	}
+
+	// Renewed: now it is live and codeless, so it gets a code, and a new
+	// one -- the URL already handed out stays dead.
+	out[0].Expires = &future
+	out, minted, err = Mint(out, time.Now(), func() (string, error) { return "NEW", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minted) != 1 || out[0].Code != "NEW" {
+		t.Fatalf("renewal did not mint a fresh code: minted=%v code=%q", minted, out[0].Code)
+	}
+	if out[0].Code == "OLDCODE" {
+		t.Error("renewal revived the original code")
 	}
 }

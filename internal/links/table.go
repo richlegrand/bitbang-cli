@@ -116,14 +116,45 @@ func (t *Table) Authorize(code string, now time.Time) (Terms, bool) {
 	return e, true
 }
 
-// Mint fills in a code for every entry that has none and reports the
+// RetireExpired clears the code of every entry whose expiry has passed,
+// reporting the labels it retired.
+//
+// An expired code has to die rather than sleep. Left in place it comes
+// back the moment someone extends the entry -- the same fragment, still
+// in the URL the original holder kept -- so renewing a link for one
+// person silently readmits everyone it had already been sent to, which
+// is the opposite of what "expires" led them to expect.
+//
+// Clearing is written back rather than only applied in memory, because
+// the gap this closes includes renewing while the listener is stopped:
+// on the next start the entry would simply be live again, code and all.
+// Editing someone's file is not something to do lightly, and removing a
+// credential that is already dead is the one case that earns it.
+func RetireExpired(entries []Terms, now time.Time) ([]Terms, []string) {
+	out := append([]Terms(nil), entries...)
+	var retired []string
+	for i := range out {
+		if out[i].Code == "" || out[i].Check(now) == nil {
+			continue
+		}
+		out[i].Code = ""
+		retired = append(retired, out[i].Label)
+	}
+	return out, retired
+}
+
+// Mint fills in a code for every live entry that has none and reports the
 // labels it touched. An entry with no code is a mint request -- editing
 // the file is how you create a link, so there is no `link new`.
-func Mint(entries []Terms, gen func() (string, error)) ([]Terms, []string, error) {
+//
+// Expired entries are skipped: they are exactly what RetireExpired just
+// emptied, and minting them a fresh code would hand a dead link a live
+// credential and rewrite the file on every reload.
+func Mint(entries []Terms, now time.Time, gen func() (string, error)) ([]Terms, []string, error) {
 	out := append([]Terms(nil), entries...)
 	var minted []string
 	for i := range out {
-		if out[i].Code != "" {
+		if out[i].Code != "" || out[i].Check(now) != nil {
 			continue
 		}
 		code, err := gen()
