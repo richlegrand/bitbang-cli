@@ -44,6 +44,11 @@ type Client struct {
 	// 22-character UID URL.
 	WantCode bool
 
+	// codeIssued carries a renewed pairing code from the read loop back
+	// to whoever asked. Buffered by one so an answer nobody is waiting
+	// for does not block the loop.
+	codeIssued chan string
+
 	// PairingCode is the 6-digit code issued by the server when WantCode
 	// was true. Empty when WantCode was false, when the server doesn't
 	// support pairing, or before the first successful register.
@@ -98,6 +103,7 @@ func NewClient(server string, id *identity.Identity) *Client {
 		Server:      server,
 		ServerWS:    ws,
 		OnPreempted: defaultOnPreempted,
+		codeIssued:  make(chan string, 1),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -244,7 +250,62 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 			}
 		}
 
+		// code_issued answers RenewCode. Intercepted here rather than
+		// handed to the caller: it updates PairingCode, which is
+		// signaling-layer state, and a caller that has never seen the
+		// type would only have to ignore it.
+		if mtype, _ := msg["type"].(string); mtype == "code_issued" {
+			code, _ := msg["code"].(string)
+			c.connMu.Lock()
+			c.PairingCode = code
+			c.connMu.Unlock()
+			select {
+			case c.codeIssued <- code:
+			default: // nobody waiting; the field is updated either way
+			}
+			continue
+		}
+
 		handler(msg)
+	}
+}
+
+// RenewPairingCode asks the server for a pairing code, for when the one
+// issued at register time has lapsed. Returns the code, or an error.
+//
+// A server that predates this ignores the message and answers nothing,
+// which is why there is a deadline rather than an open wait: silence is
+// the expected reply from an older server, not a fault.
+func (c *Client) RenewPairingCode(wait time.Duration) (string, error) {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+	if conn == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	// Drain a stale answer so a slow earlier reply cannot be mistaken for
+	// this one.
+	select {
+	case <-c.codeIssued:
+	default:
+	}
+
+	c.writeMu.Lock()
+	err := conn.WriteJSON(map[string]string{"type": "renew_code"})
+	c.writeMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+
+	select {
+	case code := <-c.codeIssued:
+		if code == "" {
+			return "", fmt.Errorf("the server issued no code")
+		}
+		return code, nil
+	case <-time.After(wait):
+		return "", fmt.Errorf("no answer; this signaling server may not support renewal")
 	}
 }
 

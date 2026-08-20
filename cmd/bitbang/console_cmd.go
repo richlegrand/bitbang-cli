@@ -214,12 +214,25 @@ func cmdReload(l *listener, c *console, _ []string) error {
 // behaviors and both are the one you want -- read the live code out
 // again, or get another once it has gone.
 func cmdCode(l *listener, c *console, _ []string) error {
-	if code := l.signaling.PairingCode; code != "" {
-		c.Say("  Pairing code: %s", code)
-		c.Say("  They run: bitbang connect %s", code)
+	// Always ask, never report the cached value. Issue is idempotent
+	// inside the code's lifetime, so asking returns the live code when
+	// there is one and a fresh code once it has lapsed -- which is why
+	// there is no separate `code new`.
+	//
+	// The cache cannot answer this: nothing clears PairingCode when a
+	// code expires, so trusting it would print a dead code indefinitely.
+	// It is only a fallback for a server too old to answer.
+	code, err := l.signaling.RenewPairingCode(3 * time.Second)
+	if err != nil {
+		if cached := l.signaling.PairingCode; cached != "" {
+			c.Say("  %v", err)
+			c.Say("  Last code issued was %s, which may have lapsed.", cached)
+			return nil
+		}
+		c.Say("  %v", err)
 		return nil
 	}
-	c.Say("  No pairing code. Codes last five minutes, and asking for another")
-	c.Say("  needs a signaling-server message that does not exist yet.")
+	c.Say("  Pairing code: %s  (valid 5 minutes)", code)
+	c.Say("  They run: bitbang connect %s", code)
 	return nil
 }
