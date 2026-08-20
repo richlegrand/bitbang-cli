@@ -73,6 +73,13 @@ func (l *listener) watch(bold, reset string) {
 	watchExpiry(linkPoll, poll)
 }
 
+// pollNow re-checks live sessions against the table as it stands.
+// Called after anything that changes the table, so a revocation reaches
+// sessions already open rather than only the next connection.
+func (l *listener) pollNow() {
+	pollPeers(l.peers.All(), l.links.current(), time.Now())
+}
+
 func (l *listener) handleSignal(msg signaling.Message) {
 	switch t, _ := msg["type"].(string); t {
 	case "request":

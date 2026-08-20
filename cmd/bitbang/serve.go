@@ -411,6 +411,9 @@ func startListener(cfg serveConfig) {
 	}
 
 	l.watch(out.bold, out.reset)
+	con.Watch("console -- try help, or exit to resume output", func(line string) error {
+		return l.runCommand(con, line)
+	})
 
 	firstReady := true
 	signalingClient.OnReady = func() {

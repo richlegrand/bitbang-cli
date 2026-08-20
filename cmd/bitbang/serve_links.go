@@ -240,48 +240,41 @@ func quoteAll(labels []string) []string {
 	return out
 }
 
-// add appends a link, mints its code, writes the table back, and swaps in
-// the new one. Returns the minted code.
+// mutate applies fn to the table on disk and installs the result: read,
+// change, de-duplicate, retire, mint, write, rebuild, swap.
 //
-// The listener is the writer here, which is the whole reason this is
-// better than telling someone to edit the file: no second process, so no
-// modtime race and no guard to trip over. The file is re-read first so an
-// edit made outside is not lost.
-func (ls *linkState) add(entry links.Terms) (string, error) {
+// The listener is the writer, which is why the console beats telling
+// someone to edit the file. There is no second process, so no modtime
+// race and no guard to trip over. The file is re-read first so an edit
+// made outside is folded in rather than lost.
+func (ls *linkState) mutate(fn func([]links.Terms) ([]links.Terms, error)) error {
 	if ls.readOnly {
-		return "", fmt.Errorf("this listener has an ephemeral identity, so it keeps no link table")
+		return fmt.Errorf("this listener has an ephemeral identity, so it keeps no link table")
 	}
 
 	entries, mod, err := links.Load(ls.path)
 	if err != nil {
-		return "", err
+		return err
 	}
-	for _, e := range entries {
-		if e.Label == entry.Label {
-			return "", fmt.Errorf("a link called %q already exists", entry.Label)
-		}
+	entries, err = fn(entries)
+	if err != nil {
+		return err
 	}
-	if entry.Label == links.MeLabel {
-		return "", fmt.Errorf("%q is reserved for this device's own code", links.MeLabel)
-	}
-
-	entry.Code = "" // minted below, never carried in from the caller
-	entries = append(entries, entry)
 
 	now := time.Now()
 	entries, _ = links.DedupeCodes(entries, ls.code)
 	entries, _ = links.RetireExpired(entries, now)
 	entries, _, err = links.Mint(entries, now, identity.NewAccessCode)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := links.Save(ls.path, entries, mod); err != nil {
-		return "", err
+		return err
 	}
 
 	table, warnings, err := links.Build(entries, ls.offered, ls.code)
 	if err != nil {
-		return "", err
+		return err
 	}
 	for _, w := range warnings {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
@@ -293,9 +286,83 @@ func (ls *linkState) add(entry links.Terms) (string, error) {
 	ls.mu.Lock()
 	ls.table, ls.mod = table, mod
 	ls.mu.Unlock()
+	return nil
+}
 
-	added, _ := table.ByLabel(entry.Label)
+// add appends a link and returns the code minted for it.
+func (ls *linkState) add(entry links.Terms) (string, error) {
+	if entry.Label == links.MeLabel {
+		return "", fmt.Errorf("%q is reserved for this device's own code", links.MeLabel)
+	}
+	entry.Code = "" // minted by mutate, never carried in from the caller
+
+	err := ls.mutate(func(entries []links.Terms) ([]links.Terms, error) {
+		for _, e := range entries {
+			if e.Label == entry.Label {
+				return nil, fmt.Errorf("a link called %q already exists", entry.Label)
+			}
+		}
+		return append(entries, entry), nil
+	})
+	if err != nil {
+		return "", err
+	}
+	added, _ := ls.current().ByLabel(entry.Label)
 	return added.Code, nil
+}
+
+// remove deletes a link. Sessions using it are closed by the poll the
+// caller runs afterwards, which is also what makes rm a revocation
+// rather than only a bookkeeping change.
+func (ls *linkState) remove(label string) error {
+	if label == links.MeLabel {
+		return fmt.Errorf("%q is this device's own code, not a table entry", links.MeLabel)
+	}
+	return ls.mutate(func(entries []links.Terms) ([]links.Terms, error) {
+		kept := make([]links.Terms, 0, len(entries))
+		found := false
+		for _, e := range entries {
+			if e.Label == label {
+				found = true
+				continue
+			}
+			kept = append(kept, e)
+		}
+		if !found {
+			return nil, fmt.Errorf("no link called %q", label)
+		}
+		return kept, nil
+	})
+}
+
+// replace swaps an entry for an edited one, keyed on the label it had.
+// The code is carried across, so a URL already handed out keeps working
+// under the new terms -- unless the entry has lapsed, in which case
+// retirement clears it and a fresh one is minted.
+func (ls *linkState) replace(oldLabel string, entry links.Terms) error {
+	if oldLabel == links.MeLabel || entry.Label == links.MeLabel {
+		return fmt.Errorf("%q is this device's own code, not a table entry", links.MeLabel)
+	}
+	return ls.mutate(func(entries []links.Terms) ([]links.Terms, error) {
+		out := make([]links.Terms, 0, len(entries))
+		found := false
+		for _, e := range entries {
+			switch {
+			case e.Label == oldLabel:
+				found = true
+				entry.Code = e.Code
+				out = append(out, entry)
+			case e.Label == entry.Label:
+				return nil, fmt.Errorf("a link called %q already exists", entry.Label)
+			default:
+				out = append(out, e)
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("no link called %q", oldLabel)
+		}
+		return out, nil
+	})
 }
 
 // url composes the URL for a code.

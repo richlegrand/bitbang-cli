@@ -179,3 +179,60 @@ func (c *console) Session(fn func() error) error {
 	defer c.leave("")
 	return fn()
 }
+
+// Loop runs the command loop until the operator leaves. Opened by Enter
+// at the terminal, and by anything else that wants a session.
+//
+// Modal: while it runs, the listener's output is held, so a mirroring
+// shell session cannot scroll a half-typed command or a question away.
+func (c *console) Loop(prompt string, run func(line string) error) {
+	if !c.Available() {
+		return
+	}
+	c.enter()
+	defer c.leave("")
+
+	c.Say("")
+	c.Say("  %s", prompt)
+	for {
+		line, err := c.Ask("bitbang", "")
+		if err != nil {
+			return // Ctrl-C, EOF, or idle; leave() runs on the way out
+		}
+		switch strings.TrimSpace(line) {
+		case "":
+			continue
+		case "exit", "quit", "q":
+			return
+		}
+		if err := run(line); err != nil {
+			return
+		}
+	}
+}
+
+// Watch opens the console when the operator presses Enter. One reader on
+// the terminal, so nothing else may read stdin -- two readers race for
+// every line, and the loser is whichever prompt needed it.
+func (c *console) Watch(prompt string, run func(line string) error) {
+	if !c.Available() {
+		return
+	}
+	go func() {
+		for {
+			// Idle between sessions rather than inside one: this read has
+			// no deadline, because nobody is waiting on an answer.
+			line, err := c.in.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if strings.TrimSpace(line) != "" {
+				// Typed something before Enter: treat it as the first
+				// command rather than discarding it.
+				c.enter()
+				_ = run(strings.TrimSpace(line))
+			}
+			c.Loop(prompt, run)
+		}
+	}()
+}
