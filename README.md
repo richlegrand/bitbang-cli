@@ -177,47 +177,47 @@ Every successful connect or pairing is saved to `~/.bitbang/devices.json`, so fr
 
 ## Recipes
 
-What people actually do with it. Each links into the [BitBang Cookbook](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md),
+What people actually do with it. Each links into the [BitBang Cookbook](https://github.com/richlegrand/bitbang/blob/main/cookbook.md),
 which covers every project rather than just the CLI.
 
 **Reach a service at home**
 
-- [Mount your home NAS from anywhere (SMB)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#mount-your-home-nas-from-anywhere-smb)
-- [Watch your media library from anywhere (Jellyfin)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#watch-your-media-library-from-anywhere-jellyfin)
-- [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#use-your-own-llm-from-anywhere-ollama-open-webui)
-- [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#check-your-security-cameras-frigate)
-- [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#reach-your-home-automation-without-exposing-it-home-assistant)
-- [Check on a 3D print from work (OctoPrint)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#check-on-a-3d-print-from-work-octoprint)
-- [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#print-to-your-home-printer-ipp-cups)
+- [Mount your home NAS from anywhere (SMB)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#mount-your-home-nas-from-anywhere-smb)
+- [Watch your media library from anywhere (Jellyfin)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-your-media-library-from-anywhere-jellyfin)
+- [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#use-your-own-llm-from-anywhere-ollama-open-webui)
+- [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-security-cameras-frigate)
+- [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-your-home-automation-without-exposing-it-home-assistant)
+- [Check on a 3D print from work (OctoPrint)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-on-a-3d-print-from-work-octoprint)
+- [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#print-to-your-home-printer-ipp-cups)
 
 **Get on a machine**
 
-- [Get a shell on a machine behind NAT](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#get-a-shell-on-a-machine-behind-nat)
-- [Get a shell from your phone](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#get-a-shell-from-your-phone)
-- [Remote desktop into a Windows machine (RDP)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#remote-desktop-into-a-windows-machine-rdp)
-- [Reach a Linux or Mac desktop (VNC)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#reach-a-linux-or-mac-desktop-vnc)
-- [SSH to a machine with no open port (OpenSSH)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#ssh-to-a-machine-with-no-open-port-openssh)
-- [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#set-up-a-headless-raspberry-pi)
+- [Get a shell on a machine behind NAT](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-on-a-machine-behind-nat)
+- [Get a shell from your phone](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-from-your-phone)
+- [Remote desktop into a Windows machine (RDP)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#remote-desktop-into-a-windows-machine-rdp)
+- [Reach a Linux or Mac desktop (VNC)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-linux-or-mac-desktop-vnc)
+- [SSH to a machine with no open port (OpenSSH)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#ssh-to-a-machine-with-no-open-port-openssh)
+- [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#set-up-a-headless-raspberry-pi)
 
 **Share with someone else**
 
-- [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#share-files-without-uploading-them-anywhere)
-- [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#show-someone-your-project)
-- [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#give-someone-access-that-expires)
-- [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#check-your-agent-session-from-your-phone-claude-code-tmux)
-- [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#fix-someone-elses-router)
+- [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#share-files-without-uploading-them-anywhere)
+- [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-your-project)
+- [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#give-someone-access-that-expires)
+- [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-agent-session-from-your-phone-claude-code-tmux)
+- [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#fix-someone-elses-router)
 
 **Development and devices**
 
-- [Reach a database from your dev machine (Postgres, MySQL)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#reach-a-database-from-your-dev-machine-postgres-mysql)
-- [Sync devices that cannot find each other (Syncthing)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#sync-devices-that-cannot-find-each-other-syncthing)
-- [Watch a robot from a browser (ROS, Foxglove)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#watch-a-robot-from-a-browser-ros-foxglove)
+- [Reach a database from your dev machine (Postgres, MySQL)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-database-from-your-dev-machine-postgres-mysql)
+- [Sync devices that cannot find each other (Syncthing)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#sync-devices-that-cannot-find-each-other-syncthing)
+- [Watch a robot from a browser (ROS, Foxglove)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-a-robot-from-a-browser-ros-foxglove)
 
 **Techniques**
 
-- [What a forwarding listener exposes](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#what-a-forwarding-listener-exposes)
-- [Let other machines on your LAN use a forward](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#let-other-machines-on-your-lan-use-a-forward)
-- [Known not to work](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#known-not-to-work)
+- [What a forwarding listener exposes](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#what-a-forwarding-listener-exposes)
+- [Let other machines on your LAN use a forward](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#let-other-machines-on-your-lan-use-a-forward)
+- [Known not to work](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#known-not-to-work)
 
 ## Install
 
@@ -470,7 +470,7 @@ MIT -- see [LICENSE](LICENSE).
 
 Issues and PRs welcome.
 
-Recipes are different: they live in the [cookbook](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md),
+Recipes are different: they live in the [cookbook](https://github.com/richlegrand/bitbang/blob/main/cookbook.md),
 in the [bitbang](https://github.com/richlegrand/bitbang) repo, because they span
 every project rather than this one. Adding a recipe is a PR there.
 
