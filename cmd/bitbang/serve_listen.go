@@ -237,7 +237,7 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		sess.Close()
 		return
 	}
-	if label != links.MeLabel {
+	if label != links.OwnerLabel {
 		log.Printf("Peer %s authorized on link %q (%v)", clientID, label, terms.Grants(offeredScopes(l.cfg)))
 	}
 }

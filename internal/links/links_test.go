@@ -85,7 +85,7 @@ func TestValidate(t *testing.T) {
 // -- Scope --
 
 func TestGrants_AbsentScopeIsEverythingOffered(t *testing.T) {
-	got := Terms{Label: "me"}.Grants([]string{ScopeFiles, ScopeShell})
+	got := Terms{Label: "owner"}.Grants([]string{ScopeFiles, ScopeShell})
 	if strings.Join(got, ",") != "files,shell" {
 		t.Errorf("got %v, want everything offered", got)
 	}
@@ -108,26 +108,26 @@ func TestBuild_WarnsWhenScopeNotServed(t *testing.T) {
 	}
 }
 
-// -- The implicit `me` row --
+// -- The implicit `owner` row --
 
-func TestBuild_SynthesizesMe(t *testing.T) {
+func TestBuild_SynthesizesOwner(t *testing.T) {
 	tb := mustBuild(t, nil, offered)
-	me, ok := tb.ByLabel(MeLabel)
+	owner, ok := tb.ByLabel(OwnerLabel)
 	if !ok {
-		t.Fatal("no me row; the poll would close the operator's own session")
+		t.Fatal("no owner row; the poll would close the operator's own session")
 	}
-	if me.Expires != nil || me.Scope != nil {
-		t.Error("me must never expire and must grant everything offered")
+	if owner.Expires != nil || owner.Scope != nil {
+		t.Error("owner must never expire and must grant everything offered")
 	}
-	if got := me.Grants(offered); len(got) != len(offered) {
-		t.Errorf("me grants %v, want everything offered", got)
+	if got := owner.Grants(offered); len(got) != len(offered) {
+		t.Errorf("owner grants %v, want everything offered", got)
 	}
 }
 
-func TestBuild_HandWrittenMeCollides(t *testing.T) {
-	_, _, err := Build([]Terms{{Label: MeLabel}}, offered, "C")
+func TestBuild_HandWrittenOwnerCollides(t *testing.T) {
+	_, _, err := Build([]Terms{{Label: OwnerLabel}}, offered, "C")
 	if err == nil {
-		t.Fatal("a hand-written `me` entry must collide with the synthesized row")
+		t.Fatal("a hand-written `owner` entry must collide with the synthesized row")
 	}
 }
 

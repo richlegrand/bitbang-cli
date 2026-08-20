@@ -291,8 +291,8 @@ func (ls *linkState) mutate(fn func([]links.Terms) ([]links.Terms, error)) error
 
 // add appends a link and returns the code minted for it.
 func (ls *linkState) add(entry links.Terms) (string, error) {
-	if entry.Label == links.MeLabel {
-		return "", fmt.Errorf("%q is reserved for this device's own code", links.MeLabel)
+	if entry.Label == links.OwnerLabel {
+		return "", fmt.Errorf("%q is reserved for this device's own code", links.OwnerLabel)
 	}
 	entry.Code = "" // minted by mutate, never carried in from the caller
 
@@ -315,8 +315,8 @@ func (ls *linkState) add(entry links.Terms) (string, error) {
 // caller runs afterwards, which is also what makes rm a revocation
 // rather than only a bookkeeping change.
 func (ls *linkState) remove(label string) error {
-	if label == links.MeLabel {
-		return fmt.Errorf("%q is this device's own code, not a table entry", links.MeLabel)
+	if label == links.OwnerLabel {
+		return fmt.Errorf("%q is this device's own code, not a table entry", links.OwnerLabel)
 	}
 	return ls.mutate(func(entries []links.Terms) ([]links.Terms, error) {
 		kept := make([]links.Terms, 0, len(entries))
@@ -340,8 +340,8 @@ func (ls *linkState) remove(label string) error {
 // under the new terms -- unless the entry has lapsed, in which case
 // retirement clears it and a fresh one is minted.
 func (ls *linkState) replace(oldLabel string, entry links.Terms) error {
-	if oldLabel == links.MeLabel || entry.Label == links.MeLabel {
-		return fmt.Errorf("%q is this device's own code, not a table entry", links.MeLabel)
+	if oldLabel == links.OwnerLabel || entry.Label == links.OwnerLabel {
+		return fmt.Errorf("%q is this device's own code, not a table entry", links.OwnerLabel)
 	}
 	return ls.mutate(func(entries []links.Terms) ([]links.Terms, error) {
 		out := make([]links.Terms, 0, len(entries))

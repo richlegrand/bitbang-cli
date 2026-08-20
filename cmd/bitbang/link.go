@@ -200,7 +200,7 @@ func runLinkEdit(args []string) {
 
 	// Validate before leaving, so a mistake surfaces here rather than as
 	// a listener that refuses to start. Build as well as Load: a
-	// duplicate label, or an entry that collides with the implicit `me`
+	// duplicate label, or an entry that collides with the implicit `owner`
 	// row, is only visible once the table is assembled.
 	if err := validateTable(path); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -217,11 +217,11 @@ func runLinkRm(args []string) {
 		os.Exit(2)
 	}
 	label := rest[0]
-	if label == links.MeLabel {
+	if label == links.OwnerLabel {
 		fmt.Fprintf(os.Stderr,
 			"%q is the identity's own code, not a table entry: removing it would revoke your\n"+
 				"own access to a listener you are running, and it would come back on the next\n"+
-				"reload anyway.\n", links.MeLabel)
+				"reload anyway.\n", links.OwnerLabel)
 		os.Exit(2)
 	}
 
@@ -266,7 +266,7 @@ func runLinkQR(args []string) {
 	}
 
 	code := ""
-	if label == links.MeLabel {
+	if label == links.OwnerLabel {
 		code = id.Code
 	} else {
 		entries, _, err := links.Load(linkPath(program))

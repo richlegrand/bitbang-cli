@@ -103,13 +103,13 @@ func TestGrantQuestions_AllAndNever(t *testing.T) {
 func TestGrantQuestions_RejectsBadInputAndAsksAgain(t *testing.T) {
 	now := time.Now()
 	a := &scriptedAsker{t: t, answers: []string{
-		"9",   // out of range
-		"1",   // files
-		"99",  // out of range
-		"1",   // never
-		"me",  // reserved label
-		"   ", // whitespace; "" would mean Enter and take the default
-		"ok",  // fine
+		"9",     // out of range
+		"1",     // files
+		"99",    // out of range
+		"1",     // never
+		"owner", // reserved label
+		"   ",   // whitespace; "" would mean Enter and take the default
+		"ok",    // fine
 	}}
 	got, err := grantQuestions(a, links.Terms{}, allScopes, now)
 	if err != nil {

@@ -29,11 +29,17 @@ type Terms struct {
 	Expires *time.Time `json:"expires,omitempty"`
 }
 
-// MeLabel is the label of the implicit entry standing for the identity's
-// own access code. It is synthesized into the table at load rather than
-// special-cased in the checker, so the table is the whole story and the
-// poll finds a row for every live session.
-const MeLabel = "me"
+// OwnerLabel is the label of the implicit entry standing for the
+// identity's own access code -- the operator's own link, which grants
+// everything the listener serves and never expires. It is synthesized
+// into the table at load rather than special-cased in the checker, so
+// the table is the whole story and the poll finds a row for every live
+// session.
+//
+// Named for the reader rather than the writer: a listener started at
+// boot is read by whoever is looking at the log, and "me" has no
+// referent there.
+const OwnerLabel = "owner"
 
 // The scope vocabulary. These names are permanent in a way flags are
 // not: they live in config files people keep, so a stream type can be

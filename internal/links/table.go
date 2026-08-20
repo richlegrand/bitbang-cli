@@ -8,7 +8,7 @@ import (
 )
 
 // Table is the resolved link table: the entries from links.json plus the
-// synthesized `me` row for the identity's own code. Lookup is by label
+// synthesized `owner` row for the identity's own code. Lookup is by label
 // (the poll) or by code (the resolver).
 //
 // Built once per load and replaced wholesale on reload. Nothing mutates
@@ -22,25 +22,25 @@ type Table struct {
 }
 
 // Build assembles a Table from parsed entries. The identity's own code
-// becomes a real row labeled `me` -- no expiry, everything served --
+// becomes a real row labeled `owner` -- no expiry, everything served --
 // rather than a special case in the checker, so the poll finds a row for
 // every live session and the table is the whole story.
 //
 // Duplicate labels are rejected here, after synthesis, so a hand-written
-// entry labeled `me` collides instead of shadowing.
+// entry labeled `owner` collides instead of shadowing.
 //
 // Warnings name links whose scope asks for something this listener does
 // not serve. That grants nothing, which is expensive to debug silently.
 func Build(entries []Terms, offered []string, identityCode string) (*Table, []string, error) {
 	all := make([]Terms, 0, len(entries)+1)
-	all = append(all, Terms{Label: MeLabel, Code: identityCode})
+	all = append(all, Terms{Label: OwnerLabel, Code: identityCode})
 	all = append(all, entries...)
 
 	seen := make(map[string]bool, len(all))
 	for _, e := range all {
 		if seen[e.Label] {
-			if e.Label == MeLabel {
-				return nil, nil, fmt.Errorf("link %q is reserved for the identity's own code", MeLabel)
+			if e.Label == OwnerLabel {
+				return nil, nil, fmt.Errorf("link %q is reserved for the identity's own code", OwnerLabel)
 			}
 			return nil, nil, fmt.Errorf("duplicate link label %q", e.Label)
 		}
@@ -71,7 +71,7 @@ func Build(entries []Terms, offered []string, identityCode string) (*Table, []st
 	return &Table{entries: all, offered: sorted}, warnings, nil
 }
 
-// Entries returns the rows in table order: `me` first, then the file's
+// Entries returns the rows in table order: `owner` first, then the file's
 // own, unsorted, so the listing matches what you wrote.
 func (t *Table) Entries() []Terms { return append([]Terms(nil), t.entries...) }
 

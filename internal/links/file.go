@@ -28,7 +28,7 @@ var deferredFields = map[string]string{
 }
 
 // Parse decodes and validates the file's entries. It does not synthesize
-// the implicit `me` row and does not mint codes; both belong to the
+// the implicit `owner` row and does not mint codes; both belong to the
 // caller, which knows the identity and what is served.
 //
 // Unknown fields are refused. Beyond catching the deferred terms above,
@@ -63,8 +63,8 @@ func Parse(data []byte) ([]Terms, error) {
 }
 
 // Validate applies the value-level rules the JSON decoder cannot see.
-// Duplicate labels are checked by the caller, after the implicit `me`
-// row is synthesized, so a hand-written entry labeled `me` collides.
+// Duplicate labels are checked by the caller, after the implicit `owner`
+// row is synthesized, so a hand-written entry labeled `owner` collides.
 func Validate(entries []Terms) error {
 	for i, e := range entries {
 		n := i + 1

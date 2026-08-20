@@ -157,13 +157,13 @@ code, reload the listener (Enter at its console, or `SIGHUP`), and it mints one:
 ```
 
 ```
-  me     files forward proxy shell                  https://bitba.ng/8ach_I7o...#_vtQ0JCPe7s
+  owner  files forward proxy shell                  https://bitba.ng/8ach_I7o...#_vtQ0JCPe7s
   ana    files                      expires in 6d   https://bitba.ng/8ach_I7o...#T-Ty_HhvLfY
   ben    files                                      https://bitba.ng/8ach_I7o...#L6La8OzBO74
   dev    forward shell                              https://bitba.ng/8ach_I7o...#8kmI3LYzB7E
 ```
 
-`me` is the identity's own code and grants everything the listener serves; send
+`owner` is the identity's own code and grants everything the listener serves; send
 one of the others instead. `scope` is drawn from `files`, `shell`, `forward`, and
 `proxy`, intersected with what the listener actually offers -- a `files` link
 cannot open a shell, and says so to anyone who tries. Omit `scope` and the link

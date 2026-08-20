@@ -105,7 +105,7 @@ func cmdEdit(l *listener, c *console, args []string) error {
 		return nil
 	}
 	current, ok := l.links.current().ByLabel(args[0])
-	if !ok || current.Label == links.MeLabel {
+	if !ok || current.Label == links.OwnerLabel {
 		c.Say("  no link called %q", args[0])
 		return nil
 	}
@@ -164,8 +164,8 @@ func cmdQR(l *listener, c *console, args []string) error {
 }
 
 func cmdURL(l *listener, c *console, _ []string) error {
-	me, _ := l.links.current().ByLabel(links.MeLabel)
-	url := l.links.url(me.Code)
+	owner, _ := l.links.current().ByLabel(links.OwnerLabel)
+	url := l.links.url(owner.Code)
 	c.Say("%s", strings.TrimRight(smallQR(url), "\n"))
 	c.Say("  %s", url)
 	return nil

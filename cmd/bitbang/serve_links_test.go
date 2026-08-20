@@ -62,7 +62,7 @@ func TestListing_ShowsEveryRowWithItsURL(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	ls := &linkState{
 		offered: []string{links.ScopeFiles, links.ScopeShell},
-		code:    "MECODE",
+		code:    "OWNERCODE",
 		codeURL: func(code string, flags ...string) string { return "https://x/uid#" + code },
 	}
 	table, _, err := links.Build([]links.Terms{
@@ -76,7 +76,7 @@ func TestListing_ShowsEveryRowWithItsURL(t *testing.T) {
 
 	got := ls.listing("", "")
 	for _, want := range []string{
-		"me", "#MECODE",
+		"owner", "#OWNERCODE",
 		"contractor", "#CONTRACTOR",
 		// An expired row prints, marked: dropping it looks like the file
 		// failed to load.

@@ -32,7 +32,7 @@ def scoped(listener, test_server, target_app, tmp_path_factory):
     l = listener('serve', '-server', test_server, '-files', shared, home=home)
     urls = l.write_links([{'label': 'contractor', 'scope': ['files']}])
     assert 'contractor' in urls, f'link never appeared in the listing:\n{l.log()}'
-    assert 'me' in urls
+    assert 'owner' in urls
     return l, urls
 
 
@@ -76,7 +76,7 @@ def test_unscoped_link_can_reach_a_lan_host(scoped, browser_context, target_app)
     happily if the proxy were broken for everyone."""
     _, urls = scoped
     page = browser_context.new_page()
-    page.goto(f"{urls['me']}/{target_app}/", wait_until='networkidle')
+    page.goto(f"{urls['owner']}/{target_app}/", wait_until='networkidle')
     frame = page.frame_locator('#device-frame')
     heading = frame.locator('#heading')
     heading.wait_for(timeout=20000)

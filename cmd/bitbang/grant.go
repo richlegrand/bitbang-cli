@@ -276,8 +276,8 @@ func askLabel(a asker, seed links.Terms, now time.Time) (string, error) {
 		switch {
 		case answer == "":
 			a.Say("  a label is how you refer to this link later")
-		case answer == links.MeLabel:
-			a.Say("  %q is reserved for this device's own code", links.MeLabel)
+		case answer == links.OwnerLabel:
+			a.Say("  %q is reserved for this device's own code", links.OwnerLabel)
 		default:
 			return answer, nil
 		}

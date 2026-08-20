@@ -196,10 +196,10 @@ func TestPoll_UnchangedLinkIsLeftAlone(t *testing.T) {
 }
 
 func TestPoll_MeSurvives(t *testing.T) {
-	p := peerOn(links.Terms{Label: links.MeLabel, Code: "IDENTITY"})
+	p := peerOn(links.Terms{Label: links.OwnerLabel, Code: "IDENTITY"})
 	pollPeers([]*servePeer{p}, tableWith(t, nil), time.Now())
 	if p.q.IsClosed() {
-		t.Error("the poll closed the operator's own session; me must be a real row")
+		t.Error("the poll closed the operator's own session; owner must be a real row")
 	}
 }
 

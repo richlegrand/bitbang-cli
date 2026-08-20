@@ -85,12 +85,13 @@ def test_rm_of_an_unknown_label_is_reported(pty_listener, test_server):
     l.command('rm nothing-here', 'no link called')
 
 
-# `me` is the identity's own code, not a table entry: removing it would
-# revoke the operator's own access and it would return on reload anyway.
-def test_me_cannot_be_removed(pty_listener, test_server):
+# `owner` is the identity's own code, not a table entry: removing it
+# would revoke the operator's own access and it would return on reload
+# anyway.
+def test_owner_cannot_be_removed(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server)
     l.open_console()
-    l.command('rm me', "own code")
+    l.command('rm owner', "own code")
 
 
 # The console used to close after thirty seconds of silence, which is
@@ -150,7 +151,7 @@ def test_pairing_prompt_is_not_stolen_by_the_console(pty_listener, test_server, 
         # link, not the identity's own code, so it can be revoked and
         # expired on its own.
         assert handed == entry[0]['code'], 'connector did not get the minted code'
-        me = l.command('url', r'https://\S+#(\S+)').group(1).strip()
-        assert handed != me, 'pairing handed out the device.s own code'
+        own = l.command('url', r'https://\S+#(\S+)').group(1).strip()
+        assert handed != own, 'pairing handed out the device.s own code'
     finally:
         con.terminate(force=True)
