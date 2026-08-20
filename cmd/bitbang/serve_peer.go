@@ -130,6 +130,21 @@ func (p *servePeer) revoke(why string) {
 	}()
 }
 
+// whyGone words the message for a session whose code is no longer in the
+// table. Looks the label up to tell the three cases apart; the decision
+// to close was already made on the code.
+func whyGone(table *links.Table, label string, now time.Time) (peerMsg, logLine string) {
+	entry, ok := table.ByLabel(label)
+	switch {
+	case !ok:
+		return "this link was revoked", "was deleted"
+	case entry.Code == "" && entry.Check(now) != nil:
+		return "this link has expired", "expired"
+	default:
+		return "this link was reissued; ask for the new URL", "was reissued"
+	}
+}
+
 // pollPeers closes every live session whose link no longer permits it,
 // re-resolving each one against the table as it stands now rather than
 // re-checking the terms it captured when it connected -- a snapshot
@@ -146,11 +161,23 @@ func pollPeers(peers []*servePeer, table *links.Table, now time.Time) {
 		if label == "" {
 			continue // still handshaking; nothing granted yet
 		}
-		current, ok := table.ByLabel(label)
+		// By code, not by label. The code is the credential this session
+		// presented; the label is a name for the row, and renaming a link
+		// must not disconnect the person holding it. The label is still
+		// worth carrying for the log line -- it reads far better than a
+		// code fragment -- but it decides nothing.
+		current, ok := table.ByCode(had.Code)
+		if !ok {
+			// The credential is gone, and that is the whole decision. The
+			// label is consulted only to say which way it went, because
+			// "revoked", "expired", and "reissued" call for different
+			// things from whoever is reading it.
+			why, logLine := whyGone(table, label, now)
+			log.Printf("Closing %s: link %q %s", p.clientID, label, logLine)
+			p.revoke(why)
+			continue
+		}
 		switch {
-		case !ok:
-			log.Printf("Closing %s: link %q was deleted", p.clientID, label)
-			p.revoke("this link was revoked")
 		case current.Check(now) != nil:
 			log.Printf("Closing %s: link %q expired", p.clientID, label)
 			p.revoke("this link has expired")

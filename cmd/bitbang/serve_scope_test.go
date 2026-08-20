@@ -252,3 +252,58 @@ func TestRevoke_ClosesSessionAtOnceAndConnectionAfter(t *testing.T) {
 	}
 	t.Error("connection was never torn down after revocation")
 }
+
+// Renaming a link is a cosmetic edit and must not disconnect the person
+// holding it. It used to: the poll re-resolved the label, so a rename
+// looked exactly like a deletion.
+func TestPoll_RenamingALinkDoesNotCloseItsSession(t *testing.T) {
+	p := peerOn(links.Terms{Label: "ana-phone", Code: "CODE1", Scope: []string{links.ScopeFiles}})
+	renamed := links.Terms{Label: "ana", Code: "CODE1", Scope: []string{links.ScopeFiles}}
+	pollPeers([]*servePeer{p}, tableWith(t, []links.Terms{renamed}), time.Now())
+	if p.q.IsClosed() {
+		t.Error("renaming a link disconnected its holder")
+	}
+}
+
+// The code is the credential, so reusing a label with a different code
+// is a different link and the old session must go.
+func TestPoll_ReusingALabelWithANewCodeClosesTheOldSession(t *testing.T) {
+	p := peerOn(links.Terms{Label: "ana", Code: "OLD", Scope: []string{links.ScopeFiles}})
+	reissued := links.Terms{Label: "ana", Code: "NEW", Scope: []string{links.ScopeFiles}}
+	pollPeers([]*servePeer{p}, tableWith(t, []links.Terms{reissued}), time.Now())
+	if !p.q.IsClosed() {
+		t.Error("a session holding a retired code was left running")
+	}
+}
+
+// The decision to close is made on the code; the label only chooses the
+// wording. Revoked, expired, and reissued need different things from the
+// person reading them.
+func TestWhyGone(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	cases := []struct {
+		name    string
+		entries []links.Terms
+		want    string
+	}{
+		{"deleted", nil, "this link was revoked"},
+		{
+			"expired, code retired",
+			[]links.Terms{{Label: "ana", Expires: &past}},
+			"this link has expired",
+		},
+		{
+			"reissued under the same label",
+			[]links.Terms{{Label: "ana", Code: "NEW"}},
+			"this link was reissued; ask for the new URL",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, _ := whyGone(tableWith(t, c.entries), "ana", time.Now())
+			if got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}

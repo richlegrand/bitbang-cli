@@ -91,7 +91,7 @@ func loadForEdit(program string) ([]links.Terms, time.Time) {
 }
 
 func runLinkLs(args []string) {
-	program, rest := linkFlags("ls", args)
+	program, server, rest := linkFlagsFull("ls", args)
 	if len(rest) > 0 {
 		fmt.Fprintf(os.Stderr, "bitbang link ls: unexpected argument %q\n", rest[0])
 		os.Exit(2)
@@ -111,23 +111,50 @@ func runLinkLs(args []string) {
 		return
 	}
 
+	// The URL is the thing you actually send someone, so print it rather
+	// than the bare code -- ls is the command you reach for when handing a
+	// link over, and it was the one view of the table that could not give
+	// you one. Falls back to the code when there is no identity yet to
+	// build a URL from.
+	uid := ""
+	if id, err := identity.Load(program, false); err == nil {
+		uid = id.UID
+	}
+
 	now := time.Now()
-	labelW := 0
+	labelW, scopeW := 0, 0
 	for _, e := range entries {
 		if n := len(e.Label); n > labelW {
 			labelW = n
 		}
+		if n := len(scopeOf(e)); n > scopeW {
+			scopeW = n
+		}
 	}
 	for _, e := range entries {
-		scope := "(everything served)"
-		if e.Scope != nil {
-			scope = strings.Join(e.Scope, " ")
-		}
-		code := e.Code
-		if code == "" {
-			code = "(not minted yet)"
-		}
-		fmt.Printf("  %-*s  %-22s  %-14s  %s\n", labelW, e.Label, scope, expiryNote(e, now), code)
+		fmt.Printf("  %-*s  %-*s  %-14s  %s\n",
+			labelW, e.Label, scopeW, scopeOf(e), expiryNote(e, now), linkURL(server, uid, e))
+	}
+}
+
+// scopeOf renders the scope as written in the file. Unlike the
+// listener's own listing this cannot narrow it to what is actually
+// served, because nothing here knows which mode the listener is running.
+func scopeOf(e links.Terms) string {
+	if e.Scope == nil {
+		return "(everything served)"
+	}
+	return strings.Join(e.Scope, " ")
+}
+
+func linkURL(server, uid string, e links.Terms) string {
+	switch {
+	case e.Code == "":
+		return "(no code until renewed)"
+	case uid == "":
+		return e.Code
+	default:
+		return "https://" + server + "/" + uid + "#" + e.Code
 	}
 }
 

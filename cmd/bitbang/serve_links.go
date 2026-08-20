@@ -87,6 +87,30 @@ func (ls *linkState) reload() error {
 	var changed []string
 	if len(entries) > 0 {
 		var retired, minted []string
+
+		// Before retiring, because the two interact. If an expired row
+		// and a live row share a code and retirement runs first, the
+		// expired row's code is cleared, dedup sees no duplicate, and the
+		// live row keeps a code that was handed out as the expired one's.
+		// Clearing every sharing row makes the passes commute, but the
+		// order is kept anyway so the reasoning does not have to be
+		// rediscovered.
+		var conflicts []links.CodeConflict
+		entries, conflicts = links.DedupeCodes(entries, ls.code)
+		for _, c := range conflicts {
+			if c.Reserved {
+				fmt.Fprintf(os.Stderr,
+					"Link %s used this device's own code; it has been given its own.\n",
+					strings.Join(quoteAll(c.Labels), " and "))
+				continue
+			}
+			fmt.Fprintf(os.Stderr,
+				"Links %s shared a code; none kept it and each has a new one. "+
+					"Anyone holding the old URL needs the new one.\n",
+				strings.Join(quoteAll(c.Labels), " and "))
+			changed = append(changed, c.Labels...)
+		}
+
 		entries, retired = links.RetireExpired(entries, now)
 		var err error
 		entries, minted, err = links.Mint(entries, now, identity.NewAccessCode)
@@ -204,5 +228,14 @@ func (ls *linkState) labels() []string {
 		out = append(out, e.Label)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// quoteAll wraps each label in quotes for a message.
+func quoteAll(labels []string) []string {
+	out := make([]string, len(labels))
+	for i, l := range labels {
+		out[i] = fmt.Sprintf("%q", l)
+	}
 	return out
 }

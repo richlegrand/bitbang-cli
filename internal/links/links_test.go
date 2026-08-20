@@ -2,6 +2,7 @@ package links
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -324,5 +325,81 @@ func TestRetireExpired_ClearsTheCodeSoRenewalMintsAFreshOne(t *testing.T) {
 	}
 	if out[0].Code == "OLDCODE" {
 		t.Error("renewal revived the original code")
+	}
+}
+
+// Two rows sharing a code is copy-paste, not bad luck, and left alone it
+// grants a live holder the other row's scope while surviving link rm.
+func TestDedupeCodes_ClearsEverySharingRow(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	entries := []Terms{
+		{Label: "ana", Code: "SHARED", Scope: []string{ScopeFiles}, Expires: &past},
+		{Label: "ben", Code: "SHARED", Scope: []string{ScopeShell}},
+		{Label: "cleo", Code: "OWN", Scope: []string{ScopeFiles}},
+	}
+	out, conflicts := DedupeCodes(entries, "IDENTITY")
+
+	if out[0].Code != "" || out[1].Code != "" {
+		t.Errorf("a sharing row kept the code: %q %q", out[0].Code, out[1].Code)
+	}
+	if out[2].Code != "OWN" {
+		t.Error("an unrelated row lost its code")
+	}
+	if len(conflicts) != 1 || len(conflicts[0].Labels) != 2 {
+		t.Fatalf("conflicts = %+v, want one naming both rows", conflicts)
+	}
+	if conflicts[0].Labels[0] != "ana" || conflicts[0].Labels[1] != "ben" {
+		t.Errorf("labels = %v, want both, sorted", conflicts[0].Labels)
+	}
+	if conflicts[0].Reserved {
+		t.Error("reported as an identity-code conflict")
+	}
+}
+
+// The identity is the one incumbent that is known, so it keeps its code
+// and the row yields.
+func TestDedupeCodes_IdentityCodeIsReserved(t *testing.T) {
+	out, conflicts := DedupeCodes([]Terms{{Label: "sneaky", Code: "IDENTITY"}}, "IDENTITY")
+	if out[0].Code != "" {
+		t.Error("a row using the device's own code kept it")
+	}
+	if len(conflicts) != 1 || !conflicts[0].Reserved {
+		t.Fatalf("conflicts = %+v, want one marked reserved", conflicts)
+	}
+}
+
+func TestDedupeCodes_LeavesADistinctTableAlone(t *testing.T) {
+	entries := []Terms{{Label: "a", Code: "A"}, {Label: "b", Code: "B"}, {Label: "c"}}
+	out, conflicts := DedupeCodes(entries, "IDENTITY")
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %+v on a clean table", conflicts)
+	}
+	if out[0].Code != "A" || out[1].Code != "B" || out[2].Code != "" {
+		t.Errorf("codes changed: %+v", out)
+	}
+}
+
+// Dedup then retire then mint: the shared code must not survive on any
+// row, and each row must come away with its own.
+func TestDedupeThenRetireThenMint(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	entries := []Terms{
+		{Label: "ana", Code: "SHARED", Expires: &past},
+		{Label: "ben", Code: "SHARED"},
+	}
+	n := 0
+	gen := func() (string, error) { n++; return fmt.Sprintf("NEW%d", n), nil }
+
+	out, _ := DedupeCodes(entries, "IDENTITY")
+	out, _ = RetireExpired(out, time.Now())
+	out, _, err := Mint(out, time.Now(), gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[0].Code != "" {
+		t.Errorf("expired ana ended up with code %q; she should have none", out[0].Code)
+	}
+	if out[1].Code == "SHARED" || out[1].Code == "" {
+		t.Errorf("ben's code = %q, want a freshly minted one", out[1].Code)
 	}
 }
