@@ -1,9 +1,9 @@
-# BitBang CLI 
-
-BitBang CLI is a single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
+# BitBang CLI
 
 [![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml)
 ![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
+
+A single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
 
 ![Install bitbang, run bitbang serve, and open the printed URL in a browser to get a shell, a file browser, and a proxy to the machine's network](assets/demo.webp)
 
