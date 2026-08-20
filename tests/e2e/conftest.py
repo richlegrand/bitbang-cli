@@ -187,6 +187,90 @@ def _stop(listener):
         listener.proc.kill()
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        'markers', 'slow: takes tens of seconds by design, e.g. waiting out a timeout')
+
+
+class PtyListener:
+    """A listener running under a pty, so it has a console to prompt on.
+
+    The plain `listener` fixture uses pipes, which is right for tests that
+    only need a URL -- but the console opens /dev/tty and refuses to exist
+    without one, so anything exercising it needs a real terminal.
+    """
+
+    def __init__(self, child, home, pairing_code):
+        self.child = child
+        self.home = home
+        self.pairing_code = pairing_code
+
+    def open_console(self):
+        """Press Enter and wait for the console to come up."""
+        self.child.sendline('')
+        self.child.expect('console --', timeout=20)
+
+    def command(self, line, expect, timeout=20):
+        """Run one console command and wait for something in its output.
+
+        Waits for the terminal to echo the line back before matching, so
+        a pattern cannot be satisfied by output that was already in the
+        buffer when the command was sent.
+        """
+        self.child.sendline(line)
+        if line:
+            self.child.expect_exact(line, timeout=timeout)
+        self.child.expect(expect, timeout=timeout)
+        return self.child.match
+
+    def links(self):
+        path = os.path.join(self.home, '.bitbang', 'bitbang', 'links.json')
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return json.load(f)
+
+
+@pytest.fixture
+def pty_listener(tmp_path_factory):
+    """Factory for listeners with a terminal attached.
+
+    Function-scoped: console tests mutate the link table, and a shared
+    listener would make them order-dependent.
+    """
+    pexpect = pytest.importorskip('pexpect')
+    started = []
+
+    def start(*args):
+        home = str(tmp_path_factory.mktemp('pty-home'))
+        os.makedirs(os.path.join(home, 'share'), exist_ok=True)
+        child = pexpect.spawn(
+            bitbang_binary(), list(args),
+            env=dict(os.environ, HOME=home, TERM='dumb'),
+            encoding='utf-8', timeout=60, dimensions=(50, 110),
+        )
+        # The listener suppresses its "Ready" marker on a terminal, so the
+        # pairing code line is the registration signal here.
+        child.expect('Pairing code:', timeout=PROXY_STARTUP_TIMEOUT + 15)
+        child.expect(r'(\d{6})', timeout=10)
+        code = child.match.group(1)
+        child.expect(pexpect.TIMEOUT, timeout=3)  # let the banner settle
+        l = PtyListener(child, home, code)
+        started.append(l)
+        return l
+
+    yield start
+    for l in started:
+        l.child.terminate(force=True)
+
+
+@pytest.fixture(scope='session')
+def bitbang_bin():
+    """Path to the binary under test. A fixture rather than an import so
+    tests do not have to reach into conftest as a module."""
+    return bitbang_binary()
+
+
 @pytest.fixture(scope='session')
 def test_server():
     """The signaling server under test. A fixture rather than an import so

@@ -78,7 +78,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install flask flask-sock pytest pytest-timeout pytest-playwright playwright
+          pip install flask flask-sock pytest pytest-timeout pytest-playwright playwright pexpect
           playwright install --with-deps chromium
 
       - name: Run E2E tests
