@@ -12,11 +12,13 @@ import (
 	"time"
 )
 
-// consoleIdle closes the console after this long without a keystroke.
-// Walking away mid-prompt should not hold the listener's output
-// indefinitely, and the transition back is announced so it is not
-// mysterious.
-const consoleIdle = 30 * time.Second
+// peerWaitLimit bounds a prompt that something else is blocked on -- the
+// pairing SAS and the grant questions, where a connector is sitting on
+// the other end. The command loop has no such limit: holding output is
+// what a modal console is for, the buffer is bounded, and timing an
+// operator out mid-thought while they read a link table is worse than
+// holding a few hundred lines.
+const peerWaitLimit = 2 * time.Minute
 
 // errConsoleClosed ends a prompt because the operator left: Ctrl-C, EOF,
 // or the idle timeout. Callers treat it the way they treat a decline.
@@ -34,13 +36,31 @@ var errConsoleClosed = errors.New("console closed")
 // everything else diverted. Without a controlling terminal there is no
 // console at all and the listener behaves as it did before.
 type console struct {
-	in   *bufio.Reader
 	out  io.Writer
 	tty  *os.File
 	held []*holdWriter
 
+	// askMu serializes prompts, so a pairing question waits for a
+	// half-typed command rather than racing it for the next line. The
+	// wait is bounded by the operator finishing their line; phase 2's
+	// request queue is what makes it properly interruptible.
+	askMu sync.Mutex
+
 	mu   sync.Mutex
 	open bool
+	// waiter is the prompt currently expecting a line, if any. The reader
+	// hands lines to it, and to the idle handler otherwise -- one reader
+	// with one destination at a time, rather than two receivers racing
+	// for whatever the operator typed. Getting this wrong sent a pairing
+	// SAS to the command loop, which ran it as a command.
+	waiter chan string
+	// onLine takes a line typed when no prompt is waiting.
+	onLine func(string)
+	// closed is set when the terminal reaches EOF.
+	closed bool
+	// looping guards against stacking command loops when lines arrive
+	// faster than one is set up.
+	looping bool
 }
 
 // newConsole attaches to the controlling terminal. A nil console means
@@ -51,7 +71,47 @@ func newConsole(held ...*holdWriter) *console {
 	if err != nil {
 		return nil
 	}
-	return &console{in: bufio.NewReader(tty), out: tty, tty: tty, held: held}
+	c := &console{out: tty, tty: tty, held: held}
+	go c.read(bufio.NewReader(tty))
+	return c
+}
+
+// read is the only reader of the terminal, and dispatches each line to
+// whoever is waiting: the prompt in progress, or the idle handler.
+//
+// One destination at a time is the point. Two receivers on a shared
+// channel race for whatever was typed, which sent a pairing SAS to the
+// command loop and had it run as a command.
+func (c *console) read(in *bufio.Reader) {
+	for {
+		line, err := in.ReadString('\n')
+		if err != nil {
+			c.mu.Lock()
+			c.closed = true
+			w := c.waiter
+			c.mu.Unlock()
+			if w != nil {
+				close(w)
+			}
+			return
+		}
+		line = strings.TrimRight(line, "\r\n")
+
+		c.mu.Lock()
+		w, idle := c.waiter, c.onLine
+		c.mu.Unlock()
+		switch {
+		case w != nil:
+			// Buffered by one, and non-blocking: a prompt that gave up
+			// between the read and here must not wedge the reader.
+			select {
+			case w <- line:
+			default:
+			}
+		case idle != nil:
+			idle(line)
+		}
+	}
 }
 
 // Available reports whether there is a terminal to prompt on.
@@ -70,9 +130,24 @@ func (c *console) Say(format string, args ...interface{}) {
 // console if it is not already open, so a caller with a question does not
 // have to know whether one is in progress.
 func (c *console) Ask(prompt, def string) (string, error) {
+	return c.ask(prompt, def, 0)
+}
+
+// AskWithin is Ask with a deadline, for a question something else is
+// waiting on.
+func (c *console) AskWithin(prompt, def string, limit time.Duration) (string, error) {
+	return c.ask(prompt, def, limit)
+}
+
+// ask shows a prompt with a default that Enter accepts. It opens the
+// console if it is not already open, so a caller with a question does not
+// have to know whether one is in progress. A zero limit waits forever.
+func (c *console) ask(prompt, def string, limit time.Duration) (string, error) {
 	if !c.Available() {
 		return "", errConsoleClosed
 	}
+	c.askMu.Lock()
+	defer c.askMu.Unlock()
 	c.enter()
 
 	shown := prompt
@@ -81,7 +156,7 @@ func (c *console) Ask(prompt, def string) (string, error) {
 	}
 	fmt.Fprintf(c.out, "%s: ", shown)
 
-	line, err := c.readLine()
+	line, err := c.readLine(limit)
 	if err != nil {
 		return "", err
 	}
@@ -91,21 +166,11 @@ func (c *console) Ask(prompt, def string) (string, error) {
 	return line, nil
 }
 
-// readLine reads one line, giving up on the idle deadline or on the
-// operator interrupting. The read runs on its own goroutine because a
-// bufio read cannot be cancelled; the goroutine ends when the line
-// finally arrives, or when the process does.
-func (c *console) readLine() (string, error) {
-	type result struct {
-		line string
-		err  error
-	}
-	lines := make(chan result, 1)
-	go func() {
-		line, err := c.in.ReadString('\n')
-		lines <- result{strings.TrimRight(line, "\r\n"), err}
-	}()
-
+// readLine takes the next line the operator types, giving up if they
+// interrupt or if a deadline passes. A zero limit means no deadline:
+// there is nothing to time out for, since the console holds output on
+// purpose and the buffer behind it is bounded.
+func (c *console) readLine(limit time.Duration) (string, error) {
 	// Ctrl-C leaves the console rather than killing the listener. The
 	// handler is installed only while a prompt is up, so outside the
 	// console the key still stops everything.
@@ -113,22 +178,40 @@ func (c *console) readLine() (string, error) {
 	signal.Notify(sigint, os.Interrupt)
 	defer signal.Stop(sigint)
 
-	idle := time.NewTimer(consoleIdle)
-	defer idle.Stop()
+	var deadline <-chan time.Time
+	if limit > 0 {
+		t := time.NewTimer(limit)
+		defer t.Stop()
+		deadline = t.C
+	}
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return "", errConsoleClosed
+	}
+	mine := make(chan string, 1)
+	c.waiter = mine
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.waiter = nil
+		c.mu.Unlock()
+	}()
 
 	select {
-	case r := <-lines:
-		if r.err != nil {
+	case line, ok := <-mine:
+		if !ok {
 			c.leave("")
 			return "", errConsoleClosed
 		}
-		return r.line, nil
+		return line, nil
 	case <-sigint:
 		c.Say("")
 		c.leave("")
 		return "", errConsoleClosed
-	case <-idle.C:
-		c.leave("idle")
+	case <-deadline:
+		c.leave("no answer")
 		return "", errConsoleClosed
 	}
 }
@@ -218,21 +301,35 @@ func (c *console) Watch(prompt string, run func(line string) error) {
 	if !c.Available() {
 		return
 	}
-	go func() {
-		for {
-			// Idle between sessions rather than inside one: this read has
-			// no deadline, because nobody is waiting on an answer.
-			line, err := c.in.ReadString('\n')
-			if err != nil {
-				return
-			}
+	c.mu.Lock()
+	c.onLine = func(line string) {
+		c.mu.Lock()
+		if c.looping {
+			c.mu.Unlock()
+			return
+		}
+		c.looping = true
+		c.mu.Unlock()
+
+		// On its own goroutine: onLine is called by the reader, and the
+		// loop below waits for lines that same reader has to deliver.
+		// Running it inline deadlocks the console on its first command.
+		go func() {
+			defer func() {
+				c.mu.Lock()
+				c.looping = false
+				c.mu.Unlock()
+			}()
 			if strings.TrimSpace(line) != "" {
 				// Typed something before Enter: treat it as the first
 				// command rather than discarding it.
 				c.enter()
-				_ = run(strings.TrimSpace(line))
+				if err := run(strings.TrimSpace(line)); err != nil {
+					return
+				}
 			}
 			c.Loop(prompt, run)
-		}
-	}()
+		}()
+	}
+	c.mu.Unlock()
 }

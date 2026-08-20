@@ -309,8 +309,11 @@ func (l *listener) sasPrompt() pairing.PromptFunc {
 		return pairing.DefaultTTYPrompt
 	}
 	return func(attempt int) (string, pairing.PromptStatus) {
-		typed, err := l.console.Ask(
-			fmt.Sprintf("Enter code (attempt %d/%d)", attempt, pairing.MaxSASAttempts), "")
+		// A connector is waiting on this one, so it does not wait
+		// forever. The console's command loop has no such limit.
+		typed, err := l.console.AskWithin(
+			fmt.Sprintf("Enter code (attempt %d/%d)", attempt, pairing.MaxSASAttempts),
+			"", peerWaitLimit)
 		if err != nil {
 			return "", pairing.PromptAbort
 		}

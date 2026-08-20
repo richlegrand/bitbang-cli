@@ -32,9 +32,12 @@ func grantForPairing(c *console, ls *linkState, remoteIP string) (string, bool) 
 	}
 
 	var code string
+	// A verified connector is holding the line through these questions,
+	// so they are bounded the way the SAS prompt is.
+	waiting := &boundedAsker{c: c, limit: peerWaitLimit}
 	err := c.Session(func() error {
 		c.Say("")
-		answer, err := c.Ask("  Grant everything, no expiry?  [Y/n]", "Y")
+		answer, err := waiting.Ask("  Grant everything, no expiry?  [Y/n]", "Y")
 		if err != nil {
 			return err
 		}
@@ -42,7 +45,7 @@ func grantForPairing(c *console, ls *linkState, remoteIP string) (string, bool) 
 		terms := links.Terms{Label: pairLabel(ls, time.Now())}
 		if !strings.EqualFold(strings.TrimSpace(answer), "y") {
 			c.Say("")
-			terms, err = grantQuestions(c, terms, ls.offeredScopes(), time.Now())
+			terms, err = grantQuestions(waiting, terms, ls.offeredScopes(), time.Now())
 			if err != nil {
 				return err
 			}
@@ -109,3 +112,16 @@ func describeGrant(t links.Terms, offered []string) string {
 	}
 	return fmt.Sprintf("%s, %s", scopes, relativeTo(*t.Expires, time.Now()))
 }
+
+// boundedAsker is the console with a deadline on every question, for
+// flows something else is blocked on.
+type boundedAsker struct {
+	c     *console
+	limit time.Duration
+}
+
+func (b *boundedAsker) Ask(prompt, def string) (string, error) {
+	return b.c.AskWithin(prompt, def, b.limit)
+}
+
+func (b *boundedAsker) Say(format string, args ...interface{}) { b.c.Say(format, args...) }
