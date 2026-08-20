@@ -9,11 +9,11 @@ import (
 	"golang.org/x/term"
 )
 
-// console is the listener's startup presentation: the logo, the QR code,
+// display is the listener's startup presentation: the logo, the QR code,
 // the URL, and the pairing code. Split out of startListener because it is
 // the half of that function that decides how things look rather than what
 // runs, and it is reprinted on reconnect.
-type console struct {
+type display struct {
 	url   string
 	isTTY bool
 	width int
@@ -23,8 +23,8 @@ type console struct {
 	reset string
 }
 
-func newConsole(url string) console {
-	b := console{url: url, isTTY: term.IsTerminal(int(os.Stdout.Fd()))}
+func newDisplay(url string) display {
+	b := display{url: url, isTTY: term.IsTerminal(int(os.Stdout.Fd()))}
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
 		b.width = w
 	}
@@ -39,7 +39,7 @@ func newConsole(url string) console {
 // startup block stays short enough to fit on one screen — handy for a
 // screen recording. On a narrow or non-TTY output it falls back to the
 // banner stacked above the QR so pipes, logs, and tests stay readable.
-func (b console) ready() {
+func (b display) ready() {
 	qr := smallQR(b.url)
 	bannerLines := strings.Split(strings.TrimRight(banner, "\n"), "\n")
 	bannerLines = append(bannerLines, "bitbang-cli v"+version)
@@ -91,7 +91,7 @@ func (b console) ready() {
 // URL flow still works; we just don't surface a code. Bolded on a
 // TTY so it's easy to spot in the startup block; plain on pipes
 // so log scrapers/tests aren't confused by escape sequences.
-func (b console) pairCode(code string) {
+func (b display) pairCode(code string) {
 	if code != "" {
 		fmt.Printf("%sPairing code: %s%s (valid 5 minutes)\n", b.bold, code, b.reset)
 	}

@@ -356,7 +356,7 @@ func startListener(cfg serveConfig) {
 		os.Exit(1)
 	}
 
-	out := newConsole(url)
+	out := newDisplay(url)
 	out.ready()
 	printSharingBlock(os.Stdout, cfg, share)
 
