@@ -368,6 +368,20 @@ func startListener(cfg serveConfig) {
 		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
 	}
 
+	// Identities left by the old per-instance derivation still hold keys,
+	// and their URLs are no longer what this listener answers on. Say so
+	// once, with the flag that brings one back, rather than leaving
+	// someone to discover a dead link.
+	if program == defaultProgram {
+		if stranded := strandedIdentities(); len(stranded) > 0 {
+			fmt.Fprintf(os.Stderr,
+				"Note: this listener now uses one identity for every mode, so the URL is\n"+
+					"      the one above. These older per-mode identities still exist: %s\n"+
+					"      To keep serving on one of their URLs, pass --program <name>.\n",
+				strings.Join(stranded, ", "))
+		}
+	}
+
 	if listing := linkState.listing(out.bold, out.reset); listing != "" {
 		fmt.Print(listing)
 		fmt.Print(reloadHint())
