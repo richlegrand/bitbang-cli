@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Nothing here writes to the repo, so don't inherit a token that can.
+permissions:
+  contents: read
+
 jobs:
   unit:
     strategy:
