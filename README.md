@@ -104,6 +104,52 @@ window follows the active read-write client; a lone viewer still supplies the
 only available size. If `window-size` has been overridden, `share` reports it
 but does not change the user's configuration.
 
+### Handing out limited access: `bitbang link`
+
+One listener, one URL, and as many **access links** as you need. Each is a
+separate code on that same URL, granting a subset of what the listener offers
+and optionally lapsing at a fixed time:
+
+```
+bitbang link edit                # add entries in $EDITOR
+bitbang link ls                  # what you have handed out
+bitbang link rm <label>          # revoke one
+bitbang link qr <label>          # its URL and QR code
+```
+
+An entry is a line of JSON in `~/.bitbang/bitbang/links.json`. Write one with no
+code, reload the listener (Enter at its console, or `SIGHUP`), and it mints one:
+
+```json
+[
+  {"label": "ana",  "scope": ["files"], "expires": "2026-09-01T00:00:00Z"},
+  {"label": "ben",  "scope": ["files"]},
+  {"label": "dev",  "scope": ["shell", "forward"]}
+]
+```
+
+```
+  me     files forward proxy shell                  https://bitba.ng/8ach_I7o...#_vtQ0JCPe7s
+  ana    files                      expires in 6d   https://bitba.ng/8ach_I7o...#T-Ty_HhvLfY
+  ben    files                                      https://bitba.ng/8ach_I7o...#L6La8OzBO74
+  dev    forward shell                              https://bitba.ng/8ach_I7o...#8kmI3LYzB7E
+```
+
+`me` is the identity's own code and grants everything the listener serves; send
+one of the others instead. `scope` is drawn from `files`, `shell`, `forward`, and
+`proxy`, intersected with what the listener actually offers -- a `files` link
+cannot open a shell, and says so to anyone who tries. Omit `scope` and the link
+grants whatever the listener does.
+
+The label is what identifies a link, not its terms, so two people can hold links
+with identical scope and expiry and you can still revoke one without touching the
+other.
+
+Revocation and expiry reach sessions that are already open: the connection closes
+and the holder is told why, rather than going quiet. And an expired code is
+retired rather than paused -- renewing an entry mints a new one, so the URL you
+already sent stays dead.
+
 ### Connecting from a browser
 
 Open the URL. Depending on what's served, you get:
@@ -128,6 +174,50 @@ bitbang cp - <url>:/tmp/firmware.bin < firmware.bin     # stdin/stdout work too
 ```
 
 Every successful connect or pairing is saved to `~/.bitbang/devices.json`, so from then on a short name is enough: `bitbang connect nas1`.
+
+## Recipes
+
+What people actually do with it. Each links into the [BitBang Cookbook](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md),
+which covers every project rather than just the CLI.
+
+**Reach a service at home**
+
+- [Mount your home NAS from anywhere (SMB)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#mount-your-home-nas-from-anywhere-smb)
+- [Watch your media library from anywhere (Jellyfin)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#watch-your-media-library-from-anywhere-jellyfin)
+- [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#use-your-own-llm-from-anywhere-ollama-open-webui)
+- [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#check-your-security-cameras-frigate)
+- [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#reach-your-home-automation-without-exposing-it-home-assistant)
+- [Check on a 3D print from work (OctoPrint)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#check-on-a-3d-print-from-work-octoprint)
+- [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#print-to-your-home-printer-ipp-cups)
+
+**Get on a machine**
+
+- [Get a shell on a machine behind NAT](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#get-a-shell-on-a-machine-behind-nat)
+- [Get a shell from your phone](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#get-a-shell-from-your-phone)
+- [Remote desktop into a Windows machine (RDP)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#remote-desktop-into-a-windows-machine-rdp)
+- [Reach a Linux or Mac desktop (VNC)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#reach-a-linux-or-mac-desktop-vnc)
+- [SSH to a machine with no open port (OpenSSH)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#ssh-to-a-machine-with-no-open-port-openssh)
+- [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#set-up-a-headless-raspberry-pi)
+
+**Share with someone else**
+
+- [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#share-files-without-uploading-them-anywhere)
+- [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#show-someone-your-project)
+- [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#give-someone-access-that-expires)
+- [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#check-your-agent-session-from-your-phone-claude-code-tmux)
+- [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#fix-someone-elses-router)
+
+**Development and devices**
+
+- [Reach a database from your dev machine (Postgres, MySQL)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#reach-a-database-from-your-dev-machine-postgres-mysql)
+- [Sync devices that cannot find each other (Syncthing)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#sync-devices-that-cannot-find-each-other-syncthing)
+- [Watch a robot from a browser (ROS, Foxglove)](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#watch-a-robot-from-a-browser-ros-foxglove)
+
+**Techniques**
+
+- [What a forwarding listener exposes](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#what-a-forwarding-listener-exposes)
+- [Let other machines on your LAN use a forward](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#let-other-machines-on-your-lan-use-a-forward)
+- [Known not to work](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md#known-not-to-work)
 
 ## Install
 
@@ -265,6 +355,25 @@ bitbang help                           Usage (also --help, -h)
 `share status`, `share stop`, and `share rotate` accept the same target and
 socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 
+### `bitbang link` -- access links for a listener
+
+| Command                  | What it does                                            |
+|--------------------------|---------------------------------------------------------|
+| `bitbang link ls`        | List this listener's links: scope, expiry, code          |
+| `bitbang link edit`      | Open `links.json` in `$EDITOR`, validated on save        |
+| `bitbang link rm LABEL`  | Delete a link (reload the listener to close its sessions)|
+| `bitbang link qr LABEL`  | Print a link's URL and QR code                           |
+
+| Entry field | Meaning                                                                      |
+|-------------|------------------------------------------------------------------------------|
+| `label`     | Names the link; identifies it to `rm` and `qr`, and must be unique             |
+| `scope`     | Any of `files`, `shell`, `forward`, `proxy`. Omit for everything the listener serves |
+| `expires`   | RFC 3339 timestamp. Omit for a link that does not lapse                        |
+| `code`      | Filled in by the listener on reload. Leave it out to have one minted           |
+
+`--program NAME` picks a listener other than the default, matching `serve
+--program`.
+
 ### `bitbang connect <target> [-- command …]` -- client shell
 
 `<target>` may be any of:
@@ -348,7 +457,7 @@ Windows 10 version 1809 or Windows Server 2019 or later.
 
 ## Roadmap
 
-Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, and **terminal sharing** (`bitbang share`). Designed and on the way:
+Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, **terminal sharing** (`bitbang share`), and **access links** (`bitbang link`) that scope and expire what a URL grants. Designed and on the way:
 
 - **Serial bridging** -- drive a remote `/dev/ttyUSB0` from a local virtual port (e.g. run Arduino IDE over the internet). An issue has been opened [here](https://github.com/richlegrand/bitbang-cli/issues/3).
 - **Remote desktop** -- screen over a WebRTC video track, keyboard/mouse over the data channel.
@@ -360,3 +469,12 @@ MIT -- see [LICENSE](LICENSE).
 ## Contributing
 
 Issues and PRs welcome.
+
+Recipes are different: they live in the [cookbook](https://github.com/richlegrand/bitbang/blob/main/COOKBOOK.md),
+in the [bitbang](https://github.com/richlegrand/bitbang) repo, because they span
+every project rather than this one. Adding a recipe is a PR there.
+
+Getting it *listed* is a second, small PR per project whose README should surface
+it -- the [Recipes](#recipes) list above is maintained here by hand. That is
+deliberate: each project decides which recipes are worth putting in front of its
+own readers, rather than every README growing every recipe.
