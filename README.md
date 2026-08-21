@@ -184,6 +184,42 @@ When you can't paste a URL or scan a QR code, such as when you're on the phone, 
 	
 ![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
 
+### Bring your own TURN
+
+Most connections go straight peer-to-peer. When both ends sit behind a NAT that
+won't hole-punch, the traffic needs a relay, and by default that's ours. `-ice-servers`
+points the listener at your own instead:
+
+```
+bitbang serve -ice-servers ~/turn.json
+```
+
+The listener hands the config to the signaling server at registration, and the server
+gives it to whoever connects -- so both ends use your relay and ours is never involved.
+Any coturn, or a hosted provider like Cloudflare or Twilio, works.
+
+The file is JSON, in whichever of these three shapes your provider handed you:
+
+```json
+[{"urls": ["turn:turn.example.net:3478"], "username": "user", "credential": "pass"}]
+```
+
+```json
+{"ice_servers": [{"urls": "stun:stun.example.net:3478"}]}
+```
+
+```json
+{"iceServers": [{"urls": ["turn:turn.example.net:3478"], "username": "u", "credential": "p"}]}
+```
+
+`urls` takes a string or a list; `username` and `credential` are for TURN and can be
+left off a STUN-only entry. The path may be absolute, relative, or `~`-rooted. A file
+that doesn't parse stops the listener at startup rather than quietly falling back.
+
+Worth saying: this is about who carries the bytes, not who can read them. A relay only
+ever sees DTLS ciphertext, ours included. Run your own when you'd rather the traffic
+not leave your infrastructure, or when you need a relay in a particular region.
+
 ### Connecting from a browser
 
 Open the URL. Depending on what's served, you get:
@@ -316,6 +352,7 @@ bitbang help                           Usage (also --help, -h)
 | `-server HOST`      | `bitba.ng` | Signaling server hostname                                                                                                                               |
 | `-pin PIN`          | (none)     | Require this PIN for connections                                                                                                                        |
 | `-ephemeral`        | off        | Temporary identity (a fresh URL each run)                                                                                                               |
+| `-ice-servers PATH` | (ours)     | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                                                                 |
 | `-nocode`           | off        | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
 | `-program NAME`     | `bitbang`  | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                                                       |
 | `-target HOST:PORT` | (dynamic)  | Fixed proxy target (proxy mode); empty = pick the target in the browser. `serve proxy host:port` is shorthand for this.                                 |
