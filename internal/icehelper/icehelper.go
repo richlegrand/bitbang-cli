@@ -8,36 +8,46 @@ package icehelper
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/pion/webrtc/v4"
 )
 
-// ParseICEServers reads the "ice_servers" field of a signaling message
-// and returns it as pion's []webrtc.ICEServer. The input is the full
-// message (map[string]interface{}); a missing or malformed ice_servers
-// returns nil — callers that need the empty/missing distinction should
-// check msg["ice_servers"] themselves.
+// FromMessage reads the "ice_servers" field of a signaling message and
+// returns it as pion's []webrtc.ICEServer. The input is the full message
+// (map[string]interface{}); a missing or malformed ice_servers returns
+// nil — callers that need the empty/missing distinction should check
+// msg["ice_servers"] themselves.
 //
-// The browser-native wire format allows urls to be either a string or
-// a []string; both are accepted. A Username triggers password-credential
-// type (the only one pion supports for trickle ICE).
-func ParseICEServers(msg map[string]interface{}) []webrtc.ICEServer {
-	raw, ok := msg["ice_servers"]
-	if !ok {
+// Missing is a normal state, not an error: the server drops the field
+// when it has no STUN to stamp, and omits it from an offer when TURN is
+// unavailable. Both mean "gather host candidates only".
+func FromMessage(msg map[string]interface{}) []webrtc.ICEServer {
+	raw, _ := msg["ice_servers"].([]any)
+	if raw == nil {
 		return nil
 	}
-	// ice_servers arrives as []interface{} from JSON unmarshaling; re-marshal
-	// + unmarshal into a typed struct is simplest.
+
 	data, err := json.Marshal(raw)
 	if err != nil {
 		return nil
 	}
+	return parseICEServers(data)
+}
+
+// parseICEServers decodes a JSON ice_servers array.
+//
+// The browser-native wire format allows urls to be either a string or
+// a []string; both are accepted. A Username triggers password-credential
+// type (the only one pion supports for trickle ICE).
+func parseICEServers(raw []byte) []webrtc.ICEServer {
 	var entries []struct {
 		URLs       interface{} `json:"urls"`
 		Username   string      `json:"username"`
 		Credential string      `json:"credential"`
 	}
-	if err := json.Unmarshal(data, &entries); err != nil {
+	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil
 	}
 	var out []webrtc.ICEServer
@@ -62,6 +72,49 @@ func ParseICEServers(msg map[string]interface{}) []webrtc.ICEServer {
 		out = append(out, s)
 	}
 	return out
+}
+
+// ParseUserICEFile reads an operator-supplied --ice-servers file. Three
+// shapes are accepted, so a config lifted from a TURN provider's docs or
+// from browser code works without editing: a bare array, an object with
+// "ice_servers" (our wire spelling), or one with "iceServers" (the
+// RTCConfiguration spelling).
+func ParseUserICEFile(data []byte) ([]webrtc.ICEServer, error) {
+	// Check the root structural token, ignoring leading whitespace.
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty ICE config file")
+	}
+
+	if trimmed[0] == '[' {
+		parsed := parseICEServers(data)
+		if parsed == nil {
+			return nil, fmt.Errorf("not a valid ICE server array")
+		}
+		return parsed, nil
+	}
+
+	if trimmed[0] == '{' {
+		// json.RawMessage holds the keys without decoding their bodies yet.
+		var wrapper map[string]json.RawMessage
+		if err := json.Unmarshal(data, &wrapper); err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"ice_servers", "iceServers"} {
+			rawArray, exists := wrapper[key]
+			if !exists {
+				continue
+			}
+			parsed := parseICEServers(rawArray)
+			if parsed == nil {
+				return nil, fmt.Errorf("%s did not parse to an array of ICE servers", key)
+			}
+			return parsed, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unexpected JSON format: want an array of ICE servers, " +
+		"or an object with an ice_servers or iceServers key")
 }
 
 // CandidateInit converts a JSON-decoded RTCIceCandidate-shaped object

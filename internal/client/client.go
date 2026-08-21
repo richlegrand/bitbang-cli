@@ -109,7 +109,7 @@ func Dial(opts DialOptions) (*Session, error) {
 
 	// Build the Peer with the ICE servers the signaling server included
 	// in the offer (relay creds, STUN URLs, or empty for direct-only).
-	iceServers := icehelper.ParseICEServers(offer)
+	iceServers := icehelper.FromMessage(offer)
 	// --relay forces relay-only gathering on the connector; otherwise we
 	// trickle every candidate immediately and the device (ICE-controlling)
 	// biases toward direct. See internal/peer relayAcceptanceMinWait.

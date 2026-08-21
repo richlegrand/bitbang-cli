@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/pion/webrtc/v4"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
 	"github.com/richlegrand/bitbang/internal/peerset"
@@ -78,6 +81,10 @@ type serveConfig struct {
 	// Files-cap configuration (only meaningful when caps includes files).
 	filesPath   string
 	filesUpload bool
+
+	// ICE server path
+	iceServersPath string
+	iceServers     []webrtc.ICEServer
 }
 
 // runServe — `bitbang serve` — exposes shell + files + proxy. The
@@ -192,6 +199,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.program, "program", "", "Identity program-name override; default is derived from the mode/target (key at ~/.bitbang/<program>/identity.pem)")
 	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
 	fs.BoolVar(&cfg.forwardClientIP, "forward-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
+	fs.StringVar(&cfg.iceServersPath, "ice-servers", "", "Path to the custom JSON ICE server configuration file")
 }
 
 // registerShellFlags wires the shell-specific flags. Used by both
@@ -282,6 +290,21 @@ func startListener(cfg serveConfig) {
 		shellArgv = []string{cfg.shellCmd}
 	}
 
+	if cfg.iceServersPath != "" {
+		path, err := resolveFSPath(cfg.iceServersPath)
+		if err != nil {
+			fail("serve: %v", err)
+		}
+		fileBytes, err := os.ReadFile(path)
+		if err != nil {
+			fail("serve: read ICE server file: %v", err)
+		}
+		cfg.iceServers, err = icehelper.ParseUserICEFile(fileBytes)
+		if err != nil {
+			fail("serve: %s: %v", path, err)
+		}
+	}
+
 	pinAuth := auth.New(cfg.pin)
 
 	// Identity is keyed by access scope: shell-bearing configs share the master
@@ -333,6 +356,7 @@ func startListener(cfg serveConfig) {
 	}
 
 	signalingClient := signaling.NewClient(cfg.server, id)
+	signalingClient.OwnICEServers = cfg.iceServers
 	signalingClient.Verbose = cfg.verbose
 	signalingClient.WantCode = !cfg.nocode
 	// Override the library default: for a CLI listener, the right
@@ -432,4 +456,18 @@ func startListener(cfg serveConfig) {
 	}
 
 	signalingClient.Connect(l.handleSignal)
+}
+
+// resolveFSPath turns a user-supplied path into an absolute one,
+// expanding a leading ~ against the home directory. filepath.Abs already
+// returns an absolute path unchanged, so that is the whole job.
+func resolveFSPath(path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve %s: %w", path, err)
+		}
+		return filepath.Join(home, strings.TrimPrefix(path[1:], "/")), nil
+	}
+	return filepath.Abs(path)
 }

@@ -1,15 +1,36 @@
 package icehelper
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/pion/webrtc/v4"
 )
 
-func TestParseICEServers(t *testing.T) {
+func TestFromMessage(t *testing.T) {
+	// The server drops ice_servers when it has no STUN to stamp, and
+	// omits it from an offer when TURN is unavailable. Both are ordinary
+	// states meaning "host candidates only", so neither may panic.
 	t.Run("missing field returns nil", func(t *testing.T) {
-		if got := ParseICEServers(map[string]interface{}{}); got != nil {
+		if got := FromMessage(map[string]interface{}{}); got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("null field returns nil", func(t *testing.T) {
+		var msg map[string]interface{}
+		if err := json.Unmarshal([]byte(`{"ice_servers":null}`), &msg); err != nil {
+			t.Fatal(err)
+		}
+		if got := FromMessage(msg); got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("field of the wrong type returns nil", func(t *testing.T) {
+		msg := map[string]interface{}{"ice_servers": "stun:stun.example:3478"}
+		if got := FromMessage(msg); got != nil {
 			t.Errorf("got %v, want nil", got)
 		}
 	})
@@ -20,7 +41,7 @@ func TestParseICEServers(t *testing.T) {
 				map[string]interface{}{"urls": "stun:stun.example:3478"},
 			},
 		}
-		got := ParseICEServers(msg)
+		got := FromMessage(msg)
 		if len(got) != 1 || len(got[0].URLs) != 1 || got[0].URLs[0] != "stun:stun.example:3478" {
 			t.Fatalf("got %+v, want single stun url", got)
 		}
@@ -36,7 +57,7 @@ func TestParseICEServers(t *testing.T) {
 				map[string]interface{}{"urls": []interface{}{"turn:turn.example:3478", "turns:turn.example:5349"}},
 			},
 		}
-		got := ParseICEServers(msg)
+		got := FromMessage(msg)
 		if len(got) != 1 || len(got[0].URLs) != 2 {
 			t.Fatalf("got %+v, want 2 urls", got)
 		}
@@ -47,12 +68,12 @@ func TestParseICEServers(t *testing.T) {
 			"ice_servers": []interface{}{
 				map[string]interface{}{
 					"urls":       "turn:turn.example:3478",
-					"username":    "1700000000",
+					"username":   "1700000000",
 					"credential": "secret",
 				},
 			},
 		}
-		got := ParseICEServers(msg)
+		got := FromMessage(msg)
 		if len(got) != 1 {
 			t.Fatalf("got %d servers, want 1", len(got))
 		}
@@ -67,7 +88,7 @@ func TestParseICEServers(t *testing.T) {
 
 	t.Run("malformed ice_servers returns nil", func(t *testing.T) {
 		msg := map[string]interface{}{"ice_servers": "not-an-array"}
-		if got := ParseICEServers(msg); got != nil {
+		if got := FromMessage(msg); got != nil {
 			t.Errorf("got %v, want nil", got)
 		}
 	})
@@ -135,5 +156,62 @@ func TestCandidateMap(t *testing.T) {
 	candStr, _ := got["candidate"].(string)
 	if !strings.Contains(candStr, "typ host") {
 		t.Errorf("candidate string %q missing 'typ host'", candStr)
+	}
+}
+
+// The --ice-servers file: an operator should be able to paste in what
+// their TURN provider handed them, whichever of the three shapes it is.
+func TestParseUserICEFile(t *testing.T) {
+	want := "turn:turn.example:3478"
+
+	t.Run("bare array", func(t *testing.T) {
+		got, err := ParseUserICEFile([]byte(`[{"urls":"` + want + `"}]`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].URLs[0] != want {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("ice_servers wrapper", func(t *testing.T) {
+		got, err := ParseUserICEFile([]byte(`{"ice_servers":[{"urls":"` + want + `"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].URLs[0] != want {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("iceServers wrapper", func(t *testing.T) {
+		got, err := ParseUserICEFile([]byte(`  {"iceServers":[{"urls":"` + want + `"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].URLs[0] != want {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("credentials survive", func(t *testing.T) {
+		got, err := ParseUserICEFile([]byte(`[{"urls":["` + want + `"],"username":"u","credential":"p"}]`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[0].Username != "u" || got[0].Credential != "p" {
+			t.Fatalf("got %+v", got[0])
+		}
+		if got[0].CredentialType != webrtc.ICECredentialTypePassword {
+			t.Errorf("got credential type %v", got[0].CredentialType)
+		}
+	})
+
+	for _, bad := range []string{"", "   ", "not json", "42", `{"other":[]}`, `{"ice_servers":"nope"}`} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			if _, err := ParseUserICEFile([]byte(bad)); err == nil {
+				t.Errorf("%q parsed, want an error", bad)
+			}
+		})
 	}
 }

@@ -197,7 +197,7 @@ func (c *Connection) Access() protocol.Access {
 // connSetup carries the per-flow customization for setupConnection:
 // what to log on first sight, what to do when the data channel opens,
 // and which flow-specific fields to populate on the Connection. The
-// shared boilerplate (icehelper.ParseICEServers, PC creation, DC creation, trickle
+// shared boilerplate (icehelper.FromMessage, PC creation, DC creation, trickle
 // ICE plumbing, offer-send) lives in setupConnection.
 type connSetup struct {
 	clientID string
@@ -237,7 +237,7 @@ type connSetup struct {
 func setupConnection(s connSetup) (*Connection, error) {
 	connStart := time.Now()
 
-	iceServers := icehelper.ParseICEServers(s.msg)
+	iceServers := icehelper.FromMessage(s.msg)
 
 	// Single-phase ICE bias toward direct: the device is the offerer and thus
 	// the ICE-controlling agent, so the candidate-pair nomination decision is
@@ -603,7 +603,7 @@ func (c *Connection) markVerifyFailed() {
 // it reconnects via the standard /ws/client/<uid> direct flow.
 //
 // pair_request carries phase-1 STUN ice_servers (stamped by the signaling
-// server, mirroring a regular request); icehelper.ParseICEServers picks them up.
+// server, mirroring a regular request); icehelper.FromMessage picks them up.
 func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, prompt pairing.PromptFunc, verbose bool) (*Connection, error) {
 	clientID, _ := msg["client_id"].(string)
 	if clientID == "" {
