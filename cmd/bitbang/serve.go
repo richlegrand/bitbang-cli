@@ -447,6 +447,11 @@ func startListener(cfg serveConfig) {
 			// before Connect). Print just the pair code now that we've
 			// learned it from the registered reply.
 			out.pairCode(signalingClient.PairingCode)
+			// Same reply carries the latest-release table. Once only:
+			// a reconnect loop must not turn this into a nag.
+			if notice := updateNotice(signalingClient.LatestVersions, version); notice != "" {
+				out.updateAvailable(notice)
+			}
 			return
 		}
 		// Reconnect: re-print URL+QR (operator may have scrolled past it

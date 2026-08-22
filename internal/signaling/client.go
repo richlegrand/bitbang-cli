@@ -38,6 +38,12 @@ type Client struct {
 	ServerWS string // full URL, e.g. "wss://bitba.ng/ws/device/<uid>"
 	Verbose  bool
 
+	// LatestVersions is the newest released version of each BitBang
+	// client project, keyed by product, as reported on the registered
+	// reply. nil when the server tracks nothing or predates the field.
+	// Read after Connect returns.
+	LatestVersions map[string]string
+
 	// OwnICEServers is a pre-parsed operator-supplied ICE server config
 	// (--ice-servers). Empty means "let the server decide"; a slice is
 	// already nilable, so every caller that ignores this field is fine.
@@ -277,6 +283,37 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 	}
 }
 
+// applyRegistered reads what the server told us on a successful
+// registration. Split out of register so it can be tested without a
+// socket -- the version table in particular arrives as an untyped JSON
+// map, and a silently-failed assertion there would just mean nobody is
+// ever told about an update.
+func (c *Client) applyRegistered(msg Message) {
+	// Reset first. A server that loses its pairing table (process
+	// restart) re-issues a fresh code, and any stale code we were
+	// holding would mislead the operator.
+	c.PairingCode = ""
+	if code, ok := msg["code"].(string); ok && code != "" {
+		c.PairingCode = code
+	}
+
+	// The latest-release table, identical for every device, so receiving
+	// it says nothing about this one. Absent from servers that track
+	// nothing, and from any server older than the field.
+	c.LatestVersions = nil
+	if raw, ok := msg["versions"].(map[string]interface{}); ok {
+		vs := make(map[string]string, len(raw))
+		for k, v := range raw {
+			if str, ok := v.(string); ok {
+				vs[k] = str
+			}
+		}
+		if len(vs) > 0 {
+			c.LatestVersions = vs
+		}
+	}
+}
+
 // RenewPairingCode asks the server for a pairing code, for when the one
 // issued at register time has lapsed. Returns the code, or an error.
 //
@@ -373,14 +410,7 @@ func (c *Client) register(conn *websocket.Conn) error {
 
 	switch msg["type"] {
 	case "registered":
-		// Capture the pairing code if the server returned one. Reset to
-		// empty on each reconnect first — a server that loses its pairing
-		// table (process restart) re-issues a fresh code, and any stale
-		// code we were holding would mislead the operator.
-		c.PairingCode = ""
-		if code, ok := msg["code"].(string); ok && code != "" {
-			c.PairingCode = code
-		}
+		c.applyRegistered(msg)
 		return nil
 
 	case "error":

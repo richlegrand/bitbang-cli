@@ -96,3 +96,10 @@ func (b display) pairCode(code string) {
 		fmt.Printf("%sPairing code: %s%s (valid 5 minutes)\n", b.bold, code, b.reset)
 	}
 }
+
+// updateAvailable prints the one-line update notice. Informational, not
+// a warning: nothing is wrong with the running version, and BitBang does
+// not update itself.
+func (b display) updateAvailable(notice string) {
+	fmt.Printf("%s  %s\n", notice, "https://bitba.ng/install")
+}
