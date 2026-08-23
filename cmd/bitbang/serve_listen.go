@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,24 +52,13 @@ type listener struct {
 	unauthSessions atomic.Int32
 }
 
-// watch starts the two things that run on their own schedule: the triggers
-// that replace the link table, and the timer that retires expired links.
-func (l *listener) watch(bold, reset string) {
-	poll := func(now time.Time) { pollPeers(l.peers.All(), l.links.current(), now) }
-	watchReload(func() {
-		if err := l.links.reload(); err != nil {
-			// The previous table stays in force: an unreadable file must
-			// never degrade to "no links", which grants everything.
-			fmt.Fprintf(os.Stderr, "Reload failed, keeping the previous links: %v\n", err)
-			return
-		}
-		if listing := l.links.listing(bold, reset); listing != "" {
-			fmt.Print(listing)
-			fmt.Print(consoleHint())
-		}
-		poll(time.Now())
+// watch starts the timer that retires expired links. Everything else
+// that changes the table -- add, edit, rm -- applies as it happens, from
+// the console.
+func (l *listener) watch() {
+	watchExpiry(linkPoll, func(now time.Time) {
+		pollPeers(l.peers.All(), l.links.current(), now)
 	})
-	watchExpiry(linkPoll, poll)
 }
 
 // pollNow re-checks live sessions against the table as it stands.

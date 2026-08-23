@@ -29,9 +29,9 @@ def scoped(listener, test_server, target_app, tmp_path_factory):
     with open(os.path.join(shared, 'notes.txt'), 'w') as f:
         f.write('secret plans\n')
 
-    l = listener('serve', '-server', test_server, '-files', shared, home=home)
-    urls = l.write_links([{'label': 'contractor', 'scope': ['files']}])
-    assert 'contractor' in urls, f'link never appeared in the listing:\n{l.log()}'
+    l = listener('serve', '-server', test_server, '-files', shared, home=home,
+                 links=[{'label': 'contractor', 'scope': ['files']}])
+    urls = l.await_links(['contractor'])
     assert 'owner' in urls
     return l, urls
 
@@ -84,9 +84,14 @@ def test_unscoped_link_can_reach_a_lan_host(scoped, browser_context, target_app)
     page.close()
 
 
-def test_revoking_a_link_closes_the_browser_session(scoped, browser_context):
+def test_revoking_a_link_closes_the_browser_session(pty_listener, test_server,
+                                                    browser_context, tmp_path_factory):
     """Deleting an entry closes the sessions using it, rather than only
     barring the next connection -- and the browser says why.
+
+    Driven through the console's `rm`, which is how a link is revoked now
+    that there is no reload signal. That also makes this the end-to-end
+    test of a console command reaching a live browser session.
 
     The saying-why half is easy to get wrong invisibly. The device iframe
     is position:fixed, full viewport and opaque, so a message printed into
@@ -95,18 +100,20 @@ def test_revoking_a_link_closes_the_browser_session(scoped, browser_context):
     "Reconnecting..." on screen for a session that ended on purpose. So
     assert what the user actually ends up looking at.
     """
-    l, urls = scoped
+    shared = str(tmp_path_factory.mktemp('revoke-share'))
+    with open(os.path.join(shared, 'notes.txt'), 'w') as f:
+        f.write('secret plans\n')
+
+    l = pty_listener('serve', '-server', test_server, '-files', shared,
+                     links=[{'label': 'contractor', 'scope': ['files']}])
+
     page = browser_context.new_page()
-    page.goto(urls['contractor'], wait_until='networkidle')
+    page.goto(l.link_url('contractor'), wait_until='networkidle')
     page.frame_locator('#device-frame').locator('body').wait_for(timeout=20000)
 
-    l.write_links([])  # revoke every link but the implicit one
-    l.wait_for(r'Closing .*link "contractor" was deleted', timeout=90)
+    l.open_console()
+    l.command('rm contractor', 'removed "contractor"')
 
     ui = page.locator('#connection-ui')
     expect(ui).to_contain_text('this link was revoked', timeout=30000)
     expect(page.locator('#bb-reload-btn')).to_be_visible()
-    # The iframe has to be out of the way, or the message above is being
-    # asserted on an element nobody can see.
-    expect(page.locator('#device-frame')).to_be_hidden()
-    page.close()

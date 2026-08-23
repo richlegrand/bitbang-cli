@@ -155,3 +155,14 @@ def test_pairing_prompt_is_not_stolen_by_the_console(pty_listener, test_server, 
         assert handed != own, 'pairing handed out the device.s own code'
     finally:
         con.terminate(force=True)
+
+
+# Enter reprints the table before prompting. Scrolled-away URLs are the
+# usual reason to come back to a listener, so the console opens with the
+# thing you came for rather than a hint to type `help`.
+def test_enter_reprints_the_table(pty_listener, test_server):
+    l = pty_listener('serve', '-server', test_server,
+                     links=[{'label': 'contractor', 'scope': ['files']}])
+    l.child.sendline('')
+    l.child.expect('contractor', timeout=20)   # the table, before the prompt
+    l.child.expect('console --', timeout=20)

@@ -297,7 +297,11 @@ func (c *console) Loop(prompt string, run func(line string) error) {
 // Watch opens the console when the operator presses Enter. One reader on
 // the terminal, so nothing else may read stdin -- two readers race for
 // every line, and the loser is whichever prompt needed it.
-func (c *console) Watch(prompt string, run func(line string) error) {
+// greet, when set, runs once each time the console is opened by Enter,
+// before the first prompt. It exists so the URLs can be reprinted: they
+// are the reason to look at a listener at all, and on a busy one they
+// have scrolled away long ago.
+func (c *console) Watch(prompt string, greet func(), run func(line string) error) {
 	if !c.Available() {
 		return
 	}
@@ -320,10 +324,13 @@ func (c *console) Watch(prompt string, run func(line string) error) {
 				c.looping = false
 				c.mu.Unlock()
 			}()
+			c.enter()
+			if greet != nil {
+				greet()
+			}
 			if strings.TrimSpace(line) != "" {
 				// Typed something before Enter: treat it as the first
 				// command rather than discarding it.
-				c.enter()
 				if err := run(strings.TrimSpace(line)); err != nil {
 					return
 				}

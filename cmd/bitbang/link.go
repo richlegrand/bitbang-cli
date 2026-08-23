@@ -57,7 +57,7 @@ func printLinkUsage() {
 	fmt.Println("                   no table lists the names it can see.")
 	fmt.Println()
 	fmt.Println("A link is created by adding an entry with no code and reloading the")
-	fmt.Println("listener (Enter at its console, or SIGHUP), which mints one.")
+	fmt.Println("listener, which mints one.")
 }
 
 func linkFlags(name string, args []string) (string, []string) {
@@ -207,7 +207,7 @@ func runLinkEdit(args []string) {
 		fmt.Fprintln(os.Stderr, "The listener will refuse to start until this is fixed.")
 		os.Exit(1)
 	}
-	fmt.Println("Saved. Reload the listener (Enter at its console, or SIGHUP) to apply.")
+	fmt.Println("Saved. A running listener picks it up at its console `reload`, or on restart.")
 }
 
 func runLinkRm(args []string) {

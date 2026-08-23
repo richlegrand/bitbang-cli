@@ -420,10 +420,13 @@ func startListener(cfg serveConfig) {
 		mirror:    mirrorHold,
 	}
 
-	l.watch(out.bold, out.reset)
-	con.Watch("console -- try help, or exit to resume output", func(line string) error {
-		return l.runCommand(con, line)
-	})
+	l.watch()
+	// Enter reprints the table before prompting. Scrolled-away URLs are
+	// the usual reason to come back to a listener, and a hint to type
+	// `help` is not what anyone came for.
+	con.Watch("console -- try help, or exit to resume output",
+		func() { _ = cmdList(l, con, nil) },
+		func(line string) error { return l.runCommand(con, line) })
 
 	firstReady := true
 	signalingClient.OnReady = func() {

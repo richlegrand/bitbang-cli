@@ -16,7 +16,6 @@ import os
 import pytest
 import queue
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -84,22 +83,17 @@ class Listener:
     def links_path(self):
         return os.path.join(self.home, '.bitbang', 'bitbang', 'links.json')
 
-    def write_links(self, entries):
-        """Replace the link table, reload, and return {label: url} once every
-        entry has appeared in the listener's listing.
+    def await_links(self, labels):
+        """Block until every label appears in the listing, then return
+        {label: url}.
 
-        Waiting on the labels rather than on "some new output" matters: the
-        listener prints its pairing code asynchronously a moment after Ready,
-        so any-new-line is satisfied before the reload has even run.
+        Waiting on the labels rather than on "some new output" matters:
+        the listener prints its pairing code asynchronously a moment
+        after Ready, so any-new-line is satisfied before the table has
+        been printed.
         """
-        os.makedirs(os.path.dirname(self.links_path), exist_ok=True)
-        with open(self.links_path, 'w') as f:
-            json.dump(entries, f)
-        self.proc.send_signal(signal.SIGHUP)
-
-        wanted = {e['label'] for e in entries}
+        wanted = set(labels)
         if not wanted:
-            time.sleep(1)  # nothing to wait for; the caller watches the log
             return self.urls_by_label()
         deadline = time.time() + 20
         while time.time() < deadline:
@@ -108,7 +102,7 @@ class Listener:
                 return urls
             time.sleep(0.2)
         pytest.fail(
-            f'links {sorted(wanted)} never appeared after reload. '
+            f'links {sorted(wanted)} never appeared in the listing. '
             f'Output:\n{self.log()}'
         )
 
@@ -187,6 +181,19 @@ def _stop(listener):
         listener.proc.kill()
 
 
+def _provision_links(home, entries):
+    """Write a link table into a home before its listener starts.
+
+    Provisioned rather than pushed: a running listener has no reload
+    signal, by design. Changing links while one is up is the console's
+    job, which is what the revocation test drives.
+    """
+    path = os.path.join(home, '.bitbang', 'bitbang', 'links.json')
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(entries, f)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         'markers', 'slow: takes tens of seconds by design, e.g. waiting out a timeout')
@@ -200,10 +207,11 @@ class PtyListener:
     without one, so anything exercising it needs a real terminal.
     """
 
-    def __init__(self, child, home, pairing_code):
+    def __init__(self, child, home, pairing_code, device_url):
         self.child = child
         self.home = home
         self.pairing_code = pairing_code
+        self.device_url = device_url
 
     def open_console(self):
         """Press Enter and wait for the console to come up."""
@@ -230,6 +238,19 @@ class PtyListener:
         with open(path) as f:
             return json.load(f)
 
+    def link_url(self, label):
+        """The shareable URL for a provisioned link.
+
+        Built from the code in links.json plus the device URL the banner
+        printed, rather than scraped from the listing -- the listing is
+        column-aligned and its URL column moves with the longest label.
+        """
+        for e in self.links():
+            if e.get('label') == label and e.get('code'):
+                base = self.device_url.split('#')[0]
+                return f"{base}#{e['code']}"
+        raise AssertionError(f'no link called {label!r} in {self.links()}')
+
 
 @pytest.fixture
 def pty_listener(tmp_path_factory):
@@ -241,21 +262,28 @@ def pty_listener(tmp_path_factory):
     pexpect = pytest.importorskip('pexpect')
     started = []
 
-    def start(*args):
+    def start(*args, links=None):
         home = str(tmp_path_factory.mktemp('pty-home'))
         os.makedirs(os.path.join(home, 'share'), exist_ok=True)
+        if links is not None:
+            _provision_links(home, links)
         child = pexpect.spawn(
             bitbang_binary(), list(args),
             env=dict(os.environ, HOME=home, TERM='dumb'),
             encoding='utf-8', timeout=60, dimensions=(50, 110),
         )
-        # The listener suppresses its "Ready" marker on a terminal, so the
-        # pairing code line is the registration signal here.
-        child.expect('Pairing code:', timeout=PROXY_STARTUP_TIMEOUT + 15)
+        # The URL is printed before the pairing code, so it has to be
+        # matched first or it is already consumed. The listener also
+        # suppresses its "Ready" marker on a terminal, which is why the
+        # banner is the registration signal here rather than that.
+        child.expect(r'https://\S+/[A-Za-z0-9_-]{22}#[A-Za-z0-9_-]+',
+                     timeout=PROXY_STARTUP_TIMEOUT + 15)
+        device_url = child.after.strip()
+        child.expect('Pairing code:', timeout=30)
         child.expect(r'(\d{6})', timeout=10)
         code = child.match.group(1)
         child.expect(pexpect.TIMEOUT, timeout=3)  # let the banner settle
-        l = PtyListener(child, home, code)
+        l = PtyListener(child, home, code, device_url)
         started.append(l)
         return l
 
@@ -288,9 +316,11 @@ def listener(tmp_path_factory):
     """
     started = []
 
-    def start(*args, home=None):
+    def start(*args, home=None, links=None):
         if home is None:
             home = str(tmp_path_factory.mktemp('home'))
+        if links is not None:
+            _provision_links(home, links)
         l = _start_listener(list(args), home)
         started.append(l)
         return l
