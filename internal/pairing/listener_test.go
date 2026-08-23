@@ -1,6 +1,9 @@
 package pairing
 
-import "testing"
+import (
+	"io"
+	"testing"
+)
 
 // scriptedPrompt returns a PromptFunc that yields successive (typed, status)
 // pairs from the slice. Used to drive PromptForSAS without a real TTY.
@@ -25,7 +28,7 @@ func TestPromptForSAS_FirstTryMatches(t *testing.T) {
 		status PromptStatus
 	}{
 		{"123456", PromptOK},
-	}))
+	}), io.Discard)
 	if !ok {
 		t.Fatalf("expected ok=true, got reason=%q", reason)
 	}
@@ -41,7 +44,7 @@ func TestPromptForSAS_RetryThenMatch(t *testing.T) {
 	}{
 		{"123455", PromptOK},
 		{"123456", PromptOK},
-	}))
+	}), io.Discard)
 	if !ok {
 		t.Fatalf("expected ok after retry, got reason=%q", reason)
 	}
@@ -58,7 +61,7 @@ func TestPromptForSAS_ExhaustedRetries(t *testing.T) {
 		{"111111", PromptOK},
 		{"222222", PromptOK},
 		{"333333", PromptOK},
-	}))
+	}), io.Discard)
 	if ok {
 		t.Fatalf("expected ok=false after exhausting attempts")
 	}
@@ -73,7 +76,7 @@ func TestPromptForSAS_AbortFirstAttempt(t *testing.T) {
 		status PromptStatus
 	}{
 		{"", PromptAbort},
-	}))
+	}), io.Discard)
 	if ok {
 		t.Fatalf("expected ok=false on abort")
 	}
@@ -89,7 +92,7 @@ func TestPromptForSAS_TimeoutMidAttempt(t *testing.T) {
 	}{
 		{"111111", PromptOK},
 		{"", PromptTimeout},
-	}))
+	}), io.Discard)
 	if ok {
 		t.Fatalf("expected ok=false on timeout")
 	}
@@ -107,7 +110,7 @@ func TestPromptForSAS_WhitespaceTolerated(t *testing.T) {
 		status PromptStatus
 	}{
 		{"  123456  ", PromptOK},
-	}))
+	}), io.Discard)
 	if !ok {
 		t.Fatalf("expected ok=true with whitespace, got reason=%q", reason)
 	}

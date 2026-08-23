@@ -247,3 +247,47 @@ def test_a_taken_label_is_refused_in_the_question(pty_listener, test_server):
     l.command('contractor', 'already exists')
     l.command('ana', 'ana --')
     assert sorted(e['label'] for e in l.links()) == ['ana', 'contractor']
+
+
+# A pair request arriving while the operator sits at the console prompt.
+# The command loop holds its turn until a line is typed, so the pairing
+# prompt used to queue behind it -- while the banner telling the operator
+# to type the code had already printed. The code went to the loop and
+# came back as `unknown command "472663"`.
+@pytest.mark.timeout(240)
+def test_pairing_interrupts_the_command_loop(pty_listener, test_server, bitbang_bin):
+    pexpect = pytest.importorskip('pexpect')
+
+    l = pty_listener('serve', '-server', test_server)
+    l.open_console()
+    l.child.expect('bitbang:', timeout=20)
+
+    chome = os.path.join(l.home, 'connector')
+    os.makedirs(chome, exist_ok=True)
+    con = pexpect.spawn(
+        bitbang_bin, ['connect', l.pairing_code, '-server', test_server, '-name', 'dev1'],
+        env=dict(os.environ, HOME=chome, TERM='dumb'),
+        encoding='utf-8', timeout=90, dimensions=(50, 110))
+    try:
+        con.expect(r'Your pairing code: (\d{6})', timeout=60)
+        sas = con.match.group(1)
+
+        # No operator action: the prompt has to take the terminal itself.
+        l.child.expect(r'Enter code \(attempt 1/3\)', timeout=40)
+
+        # First try, because the loop did not eat it.
+        l.command(sas, 'Grant everything, no expiry')
+
+        # And the grant question follows without the loop stealing a turn
+        # in between -- a `bitbang:` prompt here could swallow the answer.
+        assert 'bitbang:' not in l.child.before, \
+            f'command loop took a turn mid-pairing:\n{l.child.before[-200:]}'
+
+        l.command('y', 'Paired')
+        con.expect('Paired', timeout=60)
+
+        # The loop comes back afterwards.
+        l.child.expect('bitbang:', timeout=30)
+        l.command('status', 'files|nobody connected|handshaking')
+    finally:
+        con.terminate(force=True)

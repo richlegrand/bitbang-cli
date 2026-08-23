@@ -24,6 +24,10 @@ const peerWaitLimit = 2 * time.Minute
 // or the idle timeout. Callers treat it the way they treat a decline.
 var errConsoleClosed = errors.New("console closed")
 
+// errPreempted means a read gave up its turn to a prompt that could not
+// wait. Only the command loop sees it, and only ever resumes.
+var errPreempted = errors.New("preempted")
+
 // console is the listener's interactive surface: modal, opened by Enter,
 // and opened by itself when something needs an answer.
 //
@@ -59,6 +63,16 @@ type console struct {
 	onLine func(string)
 	// closed is set when the terminal reaches EOF.
 	closed bool
+	// yield, when non-nil, is closed to tell the read in progress to give
+	// up its turn. Only the command loop registers one: it is the reader
+	// that can be resumed, so it is the one that steps aside.
+	yield chan struct{}
+	// pending counts prompts that must not queue behind the command loop
+	// -- a pairing question, where the operator is being told to type
+	// something and somebody else is waiting on the answer. idle is
+	// broadcast when the count reaches zero.
+	pending int
+	idle    *sync.Cond
 	// looping guards against stacking command loops when lines arrive
 	// faster than one is set up.
 	looping bool
@@ -74,6 +88,7 @@ func newConsole(held ...*holdWriter) *console {
 		return nil
 	}
 	c := &console{out: out, tty: in, held: held}
+	c.idle = sync.NewCond(&c.mu)
 	go c.read(bufio.NewReader(in))
 	return c
 }
@@ -119,6 +134,15 @@ func (c *console) read(in *bufio.Reader) {
 // Available reports whether there is a terminal to prompt on.
 func (c *console) Available() bool { return c != nil && c.tty != nil }
 
+// Writer is where console output goes, or nil when there is no console
+// -- callers pass it on and the default (stdout) applies.
+func (c *console) Writer() io.Writer {
+	if !c.Available() {
+		return nil
+	}
+	return c.out
+}
+
 // Say writes a line to the terminal, bypassing the hold -- console output
 // is the thing the hold exists to protect, so it must not be held itself.
 func (c *console) Say(format string, args ...interface{}) {
@@ -141,10 +165,75 @@ func (c *console) AskWithin(prompt, def string, limit time.Duration) (string, er
 	return c.ask(prompt, def, limit)
 }
 
+// AskNow is Ask for a question somebody else is waiting on -- a pairing
+// SAS, and the grant questions behind it. It interrupts the command loop
+// rather than queueing behind it.
+//
+// Queueing was the bug: the loop holds its turn until the operator
+// finishes a line, so a pairing prompt sat behind it while the banner
+// telling the operator to type a code had already printed. The code they
+// typed went to the loop and came back as `unknown command "472663"`.
+func (c *console) AskNow(prompt, def string, limit time.Duration) (string, error) {
+	if !c.Available() {
+		return "", errConsoleClosed
+	}
+	defer c.Hold()()
+	return c.ask(prompt, def, limit)
+}
+
+// Hold keeps the command loop off the terminal until the returned
+// function is called, and interrupts it if it is waiting. Take one
+// around a flow of several questions -- a pairing is a SAS and then the
+// grant questions -- so the loop does not win a turn between them and
+// flash a prompt that could swallow the next answer.
+//
+// Safe on a nil console, which is the no-terminal case.
+func (c *console) Hold() func() {
+	if !c.Available() {
+		return func() {}
+	}
+	c.mu.Lock()
+	c.pending++
+	if c.yield != nil {
+		close(c.yield)
+		c.yield = nil
+	}
+	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		c.pending--
+		if c.pending == 0 {
+			c.idle.Broadcast()
+		}
+		c.mu.Unlock()
+	}
+}
+
+// waitIdle blocks while any priority prompt is outstanding, so the
+// command loop does not race one for the terminal the moment it is
+// interrupted.
+func (c *console) waitIdle() {
+	c.mu.Lock()
+	for c.pending > 0 {
+		c.idle.Wait()
+	}
+	c.mu.Unlock()
+}
+
 // ask shows a prompt with a default that Enter accepts. It opens the
 // console if it is not already open, so a caller with a question does not
 // have to know whether one is in progress. A zero limit waits forever.
 func (c *console) ask(prompt, def string, limit time.Duration) (string, error) {
+	return c.askImpl(prompt, def, limit, false)
+}
+
+// askYielding is the command loop's read: it steps aside for a prompt
+// that cannot wait, and its caller re-prompts.
+func (c *console) askYielding(prompt, def string) (string, error) {
+	return c.askImpl(prompt, def, 0, true)
+}
+
+func (c *console) askImpl(prompt, def string, limit time.Duration, yields bool) (string, error) {
 	if !c.Available() {
 		return "", errConsoleClosed
 	}
@@ -158,7 +247,7 @@ func (c *console) ask(prompt, def string, limit time.Duration) (string, error) {
 	}
 	fmt.Fprintf(c.out, "%s: ", shown)
 
-	line, err := c.readLine(limit)
+	line, err := c.readLineYielding(limit, yields)
 	if err != nil {
 		return "", err
 	}
@@ -173,6 +262,12 @@ func (c *console) ask(prompt, def string, limit time.Duration) (string, error) {
 // there is nothing to time out for, since the console holds output on
 // purpose and the buffer behind it is bounded.
 func (c *console) readLine(limit time.Duration) (string, error) {
+	return c.readLineYielding(limit, false)
+}
+
+// readLineYielding is readLine, optionally registering to be interrupted
+// by a priority prompt. Returns errPreempted when it gives up its turn.
+func (c *console) readLineYielding(limit time.Duration, yields bool) (string, error) {
 	// Ctrl-C leaves the console rather than killing the listener. The
 	// handler is installed only while a prompt is up, so outside the
 	// console the key still stops everything.
@@ -192,16 +287,37 @@ func (c *console) readLine(limit time.Duration) (string, error) {
 		c.mu.Unlock()
 		return "", errConsoleClosed
 	}
+	// Checked here rather than only before the read: closing yield is an
+	// edge, and a priority prompt that arrived while this caller was on
+	// its way in would find no yield to close and then wait on askMu for
+	// a turn nothing was going to give up.
+	if yields && c.pending > 0 {
+		c.mu.Unlock()
+		return "", errPreempted
+	}
 	mine := make(chan string, 1)
 	c.waiter = mine
+	var yield chan struct{}
+	if yields {
+		yield = make(chan struct{})
+		c.yield = yield
+	}
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
 		c.waiter = nil
+		if c.yield == yield {
+			c.yield = nil
+		}
 		c.mu.Unlock()
 	}()
 
 	select {
+	case <-yield:
+		// A pairing prompt needs the terminal. Say nothing: it is about
+		// to print its own question, and two prompts explaining
+		// themselves is worse than one appearing.
+		return "", errPreempted
 	case line, ok := <-mine:
 		if !ok {
 			c.leave("")
@@ -280,7 +396,13 @@ func (c *console) Loop(prompt string, run func(line string) error) {
 	c.Say("")
 	c.Say("  %s", prompt)
 	for {
-		line, err := c.Ask("bitbang", "")
+		// Stand aside while a pairing question is up, then take the
+		// terminal back and re-prompt.
+		c.waitIdle()
+		line, err := c.askYielding("bitbang", "")
+		if errors.Is(err, errPreempted) {
+			continue
+		}
 		if err != nil {
 			return // Ctrl-C, EOF, or idle; leave() runs on the way out
 		}

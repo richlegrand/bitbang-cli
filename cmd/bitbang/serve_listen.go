@@ -245,9 +245,16 @@ func (l *listener) handlePairRequest(msg signaling.Message) {
 	// The SAS prompt runs on the console so its question is not scrolled
 	// away by a mirroring shell session -- it is the one prompt that
 	// cannot be answered if you miss it.
+	// Announcements go to the console when there is one, so they land in
+	// the same place as the prompt they introduce.
+	// One hold for the whole exchange -- the SAS and then the grant
+	// questions. Per-question holds let the command loop take a turn
+	// between them, printing a prompt that could swallow the next answer.
+	release := l.console.Hold()
 	conn, err := peer.HandlePairRequest(msg, l.signaling, l.id,
-		l.sasPrompt(), l.cfg.verbose)
+		l.sasPrompt(), l.console.Writer(), l.cfg.verbose)
 	if err != nil {
+		release()
 		log.Printf("Failed to handle pair request: %v", err)
 		return
 	}
@@ -256,9 +263,15 @@ func (l *listener) handlePairRequest(msg signaling.Message) {
 	// pairing is visible in the table, revocable on its own, and can be
 	// limited or made to lapse.
 	remoteIP, _ := msg["remote_ip"].(string)
+	var releaseOnce sync.Once
+	done := func() { releaseOnce.Do(release) }
 	conn.GrantPairCredential = func() (string, bool) {
+		defer done()
 		return grantForPairing(l.console, l.links, remoteIP)
 	}
+	// A pairing that never reaches the grant -- a mismatched SAS, a
+	// connector that gives up -- must not leave the loop held out.
+	conn.OnPairDone = done
 	p := newServePeer(clientID)
 	p.conn = conn
 	p.q.SetConn(conn)
@@ -300,7 +313,7 @@ func (l *listener) sasPrompt() pairing.PromptFunc {
 	return func(attempt int) (string, pairing.PromptStatus) {
 		// A connector is waiting on this one, so it does not wait
 		// forever. The console's command loop has no such limit.
-		typed, err := l.console.AskWithin(
+		typed, err := l.console.AskNow(
 			fmt.Sprintf("Enter code (attempt %d/%d)", attempt, pairing.MaxSASAttempts),
 			"", peerWaitLimit)
 		if err != nil {

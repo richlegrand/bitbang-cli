@@ -13,6 +13,9 @@
 package pairing
 
 import (
+	"io"
+	"os"
+
 	"errors"
 	"fmt"
 	"strings"
@@ -70,10 +73,18 @@ var (
 //
 // The reason string is wire-stable and is intended to be sent verbatim as
 // the reason field of a pair_rejected message.
-func PromptForSAS(expected string, prompt PromptFunc) (reason string, ok bool) {
-	fmt.Println()
-	fmt.Println("Incoming pair request.")
-	fmt.Println("Ask the other party to read the 6-digit code shown on their screen.")
+//
+// out is where the announcements go. They belong in the same stream as
+// the prompt they introduce: printing "type the code" to stdout while
+// the prompt is on /dev/tty put the instruction and the question in two
+// different places, and the operator answered the wrong one.
+func PromptForSAS(expected string, prompt PromptFunc, out io.Writer) (reason string, ok bool) {
+	if out == nil {
+		out = os.Stdout
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Incoming pair request.")
+	fmt.Fprintln(out, "Ask the other party to read the 6-digit code shown on their screen.")
 
 	for attempt := 1; attempt <= MaxSASAttempts; attempt++ {
 		typed, status := prompt(attempt)
@@ -87,7 +98,7 @@ func PromptForSAS(expected string, prompt PromptFunc) (reason string, ok bool) {
 			return "", true
 		}
 		if attempt < MaxSASAttempts {
-			fmt.Println("Code did not match. Try again.")
+			fmt.Fprintln(out, "Code did not match. Try again.")
 		}
 	}
 	return string(ErrSASMismatch.Error()), false

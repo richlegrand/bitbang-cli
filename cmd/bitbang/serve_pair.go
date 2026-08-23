@@ -121,7 +121,10 @@ type boundedAsker struct {
 }
 
 func (b *boundedAsker) Ask(prompt, def string) (string, error) {
-	return b.c.AskWithin(prompt, def, b.limit)
+	// AskNow, not AskWithin: the connector is waiting on these answers
+	// too, so they interrupt the command loop the same way the SAS did
+	// rather than queueing behind it.
+	return b.c.AskNow(prompt, def, b.limit)
 }
 
 func (b *boundedAsker) Say(format string, args ...interface{}) { b.c.Say(format, args...) }
