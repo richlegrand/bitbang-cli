@@ -111,7 +111,7 @@ class Listener:
         own view of the table, so reading it back is also a check that the
         table loaded.
 
-        Two lines per entry: the label heads one, the URL is alone on the
+        Two lines per entry: `N) label ...` on one, the URL alone on the
         next. An entry whose code has been retired has "(no code until
         renewed)" there instead and is left out, since there is no URL to
         return."""
@@ -123,7 +123,7 @@ class Listener:
                 found[pending] = url.group(1)
                 pending = None
                 continue
-            head = re.match(r'\s{2}(\S+)\s+\S', line)
+            head = re.match(r'\s{2}\d+\)\s+(\S+)\s+\S', line)
             pending = head.group(1) if head else None
         return found
 

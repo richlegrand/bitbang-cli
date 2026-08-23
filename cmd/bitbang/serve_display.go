@@ -28,7 +28,10 @@ func newDisplay(url string) display {
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
 		b.width = w
 	}
-	if b.isTTY {
+	// Styling only where the terminal will interpret it. On Windows that
+	// takes asking; a console that says no would otherwise show a literal
+	// ESC[1m before every label.
+	if b.isTTY && enableVT() {
 		b.bold, b.reset = "\033[1m", "\033[0m"
 	}
 	return b

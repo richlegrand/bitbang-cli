@@ -27,9 +27,9 @@ func init() {
 	commands = []command{
 		{"list", "", "the links you have handed out", cmdList},
 		{"add", "", "create a link", cmdAdd},
-		{"edit", "<label>", "change one, seeded with its current values", cmdEdit},
-		{"rm", "<label>", "delete one, closing any session using it", cmdRemove},
-		{"qr", "<label>", "its URL as a QR code", cmdQR},
+		{"edit", "<label|n>", "change one, seeded with its current values", cmdEdit},
+		{"rm", "<label|n>", "delete one, closing any session using it", cmdRemove},
+		{"qr", "<label|n>", "its URL as a QR code", cmdQR},
 		{"code", "", "the pairing code, or a fresh one if it has lapsed", cmdCode},
 		{"url", "", "this device's own URL", cmdURL},
 		{"status", "", "who is connected", cmdStatus},
@@ -110,7 +110,7 @@ func cmdEdit(l *listener, c *console, args []string) error {
 		c.Say("  edit <label>")
 		return nil
 	}
-	current, ok := l.links.current().ByLabel(args[0])
+	current, ok := l.links.current().ByLabel(l.links.byRef(args[0]))
 	if !ok || current.Label == links.OwnerLabel {
 		c.Say("  no link called %q", args[0])
 		return nil
@@ -138,14 +138,15 @@ func cmdRemove(l *listener, c *console, args []string) error {
 		c.Say("  rm <label>")
 		return nil
 	}
-	if err := l.links.remove(args[0]); err != nil {
+	label := l.links.byRef(args[0])
+	if err := l.links.remove(label); err != nil {
 		c.Say("  %v", err)
 		return nil
 	}
 	// Revocation reaches sessions already open, not just the next
 	// connection, which is the whole point of rm over editing the file.
 	l.pollNow()
-	c.Say("  removed %q", args[0])
+	c.Say("  removed %q", label)
 	return nil
 }
 
@@ -154,7 +155,7 @@ func cmdQR(l *listener, c *console, args []string) error {
 		c.Say("  qr <label>")
 		return nil
 	}
-	entry, ok := l.links.current().ByLabel(args[0])
+	entry, ok := l.links.current().ByLabel(l.links.byRef(args[0]))
 	if !ok {
 		c.Say("  no link called %q", args[0])
 		return nil

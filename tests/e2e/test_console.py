@@ -177,3 +177,42 @@ def test_enter_reprints_the_table(pty_listener, test_server):
     l.child.sendline('')
     l.child.expect('contractor', timeout=20)   # the table, before the prompt
     l.child.expect('console --', timeout=20)
+
+
+# The listing numbers every entry so a link can be named by position
+# rather than by typing a label out. Labels stay canonical; numbers are
+# a convenience resolved at the edge.
+def test_links_can_be_addressed_by_number(pty_listener, test_server):
+    l = pty_listener('serve', '-server', test_server, links=[
+        {'label': 'contractor', 'scope': ['files']},
+        {'label': 'ana', 'scope': ['files']},
+    ])
+    l.open_console()
+    l.command('list', r'1\) contractor')
+    l.command('qr 1', 'https://')
+    l.command('rm 2', 'removed "ana"')
+    assert [e['label'] for e in l.links()] == ['contractor']
+
+
+# 0 is the owner row, refused exactly as the label is -- removing it
+# would revoke the operator's own access.
+def test_number_zero_is_the_owner_and_is_refused(pty_listener, test_server):
+    l = pty_listener('serve', '-server', test_server,
+                     links=[{'label': 'contractor', 'scope': ['files']}])
+    l.open_console()
+    l.command('rm 0', 'own code')
+    l.command('rm 7', 'no link called')
+
+
+# An entry someone literally named "2" has to stay reachable by name,
+# so a label match wins over the index it collides with.
+def test_a_label_that_looks_like_a_number_wins(pty_listener, test_server):
+    l = pty_listener('serve', '-server', test_server, links=[
+        {'label': 'contractor', 'scope': ['files']},
+        {'label': 'ana', 'scope': ['files']},
+        {'label': '2', 'scope': ['files']},
+    ])
+    l.open_console()
+    l.command('rm 2', 'removed "2"')
+    # 'ana' sat at index 2 and must be untouched.
+    assert sorted(e['label'] for e in l.links()) == ['ana', 'contractor']

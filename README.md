@@ -157,21 +157,22 @@ code, reload the listener at its console, and it mints one:
 ```
 
 ```
-  owner  files forward proxy shell
-    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#_vtQ0JCPe7s
+  0) owner  files forward proxy shell
+       https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#_vtQ0JCPe7s
 
-  ana    files  expires in 6d
-    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#T-Ty_HhvLfY
+  1) ana    files  expires in 6d
+       https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#T-Ty_HhvLfY
 
-  ben    files
-    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#L6La8OzBO74
+  2) ben    files
+       https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#L6La8OzBO74
 
-  dev    forward shell
-    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#8kmI3LYzB7E
+  3) dev    forward shell
+       https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#8kmI3LYzB7E
 ```
 
 `owner` is the identity's own code and grants everything the listener serves; send
-one of the others instead. `scope` is drawn from `files`, `shell`, `forward`, and
+one of the others instead. The console takes either the label or the number beside
+it, so `rm 2` and `rm ben` do the same thing. `scope` is drawn from `files`, `shell`, `forward`, and
 `proxy`, intersected with what the listener actually offers -- a `files` link
 cannot open a shell, and says so to anyone who tries. Omit `scope` and the link
 grants whatever the listener does.

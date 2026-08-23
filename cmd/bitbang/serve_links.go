@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -180,12 +181,12 @@ func (ls *linkState) listing(bold, reset string) string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	for _, e := range entries {
+	for i, e := range entries {
 		scopes := strings.Join(e.Grants(ls.offered), " ")
 		if scopes == "" {
 			scopes = "(nothing)"
 		}
-		head := fmt.Sprintf("  %s%-*s%s  %s", bold, labelW, e.Label, reset, scopes)
+		head := fmt.Sprintf("  %d) %s%-*s%s  %s", i, bold, labelW, e.Label, reset, scopes)
 		if note := expiryNote(e, now); note != "" {
 			head += "  " + note
 		}
@@ -201,9 +202,32 @@ func (ls *linkState) listing(bold, reset string) string {
 		// aligning would push the URL right as labels grow, and a long
 		// label would put it back over 80 columns, which is the whole
 		// thing this layout exists to avoid.
-		fmt.Fprintf(&b, "    %s\n\n", url)
+		fmt.Fprintf(&b, "       %s\n\n", url)
 	}
 	return b.String()
+}
+
+// byRef turns a console argument into a label. A label wins over a
+// number, so an entry someone literally named "2" is still reachable by
+// its name; failing that the argument is read as the index the listing
+// printed beside it.
+//
+// Resolving here rather than in each command means everything
+// downstream -- the owner refusals, the "no link called" message, the
+// mutation itself -- keeps working on labels and never learns that
+// numbers exist. An argument that resolves to nothing is handed back
+// unchanged, so the error names what the operator actually typed.
+func (ls *linkState) byRef(arg string) string {
+	entries := ls.current().Entries()
+	for _, e := range entries {
+		if e.Label == arg {
+			return arg
+		}
+	}
+	if n, err := strconv.Atoi(arg); err == nil && n >= 0 && n < len(entries) {
+		return entries[n].Label
+	}
+	return arg
 }
 
 // expiryNote is the human column: nothing for a link that does not
