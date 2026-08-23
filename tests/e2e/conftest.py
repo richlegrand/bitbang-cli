@@ -109,13 +109,22 @@ class Listener:
     def urls_by_label(self):
         """Parse the listing into {label: url}. The listing is the listener's
         own view of the table, so reading it back is also a check that the
-        table loaded."""
+        table loaded.
+
+        Two lines per entry: the label heads one, the URL is alone on the
+        next. An entry whose code has been retired has "(no code until
+        renewed)" there instead and is left out, since there is no URL to
+        return."""
         self._drain()
-        found = {}
+        found, pending = {}, None
         for line in self._captured:
-            m = re.match(r'\s{2}(\S+)\s+.*?(https://\S+)\s*$', line)
-            if m:
-                found[m.group(1)] = m.group(2)
+            url = re.match(r'\s+(https://\S+)\s*$', line)
+            if url and pending:
+                found[pending] = url.group(1)
+                pending = None
+                continue
+            head = re.match(r'\s{2}(\S+)\s+\S', line)
+            pending = head.group(1) if head else None
         return found
 
 

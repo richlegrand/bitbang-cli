@@ -150,43 +150,58 @@ func (ls *linkState) reload() error {
 // and the URL that reaches it. The listing is the state of the world, so
 // it prints expired rows too -- dropping them looks like the file failed
 // to load.
+// listing renders the link table.
+//
+// Two lines per entry, with the URL alone on the second. One line each
+// read better in a wide window and was unusable in a normal one: a URL
+// is about 58 columns on its own, so the row ran past 100 and wrapped
+// mid-fragment on an 80-column terminal -- illegible, and impossible to
+// select cleanly, which is the one thing anybody does with it.
+//
+// A blank line between entries, because two wrapped-looking lines that
+// belong together need to be told apart from the next pair. The label
+// carries the bold: it is what you scan for, and the URL is already set
+// apart by having a line to itself.
 func (ls *linkState) listing(bold, reset string) string {
 	table := ls.current()
 	entries := table.Entries()
 	if len(entries) == 1 {
-		// Only the implicit row: this listener has no link table, so the
-		// plain URL banner above has already said everything.
+		// Only the implicit row: the caller shows the URL itself.
 		return ""
 	}
 
 	now := time.Now()
-	labelW, scopeW := 0, 0
-	rows := make([][3]string, 0, len(entries))
+	labelW := 0
 	for _, e := range entries {
-		scopes := strings.Join(e.Grants(ls.offered), " ")
-		if scopes == "" {
-			scopes = "(nothing)"
-		}
-		rows = append(rows, [3]string{e.Label, scopes, expiryNote(e, now)})
 		if n := len(e.Label); n > labelW {
 			labelW = n
-		}
-		if n := len(scopes); n > scopeW {
-			scopeW = n
 		}
 	}
 
 	var b strings.Builder
 	b.WriteString("\n")
-	for i, e := range entries {
+	for _, e := range entries {
+		scopes := strings.Join(e.Grants(ls.offered), " ")
+		if scopes == "" {
+			scopes = "(nothing)"
+		}
+		head := fmt.Sprintf("  %s%-*s%s  %s", bold, labelW, e.Label, reset, scopes)
+		if note := expiryNote(e, now); note != "" {
+			head += "  " + note
+		}
+		b.WriteString(head + "\n")
+
 		// A retired or not-yet-minted entry has no code, and printing a
 		// URL whose fragment is empty offers something that cannot work.
 		url := "(no code until renewed)"
 		if e.Code != "" {
 			url = ls.codeURL(e.Code)
 		}
-		fmt.Fprintf(&b, "  %-*s  %-*s  %-14s  %s%s%s\n",
-			labelW, rows[i][0], scopeW, rows[i][1], rows[i][2], bold, url, reset)
+		// A fixed indent rather than one aligned under the label column:
+		// aligning would push the URL right as labels grow, and a long
+		// label would put it back over 80 columns, which is the whole
+		// thing this layout exists to avoid.
+		fmt.Fprintf(&b, "    %s\n\n", url)
 	}
 	return b.String()
 }

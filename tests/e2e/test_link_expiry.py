@@ -45,20 +45,24 @@ def expiring(listener, test_server, tmp_path_factory):
 def test_expired_link_is_retired_and_has_no_url(expiring):
     l = expiring([{'label': 'lapsed', 'scope': ['files'], 'expires': _in(-3600)}])
 
+    # Two lines per entry now: the label and its state on one, the URL
+    # (or its absence) on the next.
     deadline = time.time() + 25
-    line = None
+    head = tail = None
     while time.time() < deadline:
-        for candidate in l.log().splitlines():
+        lines = l.log().splitlines()
+        for i, candidate in enumerate(lines):
             if 'lapsed' in candidate:
-                line = candidate
-        if line and 'expired' in line:
+                head = candidate
+                tail = lines[i + 1] if i + 1 < len(lines) else ''
+        if head and 'expired' in head:
             break
         time.sleep(0.2)
 
-    assert line, f'the expired link was never listed:\n{l.log()}'
-    assert 'expired' in line, f'not marked expired: {line!r}'
+    assert head, f'the expired link was never listed:\n{l.log()}'
+    assert 'expired' in head, f'not marked expired: {head!r}'
     # Listed, but with nothing anyone could connect with.
-    assert 'no code' in line, f'an expired link still carries a code: {line!r}'
+    assert 'no code' in (tail or ''), f'an expired link still carries a code: {tail!r}'
     assert 'lapsed' not in l.urls_by_label(), 'an expired link produced a usable URL'
 
 

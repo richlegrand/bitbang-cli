@@ -157,10 +157,17 @@ code, reload the listener at its console, and it mints one:
 ```
 
 ```
-  owner  files forward proxy shell                  https://bitba.ng/8ach_I7o...#_vtQ0JCPe7s
-  ana    files                      expires in 6d   https://bitba.ng/8ach_I7o...#T-Ty_HhvLfY
-  ben    files                                      https://bitba.ng/8ach_I7o...#L6La8OzBO74
-  dev    forward shell                              https://bitba.ng/8ach_I7o...#8kmI3LYzB7E
+  owner  files forward proxy shell
+    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#_vtQ0JCPe7s
+
+  ana    files  expires in 6d
+    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#T-Ty_HhvLfY
+
+  ben    files
+    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#L6La8OzBO74
+
+  dev    forward shell
+    https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#8kmI3LYzB7E
 ```
 
 `owner` is the identity's own code and grants everything the listener serves; send
