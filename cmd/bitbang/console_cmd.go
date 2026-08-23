@@ -72,6 +72,12 @@ func cmdHelp(l *listener, c *console, _ []string) error {
 func cmdList(l *listener, c *console, _ []string) error {
 	listing := l.links.listing("", "")
 	if listing == "" {
+		// No table to print, but the URL is the thing people open the
+		// console for -- it has usually scrolled away behind log lines
+		// by now. Saying only "there are no links" answers a question
+		// nobody asked.
+		owner, _ := l.links.current().ByLabel(links.OwnerLabel)
+		c.Say("  %s", l.links.url(owner.Code))
 		c.Say("  Only this device's own code. `add` makes another.")
 		return nil
 	}

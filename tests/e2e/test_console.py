@@ -7,6 +7,7 @@ on the reader's own goroutine -- and neither is reachable from a Go test.
 """
 
 import os
+import re
 import time
 
 import pytest
@@ -155,6 +156,16 @@ def test_pairing_prompt_is_not_stolen_by_the_console(pty_listener, test_server, 
         assert handed != own, 'pairing handed out the device.s own code'
     finally:
         con.terminate(force=True)
+
+
+# The listener most people run has no links at all, and that case still
+# has to show the URL -- otherwise the change made for "reprint the URL
+# that scrolled away" reprints everything except the URL.
+def test_enter_shows_the_url_with_no_links(pty_listener, test_server):
+    l = pty_listener('serve', '-server', test_server)
+    l.child.sendline('')
+    l.child.expect(re.escape(l.device_url), timeout=20)
+    l.child.expect('console --', timeout=20)
 
 
 # Enter reprints the table before prompting. Scrolled-away URLs are the
