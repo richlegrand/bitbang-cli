@@ -118,7 +118,7 @@ func TestWaitAndFinishBackpressureStillCompletesSession(t *testing.T) {
 	terminal := &synchronizedLifecyclePTY{}
 	sess := &shellSession{cmd: cmd, process: cmd.Process, ptyFile: terminal, output: output, done: make(chan struct{})}
 	h.streams[stream.id] = sess
-	adm, _ := liveShells.admit(0)
+	adm, _ := liveShells.admit(0, false)
 	defer liveShells.release(adm)
 
 	go func() {
@@ -203,11 +203,11 @@ func TestDetachSessionSerializesPTYUse(t *testing.T) {
 func TestShellAdmissionsDisplaceTheOldest(t *testing.T) {
 	var a shellAdmissions
 
-	first, displaced := a.admit(1)
+	first, displaced := a.admit(1, false)
 	if displaced != nil {
 		t.Fatal("an empty list reported displacing someone")
 	}
-	second, displaced := a.admit(1)
+	second, displaced := a.admit(1, false)
 	if displaced != first {
 		t.Fatalf("displaced = %v, want the shell that was already live", displaced)
 	}
@@ -223,7 +223,7 @@ func TestShellAdmissionsDisplaceTheOldest(t *testing.T) {
 
 	// Oldest-first, not newest-first: the one still working should not be
 	// the one thrown out.
-	third, displaced := a.admit(1)
+	third, displaced := a.admit(1, false)
 	if displaced != second {
 		t.Fatal("displaced the wrong shell; eviction must be oldest-first")
 	}
@@ -237,7 +237,7 @@ func TestShellAdmissionsDisplaceTheOldest(t *testing.T) {
 func TestShellAdmissionsUnlimited(t *testing.T) {
 	var a shellAdmissions
 	for i := 0; i < 5; i++ {
-		if _, displaced := a.admit(0); displaced != nil {
+		if _, displaced := a.admit(0, false); displaced != nil {
 			t.Fatalf("admission %d displaced someone with no limit set", i)
 		}
 	}
@@ -248,8 +248,8 @@ func TestShellAdmissionsUnlimited(t *testing.T) {
 
 func TestShellAdmissionsReleaseIsIdempotent(t *testing.T) {
 	var a shellAdmissions
-	adm, _ := a.admit(2)
-	other, _ := a.admit(2)
+	adm, _ := a.admit(2, false)
+	other, _ := a.admit(2, false)
 	a.release(adm)
 	a.release(adm) // a displaced shell's stream ending after it was evicted
 	if got := a.count(); got != 1 {
@@ -289,5 +289,101 @@ func TestPipeModeDeliversOutputOfAFastExitingCommand(t *testing.T) {
 		if out := s.stdout(); !strings.Contains(out, "delivered") {
 			t.Fatalf("round %d: output %q lost the command's stdout", i, out)
 		}
+	}
+}
+
+// -- Owner shells are not displaceable by anyone else --
+
+// The rule in one table. A link handed to someone else must not be able
+// to end the operator's own session; everything else displaces as
+// before, including the owner displacing themselves.
+func TestShellAdmissionsProtectTheOwner(t *testing.T) {
+	cases := []struct {
+		name                string
+		holderIsOwner       bool
+		arrivalIsOwner      bool
+		wantAdmitted        bool
+		wantDisplacedHolder bool
+	}{
+		{"owner displaces a guest", false, true, true, true},
+		{"guest displaces a guest", false, false, true, true},
+		{"owner displaces the owner", true, true, true, true},
+		{"guest may not displace the owner", true, false, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var a shellAdmissions
+			holder, _ := a.admit(1, c.holderIsOwner)
+
+			arrival, displaced := a.admit(1, c.arrivalIsOwner)
+
+			if got := arrival != nil; got != c.wantAdmitted {
+				t.Fatalf("admitted = %v, want %v", got, c.wantAdmitted)
+			}
+			if got := displaced == holder; got != c.wantDisplacedHolder {
+				t.Errorf("displaced the holder = %v, want %v", got, c.wantDisplacedHolder)
+			}
+			// A refused arrival must not have taken a slot, or the owner
+			// would lose their shell to someone who never got one.
+			wantLive := 1
+			if got := a.count(); got != wantLive {
+				t.Errorf("count = %d, want %d", got, wantLive)
+			}
+		})
+	}
+}
+
+// A guest arriving with the owner ahead of them and a guest behind takes
+// the guest, not the owner, even though the owner is older.
+func TestShellAdmissionsSkipsTheOwnerToFindAVictim(t *testing.T) {
+	var a shellAdmissions
+	owner, _ := a.admit(3, true)
+	guest, _ := a.admit(3, false)
+
+	arrival, displaced := a.admit(2, false)
+	if arrival == nil {
+		t.Fatal("refused although a guest slot was available to take")
+	}
+	if displaced == owner {
+		t.Fatal("displaced the owner: an older owner must be skipped, not chosen")
+	}
+	if displaced != guest {
+		t.Fatalf("displaced = %v, want the guest", displaced)
+	}
+}
+
+// Every slot held by the owner and a guest arrives: refused outright
+// rather than admitted-then-over-limit.
+func TestShellAdmissionsRefusesWhenOwnerHoldsEverything(t *testing.T) {
+	var a shellAdmissions
+	a.admit(2, true)
+	a.admit(2, true)
+
+	arrival, displaced := a.admit(2, false)
+	if arrival != nil || displaced != nil {
+		t.Fatalf("arrival = %v, displaced = %v; want both nil", arrival, displaced)
+	}
+	if got := a.count(); got != 2 {
+		t.Errorf("count = %d, want the owner's two still held", got)
+	}
+
+	// The owner themselves still gets in, taking their own oldest.
+	own, displaced := a.admit(2, true)
+	if own == nil || displaced == nil {
+		t.Fatalf("owner refused: own = %v, displaced = %v", own, displaced)
+	}
+}
+
+// Unlimited means unlimited: protection only matters when something has
+// to give.
+func TestShellAdmissionsProtectionIrrelevantWithoutALimit(t *testing.T) {
+	var a shellAdmissions
+	a.admit(0, true)
+	arrival, displaced := a.admit(0, false)
+	if arrival == nil || displaced != nil {
+		t.Fatalf("arrival = %v, displaced = %v", arrival, displaced)
+	}
+	if got := a.count(); got != 2 {
+		t.Errorf("count = %d, want 2", got)
 	}
 }

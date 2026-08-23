@@ -58,6 +58,13 @@ type shellAdmission struct {
 	// evict ends this shell, telling its connector why first. Assigned
 	// after the process spawns, so it is read under the list's lock.
 	evict func()
+
+	// protected marks a shell held on the device owner's own credential.
+	// Nobody else may displace it: a link handed to someone else must not
+	// be able to end the operator's session on their own machine, which
+	// with the default limit of one would be every time they connected.
+	// The owner can still displace their own.
+	protected bool
 }
 
 // admit registers a shell and reports which one it displaced, if any.
@@ -71,16 +78,38 @@ type shellAdmission struct {
 // overlap briefly while the old one is terminating; blocking a new
 // admission until it exits would be worse, since OnSYN runs on the
 // session's dispatch path.
-func (a *shellAdmissions) admit(max int) (adm *shellAdmission, displaced *shellAdmission) {
+//
+// A protected caller (the owner) displaces the oldest shell whatever it
+// is, including another of their own. An unprotected caller displaces
+// only the oldest unprotected one, and is refused -- adm nil -- when
+// every live shell is the owner's.
+func (a *shellAdmissions) admit(max int, protected bool) (adm *shellAdmission, displaced *shellAdmission) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	adm = &shellAdmission{}
 	if max > 0 && len(a.live) >= max {
-		displaced = a.live[0]
-		a.live = a.live[1:]
+		i := a.oldestDisplaceable(protected)
+		if i < 0 {
+			// Every slot is the owner's and this caller is not them.
+			return nil, nil
+		}
+		displaced = a.live[i]
+		a.live = append(a.live[:i], a.live[i+1:]...)
 	}
+	adm = &shellAdmission{protected: protected}
 	a.live = append(a.live, adm)
 	return adm, displaced
+}
+
+// oldestDisplaceable returns the index of the shell to give up, or -1
+// when there is none this caller may take. The list is in admission
+// order, so the first match is the oldest.
+func (a *shellAdmissions) oldestDisplaceable(protected bool) int {
+	for i, live := range a.live {
+		if protected || !live.protected {
+			return i
+		}
+	}
+	return -1
 }
 
 // release drops an admission when its stream ends. Safe to call for one
@@ -321,6 +350,14 @@ type ShellHandler struct {
 	// when ForcedArgv is empty.
 	ForcedEnv []string
 
+	// OwnerCredential marks connections authorized by the device's own
+	// code rather than by a link handed to someone else. It only affects
+	// displacement: an owner shell cannot be displaced by anyone else,
+	// while the owner may still displace their own. Without it, handing
+	// out a shell link would let the recipient end the operator's
+	// session -- with the default limit of one, on every connection.
+	OwnerCredential bool
+
 	// ViewOnly drops stdin, signals, and stdin EOF at the transport layer.
 	// Resize stays enabled so each viewer's own PTY matches their terminal;
 	// that is per-peer and only becomes a shared-state question when peers
@@ -525,7 +562,15 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		}
 		release = rel
 	} else if h.MaxConcurrent > 0 {
-		adm, displaced := liveShells.admit(h.MaxConcurrent)
+		adm, displaced := liveShells.admit(h.MaxConcurrent, h.OwnerCredential)
+		if adm == nil {
+			// Every slot is held on the owner's own credential and this
+			// connection is not. Refusing is the point: a link handed to
+			// someone else must not end the operator's session.
+			log.Printf("Shell refused: max-sessions=%d, all held by the device owner", h.MaxConcurrent)
+			h.sendShellError(s, "the device owner is using the shell; try again later")
+			return nil
+		}
 		if displaced != nil {
 			log.Printf("Shell displaced an older session: at max-sessions=%d", h.MaxConcurrent)
 			if evict := liveShells.evictFunc(displaced); evict != nil {

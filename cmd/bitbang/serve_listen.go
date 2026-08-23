@@ -221,7 +221,8 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		return
 	}
 	granted := terms.GrantSet(offeredScopes(l.cfg))
-	h := buildHandlers(l.cfg, granted, l.share, l.shellArgv, l.id, p.browserIP, l.mirror)
+	h := buildHandlers(l.cfg, granted, l.share, l.shellArgv, l.id, p.browserIP, l.mirror,
+		label == links.OwnerLabel)
 
 	sess := session.New(p.conn.DC, l.pinAuth, l.cfg.verbose, h.all...)
 	sess.OnReady = func() {

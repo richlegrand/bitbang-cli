@@ -40,6 +40,9 @@ type capContext struct {
 	// granted is what this peer's link allows, which is what decides
 	// whether a capability contributes at all.
 	granted map[string]bool
+	// owner is true when this peer presented the device's own code
+	// rather than a link. Only shell displacement reads it.
+	owner bool
 }
 
 func (x capContext) offers(scope string) bool  { return x.cfg.caps.has(scope) }
@@ -93,6 +96,7 @@ var capabilities = []capability{
 		Build: func(x capContext) []streamtype.StreamHandler {
 			sh := streamtype.NewShell(x.shellArgv, x.cfg.verbose)
 			sh.MaxConcurrent = x.cfg.shellMaxSessions
+			sh.OwnerCredential = x.owner
 			if x.cfg.shellMirror {
 				// Through the hold, not straight to the terminal: the
 				// mirror is the loudest thing on the console and would

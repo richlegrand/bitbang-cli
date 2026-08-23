@@ -45,10 +45,11 @@ type sessionHandlers struct {
 // handler that was never built, which matters because the HTTP proxy's
 // OnConnect resolves and probes its target.
 func buildHandlers(cfg serveConfig, granted map[string]bool, share *fileshare.FileShare,
-	shellArgv []string, id *identity.Identity, browserIP string, mirror io.Writer) sessionHandlers {
+	shellArgv []string, id *identity.Identity, browserIP string, mirror io.Writer,
+	owner bool) sessionHandlers {
 
 	x := capContext{cfg: cfg, share: share, shellArgv: shellArgv, id: id,
-		browserIP: browserIP, granted: granted, mirror: mirror}
+		browserIP: browserIP, granted: granted, mirror: mirror, owner: owner}
 
 	var out sessionHandlers
 	for _, c := range capabilities {
