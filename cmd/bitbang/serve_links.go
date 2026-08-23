@@ -159,10 +159,11 @@ func (ls *linkState) reload() error {
 // mid-fragment on an 80-column terminal -- illegible, and impossible to
 // select cleanly, which is the one thing anybody does with it.
 //
-// A blank line between entries, because two wrapped-looking lines that
-// belong together need to be told apart from the next pair. The label
-// carries the bold: it is what you scan for, and the URL is already set
-// apart by having a line to itself.
+// No blank line between entries: the number in front of each label is a
+// left edge to find the next entry by, so the pairs read as pairs
+// without spending a line saying so. The URL sits at the hanging indent
+// the number already makes, under the label rather than out past it.
+// The label carries the bold, being what you scan for.
 func (ls *linkState) listing(bold, reset string) string {
 	table := ls.current()
 	entries := table.Entries()
@@ -198,11 +199,11 @@ func (ls *linkState) listing(bold, reset string) string {
 		if e.Code != "" {
 			url = ls.codeURL(e.Code)
 		}
-		// A fixed indent rather than one aligned under the label column:
-		// aligning would push the URL right as labels grow, and a long
+		// Indented to the label, not to the scopes column: aligning under
+		// the scopes would push the URL right as labels grow, and a long
 		// label would put it back over 80 columns, which is the whole
 		// thing this layout exists to avoid.
-		fmt.Fprintf(&b, "       %s\n\n", url)
+		fmt.Fprintf(&b, "     %s\n", url)
 	}
 	return b.String()
 }
