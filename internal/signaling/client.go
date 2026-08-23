@@ -424,7 +424,7 @@ func (c *Client) register(conn *websocket.Conn) error {
 			// refusing.
 			fmt.Fprintf(os.Stderr,
 				"\nThis version of bitbang is too old for %s.\n"+
-					"  Upgrade: https://bitba.ng/install\n", c.Server)
+					"  curl -fsSL https://%s/install | sh\n", c.Server, c.Server)
 			os.Exit(1)
 		}
 		return fmt.Errorf("server error: %v", errMsg)

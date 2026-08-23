@@ -103,6 +103,8 @@ func (b display) pairCode(code string) {
 // updateAvailable prints the one-line update notice. Informational, not
 // a warning: nothing is wrong with the running version, and BitBang does
 // not update itself.
-func (b display) updateAvailable(notice string) {
-	fmt.Printf("%s  %s\n", notice, "https://bitba.ng/install")
+func (b display) updateAvailable(notice, server string) {
+	// The server this listener registered with, not a compiled-in host:
+	// a self-hoster's install endpoint ships the binary they built.
+	fmt.Printf("%s\n  curl -fsSL https://%s/install | sh\n", notice, server)
 }

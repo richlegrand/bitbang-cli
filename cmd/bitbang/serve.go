@@ -439,7 +439,7 @@ func startListener(cfg serveConfig) {
 			// Same reply carries the latest-release table. Once only:
 			// a reconnect loop must not turn this into a nag.
 			if notice := updateNotice(signalingClient.LatestVersions, version); notice != "" {
-				out.updateAvailable(notice)
+				out.updateAvailable(notice, cfg.server)
 			}
 			return
 		}

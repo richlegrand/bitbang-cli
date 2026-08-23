@@ -139,6 +139,16 @@ def test_forward_only_link_explains_itself(listener, test_server,
     assert 'forward' in text, f'does not say what the link grants:\n{text[:200]}'
     assert '-L' in text, f'does not show the CLI it is for:\n{text[:200]}'
 
+    # The install hint names the server this listener is on, not a
+    # compiled-in one: a self-hoster's endpoint ships the binary they
+    # built, and sending their users to ours installs someone else's.
+    assert test_server in text, f'install hint does not name {test_server}:\n{text}'
+    assert 'bitba.ng/install' not in text or test_server in text
+    # And it is a command, not a link: /install serves a shell script,
+    # so a person who clicks it gets a wall of bash.
+    assert 'curl' in text, f'links a person at a shell script:\n{text}'
+    assert frame.locator('a').count() == 0, 'has a clickable link to the install script'
+
 
 # A link granting two capabilities has to offer a way between them. The
 # strip used to live inside the shell launcher, and the launcher is only

@@ -181,7 +181,20 @@ func noBrowserPage(x capContext) http.Handler {
 	if what == "" {
 		what = "nothing this listener offers"
 	}
-	body := fmt.Sprintf(`<!doctype html>
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The host the visitor actually used, not a compiled-in one:
+		// this listener may be on somebody's own signaling server, and
+		// sending them to ours would install a binary from a project
+		// they did not choose.
+		host := r.Host
+		if host == "" {
+			host = x.cfg.server
+		}
+		// The install endpoint is a shell script -- it exists to be
+		// piped to sh. Linking a person at it downloads a wall of bash,
+		// which is why it reads as broken. Show the command instead.
+		body := fmt.Sprintf(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BitBang -- command-line link</title>
@@ -199,10 +212,10 @@ command line rather than the browser.</p>
 <p>Copy the address bar and use it with the CLI:</p>
 <pre>bitbang connect &lt;this URL&gt; -L 8080:localhost:80</pre>
 <p class="muted">The link is valid -- there is simply no page for what it
-allows. <a href="https://bitba.ng/install">Get the CLI</a>.</p>
-`, html.EscapeString(what))
+allows. No CLI yet?</p>
+<pre>curl -fsSL https://%s/install | sh</pre>
+`, html.EscapeString(what), html.EscapeString(host))
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, body)
 	})
