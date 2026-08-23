@@ -43,7 +43,7 @@ func TestSharingBlock(t *testing.T) {
 	}{
 		{
 			name: "shell only, defaults",
-			cfg:  serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward), shellMaxSessions: 1},
+			cfg:  serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward), shellMaxSessions: defaultShellMaxSessions},
 			want: []string{
 				"Sharing:",
 				"  • shell  (" + defaultShellLabel() + ")",
@@ -102,7 +102,7 @@ func TestSharingBlock(t *testing.T) {
 		},
 		{
 			name:  "all caps, in order",
-			cfg:   serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy), shellMaxSessions: 1},
+			cfg:   serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy), shellMaxSessions: defaultShellMaxSessions},
 			share: shareDir,
 			want: []string{
 				"Sharing:",

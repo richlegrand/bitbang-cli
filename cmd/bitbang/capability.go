@@ -89,6 +89,18 @@ type capability struct {
 	Describe func(io.Writer, capContext)
 }
 
+// defaultShellMaxSessions caps concurrent shells where real use will
+// never reach it, which is the job a limit like this should do. sshd's
+// MaxSessions defaults to 10 for the same reason.
+//
+// It was 1, which people met constantly: with displacement, opening a
+// second tab silently killed the shell in the first. Worse once an
+// owner's shell became undisplaceable -- a single forgotten session
+// locked every guest out entirely. Unlimited is not the answer either;
+// there is no auth throttle here, so a reconnect loop or a hostile URL
+// holder could spawn PTYs without bound on a small device.
+const defaultShellMaxSessions = 10
+
 // capabilities is the whole vocabulary, in the order things are presented.
 var capabilities = []capability{
 	{
@@ -111,7 +123,8 @@ var capabilities = []capability{
 		Menu:     "Shell",
 		MenuPath: "/",
 		// With one session allowed, the launcher tab IS the only shell and
-		// offering another would just hit the limit.
+		// offering another would just hit the limit. Only reachable now by
+		// setting -shell-max-sessions 1 explicitly.
 		MenuWhen: func(x capContext) bool { return x.cfg.shellMaxSessions != 1 },
 		Describe: describeShell,
 	},
@@ -206,9 +219,11 @@ func describeShell(w io.Writer, x capContext) {
 	} else {
 		line += defaultShellLabel()
 	}
+	// State the limit only when it is not the default -- otherwise every
+	// listener carries a number nobody chose.
 	if x.cfg.shellMaxSessions == 0 {
 		line += ", unlimited concurrent sessions"
-	} else if x.cfg.shellMaxSessions != 1 {
+	} else if x.cfg.shellMaxSessions != defaultShellMaxSessions {
 		line += fmt.Sprintf(", max %d concurrent sessions", x.cfg.shellMaxSessions)
 	}
 	if x.cfg.shellMirror {

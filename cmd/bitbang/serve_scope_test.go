@@ -308,3 +308,37 @@ func TestWhyGone(t *testing.T) {
 		})
 	}
 }
+
+// The shell menu entry is suppressed only when exactly one session is
+// allowed, where the launcher tab is already the only shell there can
+// be. At the default it must appear -- the old default of 1 meant the
+// product shipped with no way to open a second shell from the browser.
+func TestCapBarShellEntryFollowsTheSessionLimit(t *testing.T) {
+	cases := []struct {
+		max  int
+		want bool
+	}{
+		{defaultShellMaxSessions, true},
+		{1, false},
+		{2, true},
+		{0, true}, // unlimited
+	}
+	for _, c := range cases {
+		cfg := serveConfig{
+			caps:             capsOf(links.ScopeShell, links.ScopeForward),
+			shellMaxSessions: c.max,
+		}
+		x := capContext{cfg: cfg, granted: map[string]bool{
+			links.ScopeShell: true, links.ScopeForward: true,
+		}}
+		var found bool
+		for _, item := range capBarItems(x) {
+			if item.Label == "Shell" {
+				found = true
+			}
+		}
+		if found != c.want {
+			t.Errorf("max=%d: Shell in cap bar = %v, want %v", c.max, found, c.want)
+		}
+	}
+}

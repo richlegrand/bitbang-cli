@@ -206,7 +206,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 // `serve` (all-mode) and `serve shell` since both expose a shell.
 func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.shellCmd, "shell-cmd", "", "Shell command to spawn (default: "+defaultShellLabel()+")")
-	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", 1, "Max concurrent shell sessions (0 = unlimited)")
+	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", defaultShellMaxSessions, "Max concurrent shell sessions (0 = unlimited)")
 	fs.BoolVar(&cfg.shellMirror, "shell-mirror", true, "Mirror shell output to listener console")
 }
 
@@ -399,20 +399,6 @@ func startListener(cfg serveConfig) {
 	} else if cfg.caps.has(links.ScopeShell) {
 		fmt.Fprintf(os.Stderr, "%sWarning: anyone with this URL gets a shell and unrestricted TCP access from this machine.%s\n", out.bold, out.reset)
 		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
-	}
-
-	// Identities left by the old per-instance derivation still hold keys,
-	// and their URLs are no longer what this listener answers on. Say so
-	// once, with the flag that brings one back, rather than leaving
-	// someone to discover a dead link.
-	if program == defaultProgram {
-		if stranded := strandedIdentities(); len(stranded) > 0 {
-			fmt.Fprintf(os.Stderr,
-				"Note: this listener now uses one identity for every mode, so the URL is\n"+
-					"      the one above. These older per-mode identities still exist: %s\n"+
-					"      To keep serving on one of their URLs, pass --program <name>.\n",
-				strings.Join(stranded, ", "))
-		}
 	}
 
 	if listing := linkState.listing(out.bold, out.reset); listing != "" {
