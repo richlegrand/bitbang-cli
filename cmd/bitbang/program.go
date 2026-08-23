@@ -1,14 +1,6 @@
 package main
 
-import (
-	"errors"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-
-	"github.com/richlegrand/bitbang/internal/identity"
-)
+import "errors"
 
 // errIdentityBusy is returned by acquireIdentityLock when another local process
 // already holds the per-identity lock (see lock_unix.go).
@@ -39,40 +31,3 @@ func deriveProgram(cfg serveConfig) string {
 
 // defaultProgram is the identity every listener uses unless told otherwise.
 const defaultProgram = "bitbang"
-
-// strandedIdentities lists identity directories left by the old
-// per-instance derivation, so a listener can say which URLs moved rather
-// than leaving someone to work out why their link went dead.
-//
-// Not migrated automatically: a machine can hold several of these and
-// choosing one would be a guess, and the identity they would move to may
-// already exist.
-func strandedIdentities() []string {
-	root := filepath.Dir(identity.Dir(defaultProgram))
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		if !e.IsDir() || !looksDerived(e.Name()) {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(root, e.Name(), "identity.pem")); err == nil {
-			out = append(out, e.Name())
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// looksDerived recognizes the names the old scheme generated: a bare cap
-// name, or one with an instance slug appended.
-func looksDerived(name string) bool {
-	for _, cap := range []string{"files", "proxy"} {
-		if name == cap || strings.HasPrefix(name, cap+"-") {
-			return true
-		}
-	}
-	return false
-}

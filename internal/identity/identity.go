@@ -13,7 +13,7 @@
 //
 // A legacy file (single PEM block, no access code) is rejected on load —
 // the v3 signaling server doesn't accept the legacy UID anyway, so the
-// only useful path is to ``--ephemeral`` or delete the file and let the
+// only useful path is to “--ephemeral“ or delete the file and let the
 // new format be created.
 package identity
 
@@ -59,27 +59,14 @@ type Identity struct {
 	PublicB64  string // base64-encoded DER public key
 }
 
-// legacyPrograms is the list of subcommand-specific identity directories
-// the old per-cap subcommands wrote to. When loading the unified
-// "bitbang" identity, we check these as fallbacks so users who ran any
-// of the legacy aliases (bitbang fileshare / bitbang shell /
-// bitbangproxy) keep the same URL after upgrading. First-found wins;
-// the order reflects which alias was most likely to be the user's
-// primary listener.
-var legacyPrograms = []string{
-	"bitbang-shell",
-	"bitbang-fileshare",
-	"bitbangproxy",
-}
-
 // Load loads an identity from disk, or creates a new one if it doesn't exist.
 // If ephemeral is true, a new identity is created in memory without saving.
 //
-// For programName == "bitbang", a one-shot migration tries the legacy
-// alias directories (bitbang-shell, bitbang-fileshare, bitbangproxy)
-// and copies the first one found into the new location. This preserves
-// the user's URL across the alias-removal transition. The legacy file
-// is left in place so any old binary still around keeps working.
+// Nothing is inherited from an identity written under an older naming
+// scheme. Adopting one means guessing which of several a machine holds
+// is the one somebody meant, and a URL is cheap to re-share -- whereas
+// handing out the wrong device's URL, or explaining any of this to
+// someone who just wanted a shell, is not.
 //
 // A legacy v2 file (no access-code block) is rejected with a clear error;
 // the caller should surface it to the user along with a regenerate hint.
@@ -99,31 +86,6 @@ func Load(programName string, ephemeral bool) (*Identity, error) {
 			return nil, fmt.Errorf("%w (at %s)", loadErr, path)
 		}
 		return id, nil
-	}
-
-	// Migration: when loading the unified "bitbang" identity for the
-	// first time, try to inherit from a legacy alias directory before
-	// generating a new keypair. Same URL across the upgrade.
-	if programName == "bitbang" {
-		for _, legacy := range legacyPrograms {
-			legacyPath := filepath.Join(identityDir(legacy), "identity.pem")
-			legacyData, err := os.ReadFile(legacyPath)
-			if err != nil {
-				continue
-			}
-			id, parseErr := fromPEM(legacyData)
-			if parseErr != nil {
-				continue
-			}
-			// Migrate: write into the new location with 600 perms.
-			if mkErr := os.MkdirAll(dir, 0700); mkErr != nil {
-				return nil, fmt.Errorf("create identity dir: %w", mkErr)
-			}
-			if wErr := os.WriteFile(path, legacyData, 0600); wErr != nil {
-				return nil, fmt.Errorf("migrate legacy identity: %w", wErr)
-			}
-			return id, nil
-		}
 	}
 
 	// Generate new
