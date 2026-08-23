@@ -171,7 +171,9 @@ def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
     # The strip is a fixed overlay; the page has to make room or it sits
     # on top of the content.
     assert frame.locator('body').get_attribute('class') == 'with-cap-bar'
-    assert frame.locator('.container').bounding_box()['y'] >= 22
+    bar = frame.locator('#bb-cap-bar').bounding_box()
+    assert bar['height'] == 22, f'strip is {bar["height"]}px; every offset assumes 22'
+    assert frame.locator('.container').bounding_box()['y'] >= bar['y'] + bar['height']
 
 
 # One capability has nowhere to go, so no strip and no wasted 22px.

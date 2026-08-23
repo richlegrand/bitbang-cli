@@ -52,34 +52,37 @@ func Render(items []Item) string {
 	return fmt.Sprintf(`<style>
 #bb-cap-bar {
   position: fixed; top: 0; left: 0; right: 0; height: 22px;
-  background: #000;
+  /* border-box so the hairline lives inside the 22px every page offsets
+     by -- otherwise the strip is 23px and covers a row of content. */
+  box-sizing: border-box;
+  background: #e8e8e8; border-bottom: 1px solid #d0d0d0;
   display: flex; align-items: center; padding: 0 8px 0 2px;
   font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: #ccc; z-index: 100;
+  color: #333; z-index: 100;
 }
 #bb-cap-bar button {
   background: transparent; border: none; padding: 2px 6px;
   cursor: pointer; display: flex; align-items: center;
 }
-#bb-cap-bar button:hover { background: #222; border-radius: 3px; }
+#bb-cap-bar button:hover { background: #d8d8d8; border-radius: 3px; }
 #bb-cap-bar svg { display: block; }
 #bb-cap-bar nav {
   position: absolute; top: 22px; left: 0;
-  min-width: 160px; background: #000;
-  border: 1px solid #333;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  min-width: 160px; background: #f4f4f4;
+  border: 1px solid #d0d0d0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
 }
 #bb-cap-bar nav[hidden] { display: none; }
 #bb-cap-bar nav a {
   display: block; padding: 4px 14px;
-  font-size: 14px; color: #ccc; text-decoration: none;
+  font-size: 14px; color: #333; text-decoration: none;
 }
-#bb-cap-bar nav a:hover { background: #222; }
+#bb-cap-bar nav a:hover { background: #e2e2e2; }
 </style>
 <div id="bb-cap-bar">
   <button id="bb-ham" aria-label="Capabilities menu">
     <svg width="10" height="6" viewBox="0 0 10 6" xmlns="http://www.w3.org/2000/svg">
-      <path d="M0 0 L10 0 L5 6 Z" fill="#ccc"/>
+      <path d="M0 0 L10 0 L5 6 Z" fill="#555"/>
     </svg>
   </button>
   <nav id="bb-menu" hidden>%s</nav>

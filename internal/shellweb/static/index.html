@@ -12,13 +12,15 @@
     overflow: hidden;
   }
   /* xterm.js sizes itself from this container. When the cap bar is
-     injected (launcher mode), .with-cap-bar shrinks the terminal by
-     the strip's 22px so xterm + strip together fill the iframe. */
+     injected (launcher mode) the terminal has to move down past the
+     strip *and* lose its height, or the top line sits underneath the
+     fixed overlay and the prompt is invisible. */
   #terminal {
     width: 100%; height: 100%;
     box-sizing: border-box;
   }
   body.with-cap-bar #terminal {
+    margin-top: 22px;
     height: calc(100% - 22px);
   }
   /* Loading message while xterm boots; removed once the script runs. */

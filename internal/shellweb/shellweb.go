@@ -12,13 +12,13 @@
 // unreachable — the user gets a visible error in the iframe rather
 // than a silent hang.
 //
-// Launcher mode: when constructed with CapBarItem entries, shellweb
-// injects a 32px top strip with a hamburger dropdown into index.html.
-// Anchor clicks in the dropdown postMessage `{type: 'bb-open-cap',
-// path: '<path>'}` up to bootstrap.js, which composes the full URL
-// (including the secret access code from the fragment) and opens a
-// new browser tab. Bootstrap.js never has to know about caps, labels,
-// or dropdown rendering — the device controls all of it.
+// Launcher mode: when constructed with capbar.Item entries, the shared
+// strip (internal/capbar) is spliced into index.html at its CAP_BAR
+// marker. Anchor clicks in the dropdown postMessage `{type:
+// 'bb-open-cap', path: '<path>'}` up to bootstrap.js, which composes
+// the full URL (including the secret access code from the fragment)
+// and opens a new browser tab. Bootstrap.js never has to know about
+// caps, labels, or dropdown rendering -- the device controls all of it.
 package shellweb
 
 import (
@@ -121,14 +121,3 @@ func (s *ShellWeb) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(out))
 }
-
-// renderCapBar emits the 32px launcher strip: just a hamburger button
-// with a dropdown of openable caps. No current-cap label — the iframe
-// content speaks for itself. Each dropdown anchor postMessages
-// bb-open-cap to the parent (bootstrap.js) which knows the secret
-// access code and composes the new-tab URL. The iframe itself never
-// sees the code.
-//
-// Everything inline (CSS + JS + markup) so the strip is one
-// self-contained chunk — bootstrap.js doesn't need to coordinate
-// styling or hook event handlers.

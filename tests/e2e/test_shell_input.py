@@ -40,3 +40,22 @@ def test_browser_keystrokes_reach_shell(shell_url, playwright):
         expect(terminal).to_contain_text("[exit 0]", timeout=10_000)
     finally:
         browser.close()
+
+
+# The strip is a fixed overlay at the top, so the terminal must move down
+# past it as well as lose the height. Shrinking alone put the first line
+# -- and so the prompt -- underneath the strip.
+def test_terminal_clears_the_cap_bar(listener, test_server, browser_context,
+                                     tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('capbar-shell'))
+    l = listener('serve', '-server', test_server, home=home)
+    page = browser_context.new_page()
+    page.goto(l.url, wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('#bb-cap-bar').wait_for(timeout=20000)
+    frame.locator('#terminal').wait_for(timeout=20000)
+
+    bar = frame.locator('#bb-cap-bar').bounding_box()
+    term = frame.locator('#terminal').bounding_box()
+    assert term['y'] >= bar['y'] + bar['height'], \
+        f"terminal starts at {term['y']}, under a strip ending at {bar['y'] + bar['height']}"
