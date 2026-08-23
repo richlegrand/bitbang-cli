@@ -31,10 +31,11 @@ var errConsoleClosed = errors.New("console closed")
 // does not extend to them. While it is open the listener's output is
 // held, so a question cannot be scrolled away by a mirroring shell.
 //
-// Prompts read and write /dev/tty rather than stdin and stdout, so
-// `bitbang serve > log 2>&1` leaves a clean interactive surface with
-// everything else diverted. Without a controlling terminal there is no
-// console at all and the listener behaves as it did before.
+// Prompts read and write the terminal directly -- /dev/tty on unix,
+// CONIN$/CONOUT$ on Windows (see openTTY) -- rather than stdin and
+// stdout, so `bitbang serve > log 2>&1` leaves a clean interactive
+// surface with everything else diverted. Without a controlling terminal
+// there is no console at all and the listener behaves as it did before.
 type console struct {
 	out  io.Writer
 	tty  *os.File
@@ -64,15 +65,16 @@ type console struct {
 }
 
 // newConsole attaches to the controlling terminal. A nil console means
-// there is none -- a daemon, a pipe, a container without a tty -- and
-// every method on it is a no-op, so callers need no special case.
+// there is none -- a daemon, a pipe, a container without a tty, a
+// Windows service with no console attached -- and every method on it is
+// a no-op, so callers need no special case.
 func newConsole(held ...*holdWriter) *console {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	out, in, err := openTTY()
 	if err != nil {
 		return nil
 	}
-	c := &console{out: tty, tty: tty, held: held}
-	go c.read(bufio.NewReader(tty))
+	c := &console{out: out, tty: in, held: held}
+	go c.read(bufio.NewReader(in))
 	return c
 }
 
