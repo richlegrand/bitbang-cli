@@ -209,3 +209,31 @@ def test_single_cap_link_has_no_cap_bar(listener, test_server, browser_context,
     frame.locator("text=notes.txt").wait_for(timeout=20000)
     assert frame.locator('#bb-cap-bar').count() == 0
     assert frame.locator('body').get_attribute('class') in (None, '')
+
+
+# The proxy landing page clears the caret sideways too. The label, its
+# field and the hint move as a block, so they stay aligned -- indenting
+# the label alone put it out of line with its own input.
+def test_proxy_page_clears_the_caret_without_dropping(listener, test_server,
+                                                      browser_context,
+                                                      tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('proxycaret-home'))
+    shared = str(tmp_path_factory.mktemp('proxycaret-share'))
+    l = listener('serve', '-server', test_server, '-files', shared, home=home,
+                 links=[{'label': 'filesproxy', 'scope': ['files', 'proxy']}])
+    urls = l.await_links(['filesproxy'])
+
+    page = browser_context.new_page()
+    page.goto(urls['filesproxy'].rstrip('/') + '/proxy/', wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('label[for="target"]').wait_for(timeout=20000)
+
+    bar = frame.locator('#bb-cap-bar').bounding_box()
+    label = frame.locator('label[for="target"]').bounding_box()
+    field = frame.locator('#target').bounding_box()
+
+    assert label['x'] >= bar['x'] + bar['width'], 'label runs under the caret'
+    assert label['y'] < bar['y'] + bar['height'], \
+        f'label dropped to {label["y"]} below a corner control'
+    assert abs(label['x'] - field['x']) <= 2, \
+        f'label at {label["x"]} is out of line with its field at {field["x"]}'
