@@ -63,7 +63,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The expiry test waits out a real 60s poll, so the suite is minutes,
+    # not seconds. Headroom for a slow runner rather than a flaky red.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
