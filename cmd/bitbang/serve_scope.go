@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"strings"
@@ -115,7 +116,11 @@ func buildServeHTTPHandler(x capContext) http.Handler {
 	}
 
 	if len(live) == 0 {
-		return http.HandlerFunc(http.NotFound)
+		// Everything this link grants is command-line only -- today that
+		// means a forward-only link. It authorizes fine and then has
+		// nothing to render, and a bare 404 reads as a broken link
+		// rather than as "this one is for the CLI".
+		return noBrowserPage(x)
 	}
 	if len(live) == 1 {
 		return live[0].handler
@@ -149,6 +154,47 @@ func buildServeHTTPHandler(x capContext) http.Handler {
 			r.URL.Path += "/"
 		}
 		mux.ServeHTTP(w, r)
+	})
+}
+
+// noBrowserPage explains a link whose grants have no browser side, and
+// says what to do with it instead. Served at every path, because
+// somebody following a link will not try a second one.
+func noBrowserPage(x capContext) http.Handler {
+	var granted []string
+	for _, c := range capabilities {
+		if x.reaches(c.Scope) {
+			granted = append(granted, c.Scope)
+		}
+	}
+	what := strings.Join(granted, ", ")
+	if what == "" {
+		what = "nothing this listener offers"
+	}
+	body := fmt.Sprintf(`<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BitBang -- command-line link</title>
+<style>
+ body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+        max-width: 34rem; margin: 12vh auto; padding: 0 1.2rem; color: #222; }
+ code { background: #f4f4f4; padding: .1rem .3rem; border-radius: 3px; }
+ pre  { background: #f4f4f4; padding: .7rem .9rem; border-radius: 4px;
+        overflow-x: auto; }
+ .muted { color: #666; }
+</style>
+<h2>Nothing to show here</h2>
+<p>This link grants <strong>%s</strong>, which BitBang drives from the
+command line rather than the browser.</p>
+<p>Copy the address bar and use it with the CLI:</p>
+<pre>bitbang connect &lt;this URL&gt; -L 8080:localhost:80</pre>
+<p class="muted">The link is valid -- there is simply no page for what it
+allows. <a href="https://bitba.ng/install">Get the CLI</a>.</p>
+`, html.EscapeString(what))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, body)
 	})
 }
 

@@ -117,3 +117,24 @@ def test_revoking_a_link_closes_the_browser_session(pty_listener, test_server,
     ui = page.locator('#connection-ui')
     expect(ui).to_contain_text('this link was revoked', timeout=30000)
     expect(page.locator('#bb-reload-btn')).to_be_visible()
+
+
+# A forward-only link authorizes fine and has nothing to render: TCP
+# forwarding is driven by `connect -L`. It used to answer a bare 404,
+# which reads as a broken link rather than as "this one is for the CLI".
+def test_forward_only_link_explains_itself(listener, test_server,
+                                           browser_context, tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('fwd-home'))
+    l = listener('serve', '-server', test_server, home=home,
+                 links=[{'label': 'fwdonly', 'scope': ['forward']}])
+    urls = l.await_links(['fwdonly'])
+
+    page = browser_context.new_page()
+    page.goto(urls['fwdonly'], wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('body').wait_for(timeout=20000)
+    text = frame.locator('body').inner_text()
+
+    assert '404' not in text, f'still a bare 404:\n{text[:200]}'
+    assert 'forward' in text, f'does not say what the link grants:\n{text[:200]}'
+    assert '-L' in text, f'does not show the CLI it is for:\n{text[:200]}'
