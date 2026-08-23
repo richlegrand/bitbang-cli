@@ -216,3 +216,34 @@ def test_a_label_that_looks_like_a_number_wins(pty_listener, test_server):
     l.command('rm 2', 'removed "2"')
     # 'ana' sat at index 2 and must be untouched.
     assert sorted(e['label'] for e in l.links()) == ['ana', 'contractor']
+
+
+# The default the add flow proposes must never be one it will refuse.
+# It used to build a dated name without checking, so the second link of
+# the day offered a label that already existed and Enter got you
+# "already exists" with no way forward.
+def test_add_proposes_a_label_that_is_free(pty_listener, test_server):
+    import datetime
+    day = datetime.date.today().strftime('%b%-d').lower()
+    l = pty_listener('serve', '-server', test_server,
+                     links=[{'label': f'link-{day}', 'scope': ['files']}])
+    l.open_console()
+    l.command('add', 'Grant which')
+    l.command('1', 'Expires')
+    l.command('1', f'Label .link-{day}-2.')   # suffixed past the collision
+    l.command('', f'link-{day}-2 --')          # Enter is accepted
+    assert f'link-{day}-2' in [e['label'] for e in l.links()]
+
+
+# And a name typed by hand that is already in use is caught in the
+# question, not after the whole flow has been answered.
+def test_a_taken_label_is_refused_in_the_question(pty_listener, test_server):
+    l = pty_listener('serve', '-server', test_server,
+                     links=[{'label': 'contractor', 'scope': ['files']}])
+    l.open_console()
+    l.command('add', 'Grant which')
+    l.command('1', 'Expires')
+    l.command('1', 'Label')
+    l.command('contractor', 'already exists')
+    l.command('ana', 'ana --')
+    assert sorted(e['label'] for e in l.links()) == ['ana', 'contractor']

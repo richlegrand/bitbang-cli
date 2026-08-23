@@ -32,7 +32,7 @@ type asker interface {
 // Seed carries the current values. For `add` and pairing that is the
 // default grant; for `edit` it is the entry as it stands, so pressing
 // Enter through the whole flow changes nothing.
-func grantQuestions(a asker, seed links.Terms, offered []string, now time.Time) (links.Terms, error) {
+func grantQuestions(a asker, seed links.Terms, offered []string, taken map[string]bool, now time.Time) (links.Terms, error) {
 	out := seed
 
 	scope, err := askScope(a, seed, offered)
@@ -47,7 +47,7 @@ func grantQuestions(a asker, seed links.Terms, offered []string, now time.Time) 
 	}
 	out.Expires = expires
 
-	label, err := askLabel(a, seed, now)
+	label, err := askLabel(a, seed, taken, now)
 	if err != nil {
 		return links.Terms{}, err
 	}
@@ -262,11 +262,16 @@ func askOtherExpiry(a asker, now time.Time) (*time.Time, error) {
 	}
 }
 
-func askLabel(a asker, seed links.Terms, now time.Time) (string, error) {
+// askLabel offers seed.Label as the default and refuses a name already
+// in use.
+//
+// taken excludes the entry being edited, so renaming something to itself
+// is allowed. Catching a collision here rather than at the write matters
+// because the write is the end of a five-question flow: being told the
+// name is taken after choosing scopes and an expiry means answering all
+// of it again.
+func askLabel(a asker, seed links.Terms, taken map[string]bool, now time.Time) (string, error) {
 	def := seed.Label
-	if def == "" {
-		def = "paired-" + strings.ToLower(now.Format("Jan2"))
-	}
 	for {
 		answer, err := a.Ask("  Label", def)
 		if err != nil {
@@ -278,6 +283,8 @@ func askLabel(a asker, seed links.Terms, now time.Time) (string, error) {
 			a.Say("  a label is how you refer to this link later")
 		case answer == links.OwnerLabel:
 			a.Say("  %q is reserved for this device's own code", links.OwnerLabel)
+		case taken[answer]:
+			a.Say("  a link called %q already exists", answer)
 		default:
 			return answer, nil
 		}

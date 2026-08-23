@@ -208,6 +208,19 @@ func (ls *linkState) listing(bold, reset string) string {
 	return b.String()
 }
 
+// takenLabels is the set a new label may not collide with, minus the
+// one entry being renamed -- editing something without changing its
+// name has to stay legal.
+func (ls *linkState) takenLabels(except string) map[string]bool {
+	out := make(map[string]bool)
+	for _, l := range ls.labels() {
+		if l != except {
+			out[l] = true
+		}
+	}
+	return out
+}
+
 // byRef turns a console argument into a label. A label wins over a
 // number, so an entry someone literally named "2" is still reachable by
 // its name; failing that the argument is read as the index the listing

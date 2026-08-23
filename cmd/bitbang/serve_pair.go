@@ -42,10 +42,10 @@ func grantForPairing(c *console, ls *linkState, remoteIP string) (string, bool) 
 			return err
 		}
 
-		terms := links.Terms{Label: pairLabel(ls, time.Now())}
+		terms := links.Terms{Label: datedLabel(ls, "paired", time.Now())}
 		if !strings.EqualFold(strings.TrimSpace(answer), "y") {
 			c.Say("")
-			terms, err = grantQuestions(waiting, terms, ls.offeredScopes(), time.Now())
+			terms, err = grantQuestions(waiting, terms, ls.offeredScopes(), ls.takenLabels(""), time.Now())
 			if err != nil {
 				return err
 			}
@@ -72,7 +72,7 @@ func grantForPairing(c *console, ls *linkState, remoteIP string) (string, bool) 
 // grantDefault mints the everything-no-expiry link a pairing gets when
 // there is no terminal to ask on.
 func grantDefault(ls *linkState, remoteIP string) (string, bool) {
-	terms := links.Terms{Label: pairLabel(ls, time.Now())}
+	terms := links.Terms{Label: datedLabel(ls, "paired", time.Now())}
 	code, err := ls.add(terms)
 	if err != nil {
 		log.Printf("Pair grant failed: %v", err)
@@ -84,8 +84,8 @@ func grantDefault(ls *linkState, remoteIP string) (string, bool) {
 
 // pairLabel proposes a dated label, because paired-1 tells you nothing six
 // weeks later. Numbered only when the same day already has one.
-func pairLabel(ls *linkState, now time.Time) string {
-	base := "paired-" + strings.ToLower(now.Format("Jan2"))
+func datedLabel(ls *linkState, prefix string, now time.Time) string {
+	base := prefix + "-" + strings.ToLower(now.Format("Jan2"))
 	taken := make(map[string]bool)
 	for _, l := range ls.labels() {
 		taken[l] = true

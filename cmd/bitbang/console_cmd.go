@@ -86,7 +86,12 @@ func cmdList(l *listener, c *console, _ []string) error {
 }
 
 func cmdAdd(l *listener, c *console, _ []string) error {
-	terms, err := grantQuestions(c, links.Terms{}, l.links.offeredScopes(), time.Now())
+	// A deduplicated default, so pressing Enter is never refused. The
+	// bare fallback used to propose a dated name without checking, which
+	// collided with the second link of the day.
+	seed := links.Terms{Label: datedLabel(l.links, "link", time.Now())}
+	terms, err := grantQuestions(c, seed, l.links.offeredScopes(),
+		l.links.takenLabels(""), time.Now())
 	if err != nil {
 		return err
 	}
@@ -115,7 +120,8 @@ func cmdEdit(l *listener, c *console, args []string) error {
 		c.Say("  no link called %q", args[0])
 		return nil
 	}
-	edited, err := grantQuestions(c, current, l.links.offeredScopes(), time.Now())
+	edited, err := grantQuestions(c, current, l.links.offeredScopes(),
+		l.links.takenLabels(current.Label), time.Now())
 	if err != nil {
 		return err
 	}

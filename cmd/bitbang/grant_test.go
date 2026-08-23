@@ -45,7 +45,7 @@ func TestGrantQuestions_PickingScopesAndAnExpiry(t *testing.T) {
 		"3",   // 24 hours; the menu is never, 1h, 24h, 7d, other
 		"ana-phone",
 	}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestGrantQuestions_EnterThroughKeepsTheSeed(t *testing.T) {
 	seed := links.Terms{Label: "ana", Code: "KEEPME", Scope: []string{links.ScopeFiles}, Expires: &at}
 
 	a := &scriptedAsker{t: t, answers: []string{"", "", ""}}
-	got, err := grantQuestions(a, seed, allScopes, now)
+	got, err := grantQuestions(a, seed, allScopes, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestGrantQuestions_EnterThroughKeepsTheSeed(t *testing.T) {
 func TestGrantQuestions_AllAndNever(t *testing.T) {
 	now := time.Now()
 	a := &scriptedAsker{t: t, answers: []string{"a", "1", "kiosk"}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestGrantQuestions_RejectsBadInputAndAsksAgain(t *testing.T) {
 		"   ",   // whitespace; "" would mean Enter and take the default
 		"ok",    // fine
 	}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestGrantQuestions_RejectsBadInputAndAsksAgain(t *testing.T) {
 func TestGrantQuestions_OnlyOffersWhatIsServed(t *testing.T) {
 	now := time.Now()
 	a := &scriptedAsker{t: t, answers: []string{"1", "1", "x"}}
-	got, err := grantQuestions(a, links.Terms{}, []string{links.ScopeFiles}, now)
+	got, err := grantQuestions(a, links.Terms{}, []string{links.ScopeFiles}, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestAskOtherExpiry_ConfirmsAndCanBeDeclined(t *testing.T) {
 // file browser rather than a terminal.
 func TestGrantQuestions_MenuPutsShellLast(t *testing.T) {
 	a := &scriptedAsker{t: t, answers: []string{"1", "1", "x"}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, time.Now())
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,5 +221,41 @@ func TestGrantQuestions_MenuPutsShellLast(t *testing.T) {
 	files, shell := strings.Index(menu, "files"), strings.Index(menu, "shell")
 	if files < 0 || shell < 0 || files > shell {
 		t.Errorf("shell is not last in the menu:\n%s", menu)
+	}
+}
+
+// A label already in use is refused inside the question, not after the
+// whole flow. Being told at the write means answering scopes and expiry
+// again for a name you could have been warned about immediately.
+func TestGrantQuestionsRefusesATakenLabel(t *testing.T) {
+	now := time.Now()
+	a := &scriptedAsker{t: t, answers: []string{
+		"a",          // scopes: all
+		"1",          // expires: never
+		"contractor", // taken
+		"ana",        // free
+	}}
+	taken := map[string]bool{"contractor": true}
+	got, err := grantQuestions(a, links.Terms{}, allScopes, taken, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Label != "ana" {
+		t.Errorf("label = %q, want the free one", got.Label)
+	}
+}
+
+// Editing an entry without renaming it must stay legal, so the entry
+// being edited is excluded from the taken set by its caller.
+func TestGrantQuestionsAcceptsTheSeedsOwnLabel(t *testing.T) {
+	now := time.Now()
+	a := &scriptedAsker{t: t, answers: []string{"a", "1", ""}} // Enter through
+	seed := links.Terms{Label: "contractor"}
+	got, err := grantQuestions(a, seed, allScopes, map[string]bool{"ana": true}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Label != "contractor" {
+		t.Errorf("label = %q, want the seed kept", got.Label)
 	}
 }
