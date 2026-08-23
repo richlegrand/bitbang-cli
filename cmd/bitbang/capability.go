@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/richlegrand/bitbang/internal/capbar"
+
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +45,10 @@ type capContext struct {
 	// owner is true when this peer presented the device's own code
 	// rather than a link. Only shell displacement reads it.
 	owner bool
+	// capBar is the strip every cap page shows when this link grants
+	// more than one of them. Empty for a single-capability link, which
+	// has nowhere to move between.
+	capBar []capbar.Item
 }
 
 func (x capContext) offers(scope string) bool  { return x.cfg.caps.has(scope) }
@@ -150,6 +156,7 @@ var capabilities = []capability{
 			if x.share == nil {
 				return nil
 			}
+			x.share.CapBar(x.capBar)
 			return x.share.HTTPHandler()
 		},
 		Menu:     "Files",
@@ -161,7 +168,7 @@ var capabilities = []capability{
 		Scope:    links.ScopeProxy,
 		Build:    buildProxyHandlers,
 		Mount:    "/proxy/",
-		Web:      func(capContext) http.Handler { return proxyweb.LandingHandler() },
+		Web:      func(x capContext) http.Handler { return proxyweb.LandingHandler(x.capBar) },
 		Menu:     "Proxy",
 		MenuPath: "/proxy/",
 		Describe: describeProxy,

@@ -13,6 +13,10 @@
 package proxyweb
 
 import (
+	"io"
+
+	"github.com/richlegrand/bitbang/internal/capbar"
+
 	"embed"
 	"net/http"
 )
@@ -25,7 +29,7 @@ var staticFS embed.FS
 // asks for a target URL and opens that target in a new browser tab,
 // where the listener's SWSP HTTP handler dispatches it to the
 // streamtype.HTTPHandler dynamic-target proxy.
-func LandingHandler() http.Handler {
+func LandingHandler(bar []capbar.Item) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Accept either /proxy/ (mounted form) or / (from inside the
 		// listener after StripPrefix) — both land here.
@@ -41,6 +45,6 @@ func LandingHandler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(b)
+		_, _ = io.WriteString(w, capbar.Inject(string(b), bar))
 	})
 }

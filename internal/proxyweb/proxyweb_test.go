@@ -11,7 +11,7 @@ func TestLandingHandler_ServesForm(t *testing.T) {
 	for _, path := range []string{"/", "/proxy/"} {
 		req := httptest.NewRequest("GET", path, nil)
 		rec := httptest.NewRecorder()
-		LandingHandler().ServeHTTP(rec, req)
+		LandingHandler(nil).ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Errorf("path %s: status = %d, want 200", path, rec.Code)
 		}
@@ -27,7 +27,7 @@ func TestLandingHandler_ServesForm(t *testing.T) {
 func TestLandingHandler_404OnOtherPaths(t *testing.T) {
 	req := httptest.NewRequest("GET", "/some/other/path", nil)
 	rec := httptest.NewRecorder()
-	LandingHandler().ServeHTTP(rec, req)
+	LandingHandler(nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}

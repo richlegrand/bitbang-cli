@@ -11,6 +11,9 @@
             color: #333;
             padding: 24px;
         }
+        /* Room for the cap bar when a link grants more than one thing. */
+        body.with-cap-bar { padding-top: 22px; }
+
         label {
             display: block;
             font-size: 13px;
@@ -45,6 +48,7 @@
     </style>
 </head>
 <body>
+<!-- CAP_BAR -->
     <label for="target">Target URL</label>
     <div class="form-row">
         <input type="text" id="target" placeholder="localhost:3000" autofocus

@@ -138,3 +138,56 @@ def test_forward_only_link_explains_itself(listener, test_server,
     assert '404' not in text, f'still a bare 404:\n{text[:200]}'
     assert 'forward' in text, f'does not say what the link grants:\n{text[:200]}'
     assert '-L' in text, f'does not show the CLI it is for:\n{text[:200]}'
+
+
+# A link granting two capabilities has to offer a way between them. The
+# strip used to live inside the shell launcher, and the launcher is only
+# mounted when shell is granted -- so a files+proxy holder landed on
+# files with no way to reach the proxy they had been given.
+def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
+                                                       browser_context,
+                                                       tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('capbar-home'))
+    shared = str(tmp_path_factory.mktemp('capbar-share'))
+    with open(os.path.join(shared, 'notes.txt'), 'w') as f:
+        f.write('hi\n')
+    l = listener('serve', '-server', test_server, '-files', shared, home=home, links=[
+        {'label': 'filesproxy', 'scope': ['files', 'proxy']},
+        {'label': 'filesonly', 'scope': ['files']},
+    ])
+    urls = l.await_links(['filesproxy', 'filesonly'])
+
+    page = browser_context.new_page()
+    page.goto(urls['filesproxy'], wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('#bb-cap-bar').wait_for(timeout=20000)
+
+    items = frame.locator('#bb-cap-bar nav a')
+    labels = [items.nth(i).inner_text() for i in range(items.count())]
+    assert labels == ['Files', 'Proxy'], labels
+    # Shell is not granted, so it must not be offered.
+    assert 'Shell' not in labels
+
+    # The strip is a fixed overlay; the page has to make room or it sits
+    # on top of the content.
+    assert frame.locator('body').get_attribute('class') == 'with-cap-bar'
+    assert frame.locator('.container').bounding_box()['y'] >= 22
+
+
+# One capability has nowhere to go, so no strip and no wasted 22px.
+def test_single_cap_link_has_no_cap_bar(listener, test_server, browser_context,
+                                        tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('nobar-home'))
+    shared = str(tmp_path_factory.mktemp('nobar-share'))
+    with open(os.path.join(shared, 'notes.txt'), 'w') as f:
+        f.write('hi\n')
+    l = listener('serve', '-server', test_server, '-files', shared, home=home,
+                 links=[{'label': 'filesonly', 'scope': ['files']}])
+    urls = l.await_links(['filesonly'])
+
+    page = browser_context.new_page()
+    page.goto(urls['filesonly'], wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator("text=notes.txt").wait_for(timeout=20000)
+    assert frame.locator('#bb-cap-bar').count() == 0
+    assert frame.locator('body').get_attribute('class') in (None, '')

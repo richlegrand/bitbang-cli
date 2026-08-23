@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/richlegrand/bitbang/internal/capbar"
+
 	"fmt"
 	"html"
 	"io"
@@ -101,6 +103,14 @@ func buildHandlers(cfg serveConfig, granted map[string]bool, share *fileshare.Fi
 // streamtype.HTTPHandler, dispatched by httpDispatcher based on the connect
 // path -- those paths never reach this handler.
 func buildServeHTTPHandler(x capContext) http.Handler {
+	// Resolved before the handlers are built, because each cap page
+	// splices the strip at construction. Only when there is more than one
+	// destination: a link granting a single thing has nowhere to move
+	// between, and a dropdown of one is furniture.
+	if items := capBarItems(x); len(items) > 1 {
+		x.capBar = items
+	}
+
 	type mounted struct {
 		cap     capability
 		handler http.Handler
@@ -128,7 +138,7 @@ func buildServeHTTPHandler(x capContext) http.Handler {
 
 	// The strip's dropdown anchors postMessage parent to open new tabs
 	// (bootstrap.js handles the URL composition).
-	launcher := shellweb.New(shellweb.WithCapBar(capBarItems(x))).HTTPHandler()
+	launcher := shellweb.New(shellweb.WithCapBar(x.capBar)).HTTPHandler()
 
 	mux := http.NewServeMux()
 	capRoots := map[string]bool{}
@@ -200,8 +210,8 @@ allows. <a href="https://bitba.ng/install">Get the CLI</a>.</p>
 
 // capBarItems composes the launcher dropdown from the capabilities this
 // link reaches. Items render in table order.
-func capBarItems(x capContext) []shellweb.CapBarItem {
-	var items []shellweb.CapBarItem
+func capBarItems(x capContext) []capbar.Item {
+	var items []capbar.Item
 	for _, c := range capabilities {
 		if c.Menu == "" || !x.reaches(c.Scope) {
 			continue
@@ -209,7 +219,7 @@ func capBarItems(x capContext) []shellweb.CapBarItem {
 		if c.MenuWhen != nil && !c.MenuWhen(x) {
 			continue
 		}
-		items = append(items, shellweb.CapBarItem{Label: c.Menu, Path: c.MenuPath})
+		items = append(items, capbar.Item{Label: c.Menu, Path: c.MenuPath})
 	}
 	return items
 }
