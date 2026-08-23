@@ -116,7 +116,7 @@ func (s *ShellWeb) serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	// The terminal is absolutely sized, so index.html carries its own
 	// `body.with-cap-bar #terminal` rule on top of the shared padding.
-	out = capbar.Inject(out, s.capBar)
+	out = capbar.Inject(out, s.capBar, capbar.Bar)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(out))

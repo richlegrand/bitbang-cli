@@ -24,6 +24,21 @@ type Item struct {
 // Placeholder is the marker a page carries where the strip is spliced.
 const Placeholder = "<!-- CAP_BAR -->"
 
+// Style is how the control presents itself, which depends on what it is
+// sitting on.
+type Style int
+
+const (
+	// Bar spans the width in black, the way the shell has always shown
+	// it. The terminal is black too, so the strip reads as its title bar
+	// rather than as something laid over the page.
+	Bar Style = iota
+	// Caret is the control alone, no band across the page. A light page
+	// has its own header and background; a full-width strip over it is
+	// furniture, and a black one looks like a rendering fault.
+	Caret
+)
+
 // Inject splices the strip into a page and marks the body with
 // .with-cap-bar so the page can leave room for it.
 //
@@ -34,55 +49,71 @@ const Placeholder = "<!-- CAP_BAR -->"
 // wrong for one of them. With no items the marker is removed and the page is
 // unchanged -- a link granting one thing needs no way to move between
 // things.
-func Inject(page string, items []Item) string {
+func Inject(page string, items []Item, style Style) string {
 	if len(items) == 0 {
 		return strings.Replace(page, Placeholder+"\n", "", 1)
 	}
-	out := strings.Replace(page, Placeholder, Render(items), 1)
+	out := strings.Replace(page, Placeholder, Render(items, style), 1)
 	return strings.Replace(out, "<body>", `<body class="with-cap-bar">`, 1)
 }
 
-func Render(items []Item) string {
+func Render(items []Item, style Style) string {
 	var dropdown strings.Builder
 	for _, it := range items {
 		fmt.Fprintf(&dropdown,
 			`<a href="#" data-path="%s">%s</a>`,
 			html.EscapeString(it.Path), html.EscapeString(it.Label))
 	}
+	// Shared structure; the two styles differ only in what the strip and
+	// its menu are painted.
+	theme := `
+#bb-cap-bar { background: #000; color: #ccc; right: 0; }
+#bb-cap-bar button:hover { background: #222; border-radius: 3px; }
+#bb-cap-bar nav { background: #000; border: 1px solid #333;
+                  box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+#bb-cap-bar nav a { color: #ccc; }
+#bb-cap-bar nav a:hover { background: #222; }
+`
+	fill := "#ccc"
+	if style == Caret {
+		theme = `
+#bb-cap-bar { background: transparent; color: #333; }
+#bb-cap-bar button:hover { background: rgba(0,0,0,0.08); border-radius: 3px; }
+#bb-cap-bar nav { background: #fff; border: 1px solid #d0d0d0;
+                  box-shadow: 0 2px 8px rgba(0,0,0,0.18); border-radius: 3px; }
+#bb-cap-bar nav a { color: #333; }
+#bb-cap-bar nav a:hover { background: #f0f0f0; }
+`
+		fill = "#666"
+	}
+
 	return fmt.Sprintf(`<style>
 #bb-cap-bar {
-  position: fixed; top: 0; left: 0; right: 0; height: 22px;
-  /* border-box so the hairline lives inside the 22px every page offsets
-     by -- otherwise the strip is 23px and covers a row of content. */
+  position: fixed; top: 0; left: 0; height: 22px;
   box-sizing: border-box;
-  background: #e8e8e8; border-bottom: 1px solid #d0d0d0;
   display: flex; align-items: center; padding: 0 8px 0 2px;
   font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: #333; z-index: 100;
+  z-index: 100;
 }
 #bb-cap-bar button {
   background: transparent; border: none; padding: 2px 6px;
   cursor: pointer; display: flex; align-items: center;
 }
-#bb-cap-bar button:hover { background: #d8d8d8; border-radius: 3px; }
 #bb-cap-bar svg { display: block; }
 #bb-cap-bar nav {
   position: absolute; top: 22px; left: 0;
-  min-width: 160px; background: #f4f4f4;
-  border: 1px solid #d0d0d0;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+  min-width: 160px;
 }
 #bb-cap-bar nav[hidden] { display: none; }
 #bb-cap-bar nav a {
   display: block; padding: 4px 14px;
-  font-size: 14px; color: #333; text-decoration: none;
+  font-size: 14px; text-decoration: none;
 }
-#bb-cap-bar nav a:hover { background: #e2e2e2; }
-</style>
+%s</style>
 <div id="bb-cap-bar">
   <button id="bb-ham" aria-label="Capabilities menu">
     <svg width="10" height="6" viewBox="0 0 10 6" xmlns="http://www.w3.org/2000/svg">
-      <path d="M0 0 L10 0 L5 6 Z" fill="#555"/>
+      <path d="M0 0 L10 0 L5 6 Z" fill="%s"/>
     </svg>
   </button>
   <nav id="bb-menu" hidden>%s</nav>
@@ -103,5 +134,5 @@ func Render(items []Item) string {
     });
   });
 })();
-</script>`, dropdown.String())
+</script>`, theme, fill, dropdown.String())
 }

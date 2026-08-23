@@ -45,6 +45,6 @@ func LandingHandler(bar []capbar.Item) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, capbar.Inject(string(b), bar))
+		_, _ = io.WriteString(w, capbar.Inject(string(b), bar, capbar.Caret))
 	})
 }

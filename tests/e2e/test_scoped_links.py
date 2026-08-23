@@ -175,6 +175,15 @@ def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
     assert bar['height'] == 22, f'strip is {bar["height"]}px; every offset assumes 22'
     assert frame.locator('.container').bounding_box()['y'] >= bar['y'] + bar['height']
 
+    # A light page gets the caret alone -- no band across it, and nothing
+    # painted behind it. A full-width black strip here looked like a
+    # rendering fault.
+    page_width = frame.locator('body').bounding_box()['width']
+    assert bar['width'] < page_width / 4, \
+        f'caret is {bar["width"]} of {page_width}: that is a band, not a caret'
+    bg = frame.locator('#bb-cap-bar').evaluate("e => getComputedStyle(e).backgroundColor")
+    assert bg in ('rgba(0, 0, 0, 0)', 'transparent'), bg
+
 
 # One capability has nowhere to go, so no strip and no wasted 22px.
 def test_single_cap_link_has_no_cap_bar(listener, test_server, browser_context,

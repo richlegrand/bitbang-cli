@@ -129,7 +129,7 @@ func (f *FileShare) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, capbar.Inject(string(data), f.capBar))
+	_, _ = io.WriteString(w, capbar.Inject(string(data), f.capBar, capbar.Caret))
 }
 
 // Entry is one item in a directory listing. JSON shape matches Python's

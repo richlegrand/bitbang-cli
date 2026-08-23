@@ -59,3 +59,10 @@ def test_terminal_clears_the_cap_bar(listener, test_server, browser_context,
     term = frame.locator('#terminal').bounding_box()
     assert term['y'] >= bar['y'] + bar['height'], \
         f"terminal starts at {term['y']}, under a strip ending at {bar['y'] + bar['height']}"
+
+    # The shell wears the full-width black strip: the terminal is black
+    # too, so it reads as a title bar rather than something laid over it.
+    page_width = frame.locator('body').bounding_box()['width']
+    assert bar['width'] >= page_width - 1, f"strip is {bar['width']}, page is {page_width}"
+    bg = frame.locator('#bb-cap-bar').evaluate("e => getComputedStyle(e).backgroundColor")
+    assert bg == 'rgb(0, 0, 0)', bg
