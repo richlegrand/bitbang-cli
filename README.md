@@ -245,6 +245,32 @@ bitbang cp - <url>:/tmp/firmware.bin < firmware.bin     # stdin/stdout work too
 
 Every successful connect or pairing is saved to `~/.bitbang/devices.json`, so from then on a short name is enough: `bitbang connect nas1`.
 
+## Platform support
+
+One binary per platform, no runtime dependencies. Everything works
+everywhere except the two rows called out below.
+
+|                                          | Linux | macOS | Windows |
+| ---------------------------------------- | :---: | :---: | :-----: |
+| Shell, files, proxy (`bitbang serve`)     |  yes  |  yes  |   yes   |
+| TCP forwarding (`-L`)                     |  yes  |  yes  |   yes   |
+| Access links -- scope, expiry, revocation |  yes  |  yes  |   yes   |
+| Bring your own TURN                       |  yes  |  yes  |   yes   |
+| Pairing with a 6-digit code               |  yes  |  yes  |   yes   |
+| The listener console (Enter)              |  yes  |  yes  |   yes   |
+| `bitbang connect`, `bitbang cp`           |  yes  |  yes  |   yes   |
+| Viewing a shared session                  |  yes  |  yes  |   yes   |
+| **Hosting a share** (`bitbang share`)     |  yes  |  yes  |  no *   |
+| **Terminal resize while connected**       |  yes  |  yes  |  no **  |
+
+\* `bitbang share` publishes a tmux session, so hosting one needs tmux --
+Linux, macOS, or WSL. Native Windows can still open share URLs with
+`bitbang connect`.
+
+\*\* A Windows connector does not notice its terminal being resized, so the
+remote shell keeps the size it started with until you reconnect. Unix
+gets this from `SIGWINCH`, which Windows has no equivalent of.
+
 ## Security
 
 - **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is derived from the public key, so impersonating a device means finding a second preimage of its UID.
