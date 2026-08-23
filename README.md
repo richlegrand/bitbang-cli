@@ -146,7 +146,7 @@ bitbang link qr <label>          # its URL and QR code
 ```
 
 An entry is a line of JSON in `~/.bitbang/bitbang/links.json`. Write one with no
-code, reload the listener (Enter at its console, or `SIGHUP`), and it mints one:
+code, reload the listener at its console, and it mints one:
 
 ```json
 [
@@ -363,7 +363,7 @@ bitbang help                           Usage (also --help, -h)
 | Flag                    | Default               | Description                                   |
 | ----------------------- | --------------------- | --------------------------------------------- |
 | `-shell-cmd CMD`        | platform shell        | `$SHELL`/`/bin/sh` on Unix; `%COMSPEC%`/`cmd.exe` on Windows |
-| `-shell-max-sessions N` | `1`                   | Max concurrent shell sessions (0 = unlimited) |
+| `-shell-max-sessions N` | `10`                  | Max concurrent shell sessions (0 = unlimited) |
 | `-shell-mirror`         | on                    | Mirror shell output to the listener's console |
 
 **Files flags:**
