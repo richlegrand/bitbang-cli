@@ -416,9 +416,16 @@ func (c *Client) register(conn *websocket.Conn) error {
 	case "error":
 		errMsg, _ := msg["message"].(string)
 		if errMsg == "protocol_too_old" {
-			fmt.Println("\nPlease upgrade bitbangproxy:")
-			fmt.Println("  Download latest from https://github.com/richlegrand/bitbangproxy/releases")
-			log.Fatal("Protocol version too old")
+			// Only reachable once a server raises MinProtocolVersion past
+			// what this build speaks, so it is dormant until the protocol
+			// moves -- and then it is the entire explanation a stranded
+			// user gets. Reconnecting cannot help, so say what to do and
+			// stop rather than retrying against a server that will keep
+			// refusing.
+			fmt.Fprintf(os.Stderr,
+				"\nThis version of bitbang is too old for %s.\n"+
+					"  Upgrade: https://bitba.ng/install\n", c.Server)
+			os.Exit(1)
 		}
 		return fmt.Errorf("server error: %v", errMsg)
 
