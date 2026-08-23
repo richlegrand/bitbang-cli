@@ -11,10 +11,11 @@
             color: #333;
             padding: 24px;
         }
-        /* Room for the caret when a link grants more than one thing. It
-           is a small fixed control in the corner rather than a band, so
-           this only has to keep it off the content beneath. */
-        body.with-cap-bar { padding-top: 22px; }
+        /* The caret is a 32x22 control in the top-left corner, and the
+           page's own 24px padding already clears it vertically. Only the
+           label shares its band, so that is indented rather than the
+           whole page being pushed down. */
+        body.with-cap-bar label[for="target"] { padding-left: 14px; }
 
         label {
             display: block;

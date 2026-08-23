@@ -173,7 +173,14 @@ def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
     assert frame.locator('body').get_attribute('class') == 'with-cap-bar'
     bar = frame.locator('#bb-cap-bar').bounding_box()
     assert bar['height'] == 22, f'strip is {bar["height"]}px; every offset assumes 22'
-    assert frame.locator('.container').bounding_box()['y'] >= bar['y'] + bar['height']
+    # Nothing shifts down for the caret: it is a corner control, and the
+    # page's own margin clears it. What must hold is that the first row
+    # is not underneath it -- horizontally or vertically.
+    first = frame.locator('.container > *').first.bounding_box()
+    clash = (bar['x'] + bar['width'] > first['x']) and (bar['y'] + bar['height'] > first['y'])
+    assert not clash, f'caret ends at ({bar["x"]+bar["width"]},{bar["y"]+bar["height"]}), first row at ({first["x"]},{first["y"]})'
+    assert first['y'] < 22, f'content pushed down to {first["y"]} for a corner control'
+
 
     # A light page gets the caret alone -- no band across it, and nothing
     # painted behind it. A full-width black strip here looked like a
