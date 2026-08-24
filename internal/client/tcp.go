@@ -85,6 +85,12 @@ func (f *LocalForwarder) acceptLoop(ln net.Listener, forward tcpforward.Forward)
 			_ = conn.Close()
 			return
 		}
+		// Announced on arrival, not only on failure. Silence used to mean
+		// three different things -- working, broken, and nothing ever
+		// reaching the port -- and telling them apart cost a firewall
+		// hunt. The peer address matters under -g, where the connection
+		// can come from anywhere on the network.
+		fmt.Fprintf(stderr, "Forward %s: connection from %s\n", forward, conn.RemoteAddr())
 		f.connWG.Add(1)
 		go func() {
 			defer f.connWG.Done()

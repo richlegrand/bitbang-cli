@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -414,4 +415,57 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// An accepted connection announces itself. Silence used to cover three
+// different states at once -- forwarding fine, failing, and nothing ever
+// reaching the port -- which is a bad thing for the one output a person
+// stares at while a forward is not working.
+func TestSession_TCPForwardAnnouncesEachConnection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: spins up real pion peer connections and TCP listeners")
+	}
+	var out bytes.Buffer
+	old := stderr
+	stderr = &out
+	t.Cleanup(func() { stderr = old })
+
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	id := ephemeralID(t)
+	relay := newFakeSignaling()
+	t.Cleanup(relay.Close)
+	startListener(relay.host(), id, streamtype.NewShell(nil, false), streamtype.NewTCP(false))
+	waitRegistered(t, relay)
+	sess := mustDial(t, relay.host(), id, "shell", "tcp")
+	t.Cleanup(sess.Close)
+
+	local := unusedTCPPorts(t, 1)[0]
+	fwd, err := sess.StartLocalForwarding([]tcpforward.Forward{
+		{LocalPort: local, Host: "127.0.0.1", Port: echoPort},
+	}, false)
+	if err != nil {
+		t.Fatalf("StartLocalForwarding: %v", err)
+	}
+	t.Cleanup(fwd.Close)
+
+	if got := out.String(); strings.Contains(got, "connection from") {
+		t.Fatalf("announced a connection before one arrived: %q", got)
+	}
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", local))
+	if err != nil {
+		t.Fatalf("dial forward: %v", err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(out.String(), "connection from") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("no announcement after a connection was accepted; stderr = %q", out.String())
 }
