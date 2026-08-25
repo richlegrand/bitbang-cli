@@ -224,8 +224,7 @@ left off a STUN-only entry. The path may be absolute, relative, or `~`-rooted. A
 that doesn't parse stops the listener at startup rather than quietly falling back.
 
 Worth saying: this is about who carries the bytes, not who can read them. A relay only
-ever sees DTLS ciphertext, ours included. Run your own when you'd rather the traffic
-not leave your infrastructure, or when you need a relay in a particular region.
+ever sees DTLS ciphertext, ours included. Run your own when you need more TURN than we can provide (we currently limit the time).
 
 ### Connecting from a browser
 
