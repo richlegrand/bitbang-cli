@@ -8,100 +8,90 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-// detectConnectionPath classifies the established ICE path from pion's
-// stats report. Returns one of "direct", "relay", or "tcp-relay" — the
-// same vocabulary the browser side (bootstrap.js _detectConnectionPath)
-// reports, so server-side counters aggregate cleanly across clients.
+// selectedPair returns the candidate pair ICE settled on, or nil.
 //
-// The classifier scans every transport (data + media, if multiple),
-// looks at each transport's selected candidate pair, and picks the
-// "worst" outcome across them. A session with data direct + video
-// relay should report relay, not direct — otherwise we'd undercount
-// relay use.
-//
-// Returns "direct" when no relay candidate is in the selected pair set,
-// when stats aren't yet populated, or when the report parses
-// unexpectedly. Failure to classify is never an error — telemetry is
-// strictly best-effort and must not break the connection path.
-func detectConnectionPath(pc *webrtc.PeerConnection) string {
-	report := pc.GetStats()
-	path := "direct"
-	for _, s := range report {
-		ts, ok := s.(webrtc.TransportStats)
-		if !ok || ts.SelectedCandidatePairID == "" {
-			continue
-		}
-		pair, ok := report[ts.SelectedCandidatePairID].(webrtc.ICECandidatePairStats)
-		if !ok {
-			continue
-		}
-		local, _ := report[pair.LocalCandidateID].(webrtc.ICECandidateStats)
-		remote, _ := report[pair.RemoteCandidateID].(webrtc.ICECandidateStats)
-
-		var relay *webrtc.ICECandidateStats
-		switch {
-		case local.CandidateType == webrtc.ICECandidateTypeRelay:
-			relay = &local
-		case remote.CandidateType == webrtc.ICECandidateTypeRelay:
-			relay = &remote
-		}
-		if relay == nil {
-			continue
-		}
-		// RelayProtocol is the TURN allocation's transport (set when
-		// libwebrtc has it); Protocol is the candidate's wire transport
-		// (always set). Either one telling us TCP means tcp-relay.
-		proto := relay.RelayProtocol
-		if proto == "" {
-			proto = relay.Protocol
-		}
-		if strings.EqualFold(proto, "tcp") {
-			path = "tcp-relay"
-			// Worst classification possible — no point continuing.
-			break
-		}
-		path = "relay"
-	}
-	return path
-}
-
-// describeConnectionPath renders the selected candidate pair the way the
-// listener logs it, for `-v`. The listener has always printed this and the
-// connector never did, so the person who asked for verbose output got the
-// half that says least about how the session is actually routed.
-//
-// Reads the pair off the ICE transport rather than GetStats: the stats
-// report is not populated yet at the moment the data channel opens, which
-// is exactly when this runs.
-//
-// Says more than the listener's line on purpose -- the wire protocol of the
-// selected pair is the difference between "relayed" and "relayed over TCP",
-// and only one of those explains the latency.
-func describeConnectionPath(pc *webrtc.PeerConnection, elapsed time.Duration) string {
+// Read off the ICE transport rather than GetStats. pion leaves
+// TransportStats.SelectedCandidatePairID empty, so anything routed through
+// the stats report hits its own "not populated" guard and falls back to a
+// default -- which is how a forced-relay session was still classified as
+// direct two seconds after connecting.
+func selectedPair(pc *webrtc.PeerConnection) *webrtc.ICECandidatePair {
 	sctp := pc.SCTP()
 	if sctp == nil {
-		return ""
+		return nil
 	}
 	dtls := sctp.Transport()
 	if dtls == nil {
-		return ""
+		return nil
 	}
 	ice := dtls.ICETransport()
 	if ice == nil {
-		return ""
+		return nil
 	}
 	pair, err := ice.GetSelectedCandidatePair()
 	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
+		return nil
+	}
+	return pair
+}
+
+func isRelay(pair *webrtc.ICECandidatePair) bool {
+	return pair.Local.Typ == webrtc.ICECandidateTypeRelay ||
+		pair.Remote.Typ == webrtc.ICECandidateTypeRelay
+}
+
+// detectConnectionPath classifies the established ICE path. Returns
+// "direct", "relay", or "tcp-relay" -- the same vocabulary the browser side
+// (bootstrap.js _detectConnectionPath) reports, so server-side counters
+// aggregate cleanly across clients.
+//
+// Returns "direct" when the pair is unavailable, since telemetry is
+// best-effort and must never disturb the connection. That default used to
+// be reached on every call: see selectedPair.
+func detectConnectionPath(pc *webrtc.PeerConnection) string {
+	pair := selectedPair(pc)
+	if pair == nil || !isRelay(pair) {
+		return "direct"
+	}
+	if strings.EqualFold(pair.Local.Protocol.String(), "tcp") ||
+		strings.EqualFold(pair.Remote.Protocol.String(), "tcp") {
+		return "tcp-relay"
+	}
+	return "relay"
+}
+
+// describeConnectionPath renders the selected pair the way the listener logs
+// it, for `-v`. The listener has always printed this and the connector never
+// did, so the end that asked for verbose output got the half that says least
+// about how the session is actually routed.
+func describeConnectionPath(pc *webrtc.PeerConnection, elapsed time.Duration) string {
+	pair := selectedPair(pc)
+	if pair == nil {
 		return ""
 	}
 	kind := "DIRECT"
-	if pair.Local.Typ == webrtc.ICECandidateTypeRelay ||
-		pair.Remote.Typ == webrtc.ICECandidateTypeRelay {
+	if isRelay(pair) {
 		kind = "RELAY"
 	}
 	return fmt.Sprintf("connected via %s over %s in %v (local=%s remote=%s)",
 		kind, strings.ToUpper(pair.Local.Protocol.String()),
 		elapsed.Round(time.Millisecond), pair.Local.Typ, pair.Remote.Typ)
+}
+
+// relayNotice is the one line a connector sees when a session ends up
+// relayed without being asked to. The listener has always logged it and the
+// connector said nothing, so the end that feels the latency was the end that
+// was not told.
+//
+// Silent when -relay was passed: they already know. Not gated on -v, because
+// the point is to reach someone who did not think to ask.
+func relayNotice(pc *webrtc.PeerConnection, requested bool) string {
+	pair := selectedPair(pc)
+	if requested || pair == nil || !isRelay(pair) {
+		return ""
+	}
+	return "Note: relayed -- no direct path was found, so traffic goes through a TURN\n" +
+		"      relay. Expect higher latency. Use -ice-servers to relay through your own."
 }
 
 // sendConnectionPath fires one telemetry message to the signaling server.

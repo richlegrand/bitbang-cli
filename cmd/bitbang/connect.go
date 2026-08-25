@@ -31,6 +31,7 @@ type connectOptions struct {
 	server   string
 	name     string
 	relay    bool
+	norelay  bool
 	gateway  bool
 	forwards forwardFlags
 	target   string
@@ -111,6 +112,7 @@ func parseConnectOptions(args []string, output io.Writer) (connectOptions, error
 	fs.StringVar(&opts.server, "server", "bitba.ng", "Signaling server (pair-code mode only; URL form carries its own server)")
 	fs.StringVar(&opts.name, "name", "", "Name to remember this device under (new devices only; auto-assigned if omitted)")
 	fs.BoolVar(&opts.relay, "relay", false, "Request a TURN relay up front instead of only on fallback (ICE still prefers direct if it succeeds)")
+	fs.BoolVar(&opts.norelay, "norelay", false, "Refuse STUN/TURN entirely: host candidates only, so the connection fails rather than relaying")
 	fs.Var(&opts.forwards, "L", "Forward LOCAL_PORT:REMOTE_HOST:REMOTE_PORT without opening a shell (repeatable; bracket IPv6 hosts)")
 	fs.BoolVar(&opts.gateway, "g", false, "Bind forwarded ports on 0.0.0.0 instead of 127.0.0.1")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
@@ -118,6 +120,9 @@ func parseConnectOptions(args []string, output io.Writer) (connectOptions, error
 	}
 	if opts.gateway && len(opts.forwards) == 0 {
 		return connectOptions{}, fmt.Errorf("-g requires at least one -L forward")
+	}
+	if opts.relay && opts.norelay {
+		return connectOptions{}, fmt.Errorf("-relay and -norelay ask for opposite things")
 	}
 	posArgs := fs.Args()
 	if len(posArgs) < 1 {
@@ -245,7 +250,7 @@ func runConnect(args []string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", rs.Server)
-	sess := dialConnect(rs, opts.verbose, opts.timeout, opts.pin, opts.relay, len(opts.forwards) > 0)
+	sess := dialConnect(rs, opts.verbose, opts.timeout, opts.pin, opts.relay, opts.norelay, len(opts.forwards) > 0)
 	var forwarder *client.LocalForwarder
 	if len(opts.forwards) > 0 {
 		forwarder, err = sess.StartLocalForwarding([]tcpforward.Forward(opts.forwards), opts.gateway)
@@ -489,7 +494,7 @@ func recordAndReport(rs remoteSpec, name string) {
 
 // dialConnect handles the boilerplate: build DialOptions, run the handshake,
 // and sanity-check that the listener advertises the requested stream type.
-func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay, tcp bool) *client.Session {
+func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay, norelay, tcp bool) *client.Session {
 	capability := "shell"
 	if tcp {
 		capability = "tcp"
@@ -501,6 +506,7 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 		Caps:        []string{capability},
 		DialTimeout: timeout,
 		ForceRelay:  relay,
+		NoRelay:     norelay,
 		Verbose:     verbose,
 		PINPrompt:   makePINPrompt(suppliedPIN),
 	}

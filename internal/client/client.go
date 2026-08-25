@@ -39,6 +39,12 @@ type DialOptions struct {
 	// open + verify + ready to land. Zero means no timeout.
 	DialTimeout time.Duration
 
+	// NoRelay mirrors --norelay: drop every STUN/TURN server so ICE has
+	// only host candidates. Diagnostic -- it answers whether the direct
+	// path actually works, or whether a relay has been covering for a NAT
+	// problem nobody knew about. Mutually exclusive with ForceRelay.
+	NoRelay bool
+
 	// ForceRelay mirrors --relay: gather relay-only on the connector
 	// (ICETransportPolicy:relay) and ask the server to stamp TURN on the
 	// offer, forcing the relay path instead of letting the device's
@@ -110,6 +116,9 @@ func Dial(opts DialOptions) (*Session, error) {
 	// Build the Peer with the ICE servers the signaling server included
 	// in the offer (relay creds, STUN URLs, or empty for direct-only).
 	iceServers := icehelper.FromMessage(offer)
+	if opts.NoRelay {
+		iceServers = nil
+	}
 	// --relay forces relay-only gathering on the connector; otherwise we
 	// trickle every candidate immediately and the device (ICE-controlling)
 	// biases toward direct. See internal/peer relayAcceptanceMinWait.
@@ -192,6 +201,9 @@ waitLoop:
 	// path that ICE actually settled on (direct / relay / tcp-relay).
 	// Must run before sig.Close, since the report rides the same WS.
 	sendConnectionPath(sig, detectConnectionPath(peer.PC), "")
+	if notice := relayNotice(peer.PC, opts.ForceRelay); notice != "" {
+		fmt.Fprintln(stderr, notice)
+	}
 	if opts.Verbose {
 		if line := describeConnectionPath(peer.PC, time.Since(connStart)); line != "" {
 			fmt.Fprintf(stderr, "[client] %s\n", line)

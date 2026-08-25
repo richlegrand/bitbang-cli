@@ -232,6 +232,11 @@ The file is JSON, in whichever of these three shapes your provider handed you:
 left off a STUN-only entry. The path may be absolute, relative, or `~`-rooted. A file
 that doesn't parse stops the listener at startup rather than quietly falling back.
 
+If a session ends up relayed without being asked to, `bitbang connect` says so
+rather than leaving you to wonder why it feels slow. The listener logs it
+either way (`via RELAY`), and `-relay` / `-norelay` force the question one way
+or the other when you are diagnosing a path.
+
 Worth saying: this is about who carries the bytes, not who can read them. A relay only
 ever sees DTLS ciphertext, ours included. Run your own when you need more TURN than we can provide (we currently limit the time).
 
@@ -500,6 +505,7 @@ With no `-- command`, opens an interactive shell (a PTY when stdin is a terminal
 | `-g`                                    | off        | Bind forwarded ports on `0.0.0.0` instead of `127.0.0.1`                                                   |
 | `-name NAME`                            | (auto)     | Remember this host under NAME (new hosts only; auto-assigns `device<N>` if omitted)                         |
 | `-relay`                                | off        | Request a TURN relay up front instead of only on fallback (ICE still prefers a direct path if one succeeds) |
+| `-norelay`                              | off        | Refuse STUN/TURN entirely -- host candidates only, so a connection that would need a relay fails instead. Answers whether the direct path actually works. |
 | `-pin PIN`                              | (prompt)   | PIN to send if the listener requires one (skips the interactive prompt)                                     |
 | `-timeout DUR`                          | `30s`      | Dial timeout (e.g. `45s`, `1m`)                                                                             |
 | `-server HOST`                          | `bitba.ng` | Signaling server -- **pair-code mode only**; the URL form carries its own host                              |
