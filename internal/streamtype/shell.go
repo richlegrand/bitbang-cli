@@ -16,6 +16,7 @@ import (
 	ptylib "github.com/aymanbagabas/go-pty"
 	"golang.org/x/term"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
@@ -146,7 +147,7 @@ func (a *shellAdmissions) evictFunc(adm *shellAdmission) func() {
 }
 
 const (
-	maxShellBuffered        uint64 = 8 << 20
+	maxShellBuffered        uint64 = bytestream.MaxBufferedAmount
 	shellOutputDrainTimeout        = 5 * time.Second
 	shellOutputCloseGrace          = time.Second
 )

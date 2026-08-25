@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
@@ -198,7 +199,7 @@ func (h *FileHandler) handleGet(s Stream, op protocol.FileOp, ps *filePending) {
 		return
 	}
 
-	const maxBuffered = 8 << 20
+	const maxBuffered = bytestream.MaxBufferedAmount
 	buf := make([]byte, protocol.MaxChunkSize)
 	var total int64
 	backpressureTick := time.NewTicker(time.Millisecond)

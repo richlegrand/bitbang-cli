@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/localdns"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
@@ -550,7 +551,7 @@ func (h *HTTPHandler) proxyRequestContext(ctx context.Context, s Stream, req pro
 		return
 	}
 
-	const maxBuffered = 8 << 20
+	const maxBuffered = bytestream.MaxBufferedAmount
 	buf := make([]byte, protocol.MaxChunkSize)
 	totalBytes := 0
 	startTime := time.Now()

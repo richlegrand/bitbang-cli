@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
@@ -186,9 +187,9 @@ func (w *swspResponseWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	// Backpressure: mirror what HTTPHandler does — cap the data channel
-	// send buffer at 8 MB so a slow consumer doesn't blow up memory.
-	const maxBuffered = 8 << 20
+	// Backpressure: mirror what HTTPHandler does -- cap the data channel
+	// send buffer so a slow consumer doesn't blow up memory.
+	const maxBuffered = bytestream.MaxBufferedAmount
 	backpressureTick := time.NewTicker(time.Millisecond)
 	defer backpressureTick.Stop()
 	for w.stream.BufferedAmount() > maxBuffered {

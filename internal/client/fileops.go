@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
@@ -133,9 +134,9 @@ func (s *Session) Put(remotePath string, r io.Reader, overwrite bool) error {
 
 	// Pump the local file in MaxChunkSize-sized DAT frames, with a soft
 	// cap on the DC send buffer so a slow consumer doesn't blow up the
-	// SCTP queue. The 8 MB cap mirrors what HTTPLocalHandler uses.
+	// SCTP queue. Every sender on the channel shares the same cap.
 	buf := make([]byte, protocol.MaxChunkSize)
-	const maxBuffered uint64 = 8 << 20
+	const maxBuffered uint64 = bytestream.MaxBufferedAmount
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
