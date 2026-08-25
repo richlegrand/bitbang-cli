@@ -106,7 +106,6 @@ func runServe(args []string) {
 	registerForwardFlags(fs, &cfg)
 	registerFilesFlags(fs, &cfg)
 	registerProxyFlags(fs, &cfg)
-	fs.StringVar(&cfg.filesPath, "files", "", "Files path (default: current working directory)")
 
 	fs.Parse(reorderArgs(fs, args))
 	rejectPositionals(fs, "serve")
@@ -174,15 +173,19 @@ func runServeFiles(args []string) {
 
 	fs.Parse(reorderArgs(fs, args))
 
-	// Positional PATH lives in fs.Args() after Parse — at most one.
+	// Positional PATH lives in fs.Args() after Parse — at most one. It wins
+	// over -files, the way `serve proxy TARGET` wins over -target: the user
+	// typed it more explicitly.
 	switch fs.NArg() {
 	case 0:
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
-			os.Exit(1)
+		if cfg.filesPath == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
+				os.Exit(1)
+			}
+			cfg.filesPath = cwd
 		}
-		cfg.filesPath = cwd
 	case 1:
 		cfg.filesPath = fs.Arg(0)
 	default:
@@ -247,8 +250,12 @@ func registerProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.Var(&allowFlag{&cfg.allowProxy}, "allow-proxy", "`HOST:PORT` the proxy may reach, or HOST for any port (repeatable; default unrestricted)")
 }
 
-// registerFilesFlags wires the files-specific flags.
+// registerFilesFlags wires the files-specific flags. `-files` is accepted by
+// `serve files` too, where the positional PATH is the shorthand for it --
+// same arrangement as -target/`serve proxy TARGET` and
+// -allow-forward/`serve forward TARGET`.
 func registerFilesFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.StringVar(&cfg.filesPath, "files", "", "Files `PATH` to share (default: current working directory)")
 	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
 }
 

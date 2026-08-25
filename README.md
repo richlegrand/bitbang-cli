@@ -88,7 +88,16 @@ bitbang serve proxy              # proxy; pick the target in the browser
 bitbang serve proxy localhost:8080   # ...or pin a single target
 ```
 
-Each prints a QR code, URL and a pairing code.
+Each prints a QR code, URL and a pairing code. The mode picks what the
+listener can do at all: `serve shell` has no forwarding to grant, and a
+forward-only listener never starts a shell, so there is nothing to escalate
+to.
+
+One default worth knowing: **forwarding and the proxy reach any host:port the
+listener can reach**, not only the one you had in mind, so a link handed out
+for a database also reaches the rest of that network. `-allow-forward` and
+`-allow-proxy` narrow that, and the positional form above is shorthand for
+them.
 
 ### Sharing a running session: `bitbang share`
 
@@ -392,51 +401,53 @@ bitbang help                           Usage (also --help, -h)
 
 ### `bitbang serve` -- run a listener
 
-**Shared flags** (every `serve` form):
+Each mode serves one capability; `serve` serves all four. A positional
+argument, where a mode takes one, is shorthand for that mode's flag.
 
-| Flag                | Default    | Description                                                                                                                                             |
-| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-server HOST`      | `bitba.ng` | Signaling server hostname                                                                                                                               |
-| `-pin PIN`          | (none)     | Require this PIN for connections                                                                                                                        |
-| `-ephemeral`        | off        | Temporary identity (a fresh URL each run)                                                                                                               |
-| `-ice-servers PATH` | (ours)     | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                                                                 |
-| `-nocode`           | off        | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
-| `-program NAME`     | `bitbang`  | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                                                       |
-| `-v`                | off        | Verbose logging (adds the browser `!debug` overlay)                                                                                                     |
+| Mode                        | Serves                          | Positional                     |
+| --------------------------- | ------------------------------- | ------------------------------ |
+| `serve`                     | shell, forward, files, proxy    | --                             |
+| `serve shell`               | shell                           | --                             |
+| `serve forward [TARGET …]`  | forward                         | `-allow-forward`, repeatable   |
+| `serve files [PATH]`        | files                           | `-files` (default cwd)         |
+| `serve proxy [TARGET]`      | proxy                           | `-target`                      |
 
-Capability flags are only accepted by the forms that serve that capability:
+A flag is only accepted by the modes that serve its capability, so
 `serve files -target x` is an error rather than a setting that does nothing.
 
-**Shell flags** (`serve` and `serve shell`):
+| Flag                       | Modes                     | Default        | Description                                                                                                          |
+| -------------------------- | ------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `-server HOST`             | all                       | `bitba.ng`     | Signaling server hostname                                                                                            |
+| `-pin PIN`                 | all                       | (none)         | Require this PIN for connections                                                                                     |
+| `-ephemeral`               | all                       | off            | Temporary identity (a fresh URL each run)                                                                            |
+| `-program NAME`            | all                       | `bitbang`      | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                    |
+| `-ice-servers PATH`        | all                       | (ours)         | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                              |
+| `-nocode`                  | all                       | off            | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. For headless listeners that can't complete the SAS prompt. |
+| `-v`                       | all                       | off            | Verbose logging (adds the browser `!debug` overlay)                                                                  |
+| `-shell-cmd CMD`           | `serve`, `serve shell`    | platform shell | `$SHELL`/`/bin/sh` on Unix; `%COMSPEC%`/`cmd.exe` on Windows                                                         |
+| `-shell-max-sessions N`    | `serve`, `serve shell`    | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
+| `-shell-mirror`            | `serve`, `serve shell`    | on             | Mirror shell output to the listener's console. Turn off with `-shell-mirror=false` -- the equals sign is required.    |
+| `-allow-forward HOST:PORT` | `serve`, `serve forward`  | (unrestricted) | A target `connect -L` may reach. Repeatable. See below.                                                              |
+| `-files PATH`              | `serve`, `serve files`    | cwd            | Directory (or single file) to share                                                                                  |
+| `-files-upload`            | `serve`, `serve files`    | off            | Allow uploads into the shared directory                                                                              |
+| `-target HOST:PORT`        | `serve`, `serve proxy`    | (dynamic)      | Pin one proxy target; empty means the target is picked in the browser                                                |
+| `-allow-proxy HOST:PORT`   | `serve`, `serve proxy`    | (unrestricted) | A target the browser may pick. Repeatable. See below.                                                                |
+| `-proxy-client-ip`         | `serve`, `serve proxy`    | off            | Stamp the real browser IP as `X-Forwarded-For` (fixed-target mode). Enable only when the backend trusts localhost for auth. |
 
-| Flag                    | Default               | Description                                   |
-| ----------------------- | --------------------- | --------------------------------------------- |
-| `-shell-cmd CMD`        | platform shell        | `$SHELL`/`/bin/sh` on Unix; `%COMSPEC%`/`cmd.exe` on Windows |
-| `-shell-max-sessions N` | `10`                  | Max concurrent shell sessions (0 = unlimited) |
-| `-shell-mirror`         | on                    | Mirror shell output to the listener's console |
+**The allow flags.** Both take `HOST:PORT`, or a bare `HOST` to allow any port
+on that host, and both repeat. Targets are matched **as written and never
+resolved**: allowing `192.168.1.50:22` does not allow `nas.lan:22` even when
+the name points there. Resolving would check a name at one moment and dial it
+a moment later, and the two can disagree. Given neither flag, a listener
+reaches any host:port it can reach.
 
-**Forward flags** (`serve` and `serve forward`):
+```
+bitbang serve forward 127.0.0.1:22 db.internal:5432   # two services, nothing else
+bitbang serve forward nas.lan                          # any port on one host
+```
 
-| Flag                       | Default        | Description                                                                                 |
-| -------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
-| `-allow-forward HOST:PORT` | (unrestricted) | A target `connect -L` may reach. Repeatable. `HOST` with no port allows any port on that host. `serve forward HOST:PORT …` is shorthand. |
-
-**Proxy flags** (`serve` and `serve proxy`):
-
-| Flag                     | Default        | Description                                                                                          |
-| ------------------------ | -------------- | ------------------------------------------------------------------------------------------------------ |
-| `-target HOST:PORT`      | (dynamic)      | Pin one target; empty means the target is picked in the browser. `serve proxy host:port` is shorthand. |
-| `-allow-proxy HOST:PORT` | (unrestricted) | A target the browser may pick. Repeatable, same matching as `-allow-forward`.                          |
-| `-proxy-client-ip`       | off            | Stamp the real browser IP as `X-Forwarded-For` (fixed-target mode). Enable only when the backend trusts localhost for auth. |
-
-**Files flags** (`serve` and `serve files`):
-
-| Form                 | Path                            | Upload flag     |
-| -------------------- | ------------------------------- | --------------- |
-| `serve`              | `-files PATH` (default cwd)     | `-files-upload` |
-| `serve files [PATH]` | positional `PATH` (default cwd) | `-files-upload` |
-
-*(Advanced: `-video-fd N` passes an inherited socketpair FD to an external video helper; for internal/embedding use.)*
+*(Advanced: `-video-fd N` passes an inherited socketpair FD to an external
+video helper; for internal/embedding use, and hidden from `--help`.)*
 
 ### `bitbang share` -- publish a running tmux session
 
