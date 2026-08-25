@@ -119,7 +119,7 @@ func TestSession_TCPForwardingEndToEnd(t *testing.T) {
 	id := ephemeralID(t)
 	relay := newFakeSignaling()
 	t.Cleanup(relay.Close)
-	tcpHandler := streamtype.NewTCP(false)
+	tcpHandler := streamtype.NewTCP(false, nil)
 	startListener(relay.host(), id, streamtype.NewShell([]string{"sh"}, false), tcpHandler)
 	waitRegistered(t, relay)
 	sess := mustDial(t, relay.host(), id, "shell", "tcp")
@@ -210,7 +210,7 @@ func TestSession_TCPFlowControlIsolatesStalledStream(t *testing.T) {
 		_ = targetConn.Close()
 	})
 
-	tcpHandler := streamtype.NewTCP(false)
+	tcpHandler := streamtype.NewTCP(false, nil)
 	dialed := make(chan struct{})
 	var dialOnce sync.Once
 	tcpHandler.DialContext = func(context.Context, string, string) (net.Conn, error) {
@@ -436,7 +436,7 @@ func TestSession_TCPForwardAnnouncesEachConnection(t *testing.T) {
 	id := ephemeralID(t)
 	relay := newFakeSignaling()
 	t.Cleanup(relay.Close)
-	startListener(relay.host(), id, streamtype.NewShell(nil, false), streamtype.NewTCP(false))
+	startListener(relay.host(), id, streamtype.NewShell(nil, false), streamtype.NewTCP(false, nil))
 	waitRegistered(t, relay)
 	sess := mustDial(t, relay.host(), id, "shell", "tcp")
 	t.Cleanup(sess.Close)

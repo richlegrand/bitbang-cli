@@ -69,7 +69,7 @@ func main() {
 
 // dispatchServe routes `bitbang serve [mode] [flags]`. With no mode
 // (bare `serve` or `serve --flag`), runs the all-caps umbrella mode.
-// With `shell`, `files`, or `proxy` as the next arg, runs that single
+// With `shell`, `forward`, `files`, or `proxy` as the next arg, runs that single
 // cap. Anything else after `serve` that starts with `-` is treated as
 // a flag to the all-mode; anything else is an unknown mode.
 func dispatchServe(args []string) {
@@ -80,12 +80,14 @@ func dispatchServe(args []string) {
 	switch args[0] {
 	case "shell":
 		runServeShell(args[1:])
+	case "forward":
+		runServeForward(args[1:])
 	case "files":
 		runServeFiles(args[1:])
 	case "proxy":
 		runServeProxy(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "bitbang serve: unknown mode %q (expected shell, files, or proxy)\n\n", args[0])
+		fmt.Fprintf(os.Stderr, "bitbang serve: unknown mode %q (expected shell, forward, files, or proxy)\n\n", args[0])
 		printUsage()
 		os.Exit(2)
 	}
@@ -94,10 +96,11 @@ func dispatchServe(args []string) {
 func printUsage() {
 	fmt.Printf("%s v%s\n\n", banner, version)
 	fmt.Println("Usage:")
-	fmt.Println("  bitbang serve [flags]                  All caps (shell + files + proxy + TCP)")
-	fmt.Println("  bitbang serve shell [flags]            Shell + CLI TCP forwarding")
+	fmt.Println("  bitbang serve [flags]                  All caps (shell + forward + files + proxy)")
+	fmt.Println("  bitbang serve shell [flags]            Shell only")
+	fmt.Println("  bitbang serve forward [TARGET ...]     TCP forwarding only (TARGETs restrict it)")
 	fmt.Println("  bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)")
-	fmt.Println("  bitbang serve proxy [flags]            Proxy only (HTTP reverse proxy)")
+	fmt.Println("  bitbang serve proxy [TARGET] [flags]   Proxy only (TARGET pins it; else chosen in browser)")
 	fmt.Println("  bitbang share [flags]                  Publish the current tmux session as a URL")
 	fmt.Println("  bitbang share status|stop|rotate       Manage a running share")
 	fmt.Println("  bitbang link ls|edit|rm|qr             Manage a listener's access links")

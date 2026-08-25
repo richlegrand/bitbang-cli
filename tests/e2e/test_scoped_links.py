@@ -247,3 +247,26 @@ def test_proxy_page_clears_the_caret_without_dropping(listener, test_server,
         f'label dropped to {label["y"]} below a corner control'
     assert abs(label['x'] - field['x']) <= 2, \
         f'label at {label["x"]} is out of line with its field at {field["x"]}'
+
+
+# `serve forward` is a listener that is only a wire: the shell handler is
+# never registered, so there is nothing for a browser to show and nothing to
+# escalate to. The URL still has to explain itself rather than 404.
+def test_serve_forward_listener_has_no_browser_page(listener, test_server,
+                                                    tmp_path_factory, browser_context):
+    home = str(tmp_path_factory.mktemp('fwdmode-home'))
+    l = listener('serve', 'forward', '127.0.0.1:9', '-server', test_server, home=home)
+
+    assert 'forward (127.0.0.1:9' in l.log(), \
+        f'the sharing block does not name the allowed target:\n{l.log()}'
+    assert 'shell' not in l.log().split('Sharing:')[1].split('\n\n')[0], \
+        f'a forward-only listener advertised a shell:\n{l.log()}'
+
+    page = browser_context.new_page()
+    page.goto(l.url, wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('body').wait_for(timeout=20000)
+    text = frame.locator('body').inner_text()
+    assert '404' not in text, f'still a bare 404:\n{text[:200]}'
+    assert '-L' in text, f'does not show the CLI it is for:\n{text[:200]}'
+    page.close()

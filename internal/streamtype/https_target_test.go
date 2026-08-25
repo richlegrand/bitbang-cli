@@ -1,6 +1,8 @@
 package streamtype
 
 import (
+	"github.com/richlegrand/bitbang/internal/allowlist"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,8 +71,46 @@ func TestOnConnect_DeadTargetFailsClearly(t *testing.T) {
 	if err == nil {
 		t.Fatal("OnConnect accepted a dead target")
 	}
-	if !strings.Contains(err.Error(), "unreachable") {
-		t.Errorf("error = %q, want it to mention unreachable", err)
+	if !strings.Contains(err.Error(), "nothing is listening") {
+		t.Errorf("error = %q, want it to say nothing is listening", err)
+	}
+}
+
+// A port that accepts connections but does not speak HTTP or TLS is a
+// different problem from a dead one, and saying "unreachable" for it sent at
+// least one user hunting for a firewall rule when sshd was answering fine.
+// The message has to say the port is alive, and point at forwarding.
+func TestOnConnect_NonHTTPListenerIsNotCalledUnreachable(t *testing.T) {
+	// Stand in for sshd: accept, greet with something that is not HTTP.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = conn.Write([]byte("SSH-2.0-OpenSSH_9.6\r\n"))
+			_ = conn.Close()
+		}
+	}()
+
+	h := NewHTTPProxy(ln.Addr().String(), "uid", "bitba.ng", "", false)
+	err = h.OnConnect("/")
+	if err == nil {
+		t.Fatal("OnConnect accepted a target that does not speak HTTP")
+	}
+	if strings.Contains(err.Error(), "unreachable") {
+		t.Errorf("error = %q, but the port was listening -- must not say unreachable", err)
+	}
+	if !strings.Contains(err.Error(), "is listening") {
+		t.Errorf("error = %q, want it to say the port is listening", err)
+	}
+	if !strings.Contains(err.Error(), "-L ") {
+		t.Errorf("error = %q, want it to point at -L forwarding", err)
 	}
 }
 
@@ -185,5 +225,67 @@ func TestLooksLikeHostPort(t *testing.T) {
 		if looksLikeHostPort(s) {
 			t.Errorf("looksLikeHostPort(%q) = true, want false", s)
 		}
+	}
+}
+
+// The proxy allowlist has to be checked before probing, because a probe is
+// itself a connection to the target -- checking after would already have
+// made the connection the allowlist exists to prevent.
+func TestProxyAllowlistRefusesBeforeProbing(t *testing.T) {
+	reached := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	defer srv.Close()
+
+	allow, err := allowlist.Parse([]string{"127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHTTPProxy("", "uid", "bitba.ng", "", false)
+	h.Allow = allow
+
+	err = h.OnConnect("/" + hostPort(t, srv.URL) + "/")
+	if err == nil {
+		t.Fatal("OnConnect accepted a target outside the allowlist")
+	}
+	if reached {
+		t.Error("the disallowed target was probed; the check must come first")
+	}
+	if !strings.Contains(err.Error(), "allowed proxy targets") {
+		t.Errorf("error = %q, want it to name the allowlist", err)
+	}
+}
+
+func TestProxyAllowlistAdmitsListedTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	allow, _ := allowlist.Parse([]string{hostPort(t, srv.URL)})
+	h := NewHTTPProxy("", "uid", "bitba.ng", "", false)
+	h.Allow = allow
+	if err := h.OnConnect("/" + hostPort(t, srv.URL) + "/"); err != nil {
+		t.Fatalf("OnConnect refused an allowed target: %v", err)
+	}
+}
+
+// A redirect moves the target, which is another way to reach somewhere the
+// requester never named. Following one must be gated on the same list.
+func TestProxyAllowlistGatesRedirectRebind(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer elsewhere.Close()
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/", http.StatusMovedPermanently)
+	}))
+	defer entry.Close()
+
+	allow, _ := allowlist.Parse([]string{hostPort(t, entry.URL)})
+	h := NewHTTPProxy("", "uid", "bitba.ng", "", false)
+	h.Allow = allow
+
+	_ = h.OnConnect("/" + hostPort(t, entry.URL) + "/")
+	if got := h.connTarget; got == hostPort(t, elsewhere.URL) {
+		t.Errorf("a redirect rebound the target to %q, which is not in the allowlist", got)
 	}
 }

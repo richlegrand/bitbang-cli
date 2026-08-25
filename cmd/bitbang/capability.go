@@ -137,7 +137,7 @@ var capabilities = []capability{
 	{
 		Scope: links.ScopeForward,
 		Build: func(x capContext) []streamtype.StreamHandler {
-			return []streamtype.StreamHandler{streamtype.NewTCP(x.cfg.verbose)}
+			return []streamtype.StreamHandler{streamtype.NewTCP(x.cfg.verbose, x.cfg.allowForward)}
 		},
 		// No Mount and no Menu: forwarding is driven by `connect -L`, and
 		// there is nothing for a browser to show.
@@ -192,10 +192,11 @@ func buildProxyHandlers(x capContext) []streamtype.StreamHandler {
 	// trusts localhost for auth); otherwise withhold it so requests look
 	// local and don't trip an external-access warning.
 	xffIP := ""
-	if x.cfg.forwardClientIP {
+	if x.cfg.proxyClientIP {
 		xffIP = x.browserIP
 	}
 	p := streamtype.NewHTTPProxy(x.cfg.target, x.id.UID, x.cfg.server, xffIP, x.cfg.verbose)
+	p.Allow = x.cfg.allowProxy
 	return []streamtype.StreamHandler{p, streamtype.NewWebSocket(p, xffIP, x.cfg.verbose)}
 }
 
@@ -205,7 +206,9 @@ func buildProxyHandlers(x capContext) []streamtype.StreamHandler {
 // break their access control. Fixed-target mode passes it -- there the
 // backend is known.
 func dynamicProxy(x capContext) *streamtype.HTTPHandler {
-	return streamtype.NewHTTPProxy("", x.id.UID, x.cfg.server, "", x.cfg.verbose)
+	p := streamtype.NewHTTPProxy("", x.id.UID, x.cfg.server, "", x.cfg.verbose)
+	p.Allow = x.cfg.allowProxy
+	return p
 }
 
 // fixedTargetMode reports the proxy-only-with-a-target configuration (e.g.
@@ -240,9 +243,13 @@ func describeShell(w io.Writer, x capContext) {
 	fmt.Fprintln(w, line)
 }
 
-func describeForward(w io.Writer, _ capContext) {
-	fmt.Fprintf(w, "  • tcp    (unrestricted targets chosen by connect -L; max %d concurrent connections per session; loopback-bound on connector by default)\n",
-		streamtype.DefaultTCPMaxConcurrent)
+func describeForward(w io.Writer, x capContext) {
+	reach := "unrestricted targets"
+	if !x.cfg.allowForward.Empty() {
+		reach = x.cfg.allowForward.String()
+	}
+	fmt.Fprintf(w, "  • forward (%s, chosen by connect -L; max %d concurrent connections per session; loopback-bound on connector by default)\n",
+		reach, streamtype.DefaultTCPMaxConcurrent)
 }
 
 func describeFiles(w io.Writer, x capContext) {
@@ -264,6 +271,10 @@ func describeFiles(w io.Writer, x capContext) {
 func describeProxy(w io.Writer, x capContext) {
 	if x.cfg.target != "" {
 		fmt.Fprintf(w, "  • proxy  (%s)\n", x.cfg.target)
+		return
+	}
+	if !x.cfg.allowProxy.Empty() {
+		fmt.Fprintf(w, "  • proxy  (target chosen in browser, from %s)\n", x.cfg.allowProxy)
 		return
 	}
 	fmt.Fprintln(w, "  • proxy  (target chosen in browser)")

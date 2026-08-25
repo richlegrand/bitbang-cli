@@ -11,6 +11,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	qrcode "github.com/skip2/go-qrcode"
 
+	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
 	"github.com/richlegrand/bitbang/internal/icehelper"
@@ -60,12 +61,17 @@ type serveConfig struct {
 	// app directly, no path-based target selection / landing page.
 	target string
 
-	// forwardClientIP stamps the real browser IP as X-Forwarded-For on
+	// proxyClientIP stamps the real browser IP as X-Forwarded-For on
 	// proxied requests (fixed-target mode only). Off by default: the
 	// OctoPrint plugin enables it ONLY when OctoPrint is configured to make
 	// localhost-based trust decisions (autologinLocal etc.), so the common
 	// case doesn't trip OctoPrint's "external access" warning needlessly.
-	forwardClientIP bool
+	proxyClientIP bool
+
+	// allowProxy and allowForward restrict which targets each capability
+	// will reach. Empty means every host:port the listener can reach.
+	allowProxy   allowlist.List
+	allowForward allowlist.List
 
 	// caps is what this mode offers, named in the scope vocabulary links
 	// uses. It is the only place the cap set is written down: what to
@@ -97,10 +103,13 @@ func runServe(args []string) {
 	cfg := serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy)}
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)
+	registerForwardFlags(fs, &cfg)
+	registerFilesFlags(fs, &cfg)
+	registerProxyFlags(fs, &cfg)
 	fs.StringVar(&cfg.filesPath, "files", "", "Files path (default: current working directory)")
-	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
 
 	fs.Parse(reorderArgs(fs, args))
+	rejectPositionals(fs, "serve")
 
 	if cfg.filesPath == "" {
 		cwd, err := os.Getwd()
@@ -114,16 +123,43 @@ func runServe(args []string) {
 	startListener(cfg)
 }
 
-// runServeShell — `bitbang serve shell` — exposes shell and raw TCP to CLI
-// connectors. No hamburger; the entire browser tab is the shell.
+// runServeShell — `bitbang serve shell` — exposes a shell and nothing
+// else. No hamburger; the entire browser tab is the shell.
+//
+// Forwarding used to ride along here, which meant "give me a shell
+// listener" silently also granted "reach any host:port on my network".
+// They are separate capabilities with different blast radii, so they are
+// now separate modes: `serve forward` for the wire, `serve` for both.
 func runServeShell(args []string) {
 	fs := flag.NewFlagSet("serve shell", flag.ExitOnError)
-	// forward rides with shell: `serve shell` offers port forwarding too,
-	// and saying so here beats deriving it from where NewTCP is called.
-	cfg := serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward)}
+	cfg := serveConfig{caps: capsOf(links.ScopeShell)}
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)
 	fs.Parse(reorderArgs(fs, args))
+	rejectPositionals(fs, "serve shell")
+	startListener(cfg)
+}
+
+// runServeForward — `bitbang serve forward [TARGET ...]` — exposes raw TCP
+// forwarding to CLI connectors and nothing else. The shell handler is never
+// registered, so a listener meant to be a wire has nothing to escalate to.
+//
+// TARGETs are positional sugar for -allow-forward; with none, every
+// host:port the listener can reach is allowed.
+func runServeForward(args []string) {
+	fs := flag.NewFlagSet("serve forward", flag.ExitOnError)
+	cfg := serveConfig{caps: capsOf(links.ScopeForward)}
+	registerSharedFlags(fs, &cfg)
+	registerForwardFlags(fs, &cfg)
+	fs.Parse(reorderArgs(fs, args))
+
+	positional, err := allowlist.Parse(fs.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bitbang serve forward: %v\n", err)
+		os.Exit(2)
+	}
+	cfg.allowForward = append(cfg.allowForward, positional...)
+
 	startListener(cfg)
 }
 
@@ -134,7 +170,7 @@ func runServeFiles(args []string) {
 	fs := flag.NewFlagSet("serve files", flag.ExitOnError)
 	cfg := serveConfig{caps: capsOf(links.ScopeFiles)}
 	registerSharedFlags(fs, &cfg)
-	fs.BoolVar(&cfg.filesUpload, "upload", false, "Allow uploads to the shared directory")
+	registerFilesFlags(fs, &cfg)
 
 	fs.Parse(reorderArgs(fs, args))
 
@@ -169,6 +205,7 @@ func runServeProxy(args []string) {
 	fs := flag.NewFlagSet("serve proxy", flag.ExitOnError)
 	cfg := serveConfig{caps: capsOf(links.ScopeProxy)}
 	registerSharedFlags(fs, &cfg)
+	registerProxyFlags(fs, &cfg)
 	fs.Parse(reorderArgs(fs, args))
 
 	// Optional positional TARGET. Mirrors `serve files [PATH]`.
@@ -197,9 +234,84 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.BoolVar(&cfg.nocode, "nocode", false, "Disable code-exchange pairing (operator typed SAS); URL still works")
 	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
 	fs.StringVar(&cfg.program, "program", "", "Identity program-name override; default is derived from the mode/target (key at ~/.bitbang/<program>/identity.pem)")
-	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
-	fs.BoolVar(&cfg.forwardClientIP, "forward-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
 	fs.StringVar(&cfg.iceServersPath, "ice-servers", "", "Path to the custom JSON ICE server configuration file")
+	hideFlags(fs, "video-fd")
+}
+
+// registerProxyFlags wires the proxy-specific flags, on the two modes that
+// serve a proxy. Registering them everywhere is how `serve files -target x`
+// came to be accepted and silently ignored.
+func registerProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port; empty = target chosen in the browser")
+	fs.BoolVar(&cfg.proxyClientIP, "proxy-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
+	fs.Var(&allowFlag{&cfg.allowProxy}, "allow-proxy", "`HOST:PORT` the proxy may reach, or HOST for any port (repeatable; default unrestricted)")
+}
+
+// registerFilesFlags wires the files-specific flags.
+func registerFilesFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
+}
+
+// registerForwardFlags wires the forward-specific flags.
+func registerForwardFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.Var(&allowFlag{&cfg.allowForward}, "allow-forward", "`HOST:PORT` that connect -L may reach, or HOST for any port (repeatable; default unrestricted)")
+}
+
+// rejectPositionals stops a stray word being swallowed. `-shell-mirror off`
+// is the case that prompted it: Go's boolean flags need `-shell-mirror=false`,
+// so `off` parsed as a positional, was ignored, and mirroring stayed on with
+// no error.
+func rejectPositionals(fs *flag.FlagSet, mode string) {
+	if fs.NArg() == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "bitbang %s: unexpected argument %q\n", mode, fs.Arg(0))
+	fmt.Fprintf(os.Stderr, "(boolean flags take an equals sign: -shell-mirror=false)\n")
+	os.Exit(2)
+}
+
+// allowFlag collects a repeatable -allow-* into a List, rejecting a bad
+// target at parse time rather than at the first connection that trips it.
+type allowFlag struct{ list *allowlist.List }
+
+func (a *allowFlag) String() string {
+	if a == nil || a.list == nil {
+		return ""
+	}
+	return a.list.String()
+}
+
+func (a *allowFlag) Set(v string) error {
+	parsed, err := allowlist.Parse([]string{v})
+	if err != nil {
+		return err
+	}
+	*a.list = append(*a.list, parsed...)
+	return nil
+}
+
+// hideFlags keeps internal plumbing out of -h without unregistering it.
+// -video-fd is an inherited socketpair FD passed by an embedding process;
+// nobody types it.
+func hideFlags(fs *flag.FlagSet, names ...string) {
+	hidden := make(map[string]bool, len(names))
+	for _, n := range names {
+		hidden[n] = true
+	}
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fs.VisitAll(func(f *flag.Flag) {
+			if hidden[f.Name] {
+				return
+			}
+			fmt.Fprintf(fs.Output(), "  -%s", f.Name)
+			name, usage := flag.UnquoteUsage(f)
+			if name != "" {
+				fmt.Fprintf(fs.Output(), " %s", name)
+			}
+			fmt.Fprintf(fs.Output(), "\n    \t%s\n", usage)
+		})
+	}
 }
 
 // registerShellFlags wires the shell-specific flags. Used by both

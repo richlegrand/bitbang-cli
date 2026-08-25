@@ -109,7 +109,7 @@ func nextTCPFrame(t *testing.T, s *tcpTestStream) protocol.Frame {
 }
 
 func TestTCPHandlerDialErrorUsesSYNFIN(t *testing.T) {
-	h := NewTCP(false)
+	h := NewTCP(false, nil)
 	h.DialContext = func(context.Context, string, string) (net.Conn, error) {
 		return nil, errors.New("connection refused")
 	}
@@ -136,7 +136,7 @@ func TestTCPHandlerBinaryDataPartialWritesHalfCloseAndTargetEOF(t *testing.T) {
 	fromTarget := []byte{0, 1, 2, 0xff, 'o', 'k'}
 	toTarget := []byte{0xff, 0, 'a', 'b', 'c', 0, 'z'}
 	conn := newShortConn(fromTarget, 2)
-	h := NewTCP(false)
+	h := NewTCP(false, nil)
 	h.DialContext = func(context.Context, string, string) (net.Conn, error) { return conn, nil }
 	s := newTCPTestStream()
 	tcpSYN(t, h, s, "127.0.0.1", 9000)
@@ -184,7 +184,7 @@ func TestTCPHandlerBinaryDataPartialWritesHalfCloseAndTargetEOF(t *testing.T) {
 func TestTCPHandlerCloseAllCancelsPendingDial(t *testing.T) {
 	started := make(chan struct{})
 	finished := make(chan error, 1)
-	h := NewTCP(false)
+	h := NewTCP(false, nil)
 	h.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		close(started)
 		<-ctx.Done()
@@ -214,7 +214,7 @@ func TestTCPHandlerResetUnblocksStalledTargetWrite(t *testing.T) {
 	conn, target := net.Pipe()
 	defer target.Close()
 
-	h := NewTCP(false)
+	h := NewTCP(false, nil)
 	h.DialContext = func(context.Context, string, string) (net.Conn, error) {
 		return conn, nil
 	}
@@ -249,7 +249,7 @@ func TestTCPHandlerResetUnblocksStalledTargetWrite(t *testing.T) {
 func TestTCPHandlerRejectsStreamsOverLimit(t *testing.T) {
 	started := make(chan struct{}, 2)
 	finished := make(chan struct{}, 2)
-	h := NewTCP(false)
+	h := NewTCP(false, nil)
 	h.MaxConcurrent = 1
 	h.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		started <- struct{}{}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/fileshare"
 	"github.com/richlegrand/bitbang/internal/links"
 )
@@ -43,32 +44,29 @@ func TestSharingBlock(t *testing.T) {
 	}{
 		{
 			name: "shell only, defaults",
-			cfg:  serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward), shellMaxSessions: defaultShellMaxSessions},
+			cfg:  serveConfig{caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions},
 			want: []string{
 				"Sharing:",
 				"  • shell  (" + defaultShellLabel() + ")",
-				"  • tcp    (unrestricted targets chosen by connect -L; max 64 concurrent connections per session; loopback-bound on connector by default)",
 				"",
 			},
 		},
 		{
 			name: "shell with a command, session cap, and mirroring",
-			cfg: serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward), shellCmd: "/bin/zsh",
+			cfg: serveConfig{caps: capsOf(links.ScopeShell), shellCmd: "/bin/zsh",
 				shellMaxSessions: 3, shellMirror: true},
 			want: []string{
 				"Sharing:",
 				"  • shell  (/bin/zsh, max 3 concurrent sessions, mirroring to console)",
-				"  • tcp    (unrestricted targets chosen by connect -L; max 64 concurrent connections per session; loopback-bound on connector by default)",
 				"",
 			},
 		},
 		{
 			name: "unlimited shell sessions",
-			cfg:  serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward), shellMaxSessions: 0},
+			cfg:  serveConfig{caps: capsOf(links.ScopeShell), shellMaxSessions: 0},
 			want: []string{
 				"Sharing:",
 				"  • shell  (" + defaultShellLabel() + ", unlimited concurrent sessions)",
-				"  • tcp    (unrestricted targets chosen by connect -L; max 64 concurrent connections per session; loopback-bound on connector by default)",
 				"",
 			},
 		},
@@ -107,7 +105,7 @@ func TestSharingBlock(t *testing.T) {
 			want: []string{
 				"Sharing:",
 				"  • shell  (" + defaultShellLabel() + ")",
-				"  • tcp    (unrestricted targets chosen by connect -L; max 64 concurrent connections per session; loopback-bound on connector by default)",
+				"  • forward (unrestricted targets, chosen by connect -L; max 64 concurrent connections per session; loopback-bound on connector by default)",
 				"  • files  (" + dir + ")",
 				"  • proxy  (target chosen in browser)",
 				"",
@@ -134,5 +132,29 @@ func TestSharingBlock(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A forward listener started with -allow-forward must say what it can
+// actually reach. "unrestricted targets" on a restricted listener would be
+// worse than saying nothing.
+func TestSharingBlockNamesAllowedForwards(t *testing.T) {
+	allow, err := allowlist.Parse([]string{"127.0.0.1:22", "nas.lan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	printSharingBlock(&buf, serveConfig{
+		caps:         capsOf(links.ScopeForward),
+		allowForward: allow,
+	}, nil)
+	got := buf.String()
+	if strings.Contains(got, "unrestricted") {
+		t.Errorf("sharing block says unrestricted on a restricted listener:\n%s", got)
+	}
+	for _, want := range []string{"127.0.0.1:22", "nas.lan:*"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("sharing block does not name %q:\n%s", want, got)
+		}
 	}
 }

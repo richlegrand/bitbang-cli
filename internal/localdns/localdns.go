@@ -267,6 +267,21 @@ func newTransport() *http.Transport {
 	return t
 }
 
+// ProbeTCP reports whether host (a "host:port" target) accepts a TCP
+// connection, saying nothing about what it speaks. Used to tell "nothing is
+// listening" apart from "something is listening but it is not a web server",
+// which are very different problems for whoever has to fix them.
+func ProbeTCP(ctx context.Context, hostPort string, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := Default.DialContext(ctx, "tcp", hostPort)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // ProbeTLS reports whether host (a "host:port" target) answers a TLS
 // handshake. Verification is skipped: the question is only "does this
 // speak TLS", and a self-signed answer is still a yes.

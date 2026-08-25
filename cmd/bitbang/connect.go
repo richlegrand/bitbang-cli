@@ -510,6 +510,12 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 	}
 	if !hasCap(sess.ServerCaps, capability) {
 		sess.Close()
+		// `tcp` is the wire name; `forward` is what the operator typed, so
+		// say the thing they can act on rather than the protocol token.
+		if tcp {
+			fail("connect: this listener does not forward TCP. It needs `bitbang serve forward` or `bitbang serve` (it offers: %v)",
+				sess.ServerCaps)
+		}
 		fail("connect: listener does not advertise the `%s` capability (caps: %v)", capability, sess.ServerCaps)
 	}
 	return sess

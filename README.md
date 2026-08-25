@@ -79,9 +79,11 @@ Every connection has two ends: a **listener** (`bitbang serve`, running on the m
 ### The listener: `bitbang serve`
 
 ```
-bitbang serve                    # everything: shell + files + proxy on one URL
+bitbang serve                    # everything: shell + forward + files + proxy on one URL
 bitbang serve shell              # shell only
-bitbang serve files ~/share      # files only (add -upload to allow uploads)
+bitbang serve forward            # TCP forwarding only, for `connect -L`
+bitbang serve forward 127.0.0.1:22   # ...restricted to one target
+bitbang serve files ~/share      # files only (add -files-upload to allow uploads)
 bitbang serve proxy              # proxy; pick the target in the browser
 bitbang serve proxy localhost:8080   # ...or pin a single target
 ```
@@ -253,6 +255,15 @@ bitbang cp - <url>:/tmp/firmware.bin < firmware.bin     # stdin/stdout work too
 anyone who reaches it gets whatever the tunnel reaches, with no BitBang
 credential in front of it.
 
+The listener needs `bitbang serve forward` or `bitbang serve`. By default a
+`forward` link reaches **any host:port the listener can reach**, not only the
+one you had in mind, so a link handed out for a database also reaches the rest
+of that network. Narrow it with `-allow-forward`:
+
+```
+bitbang serve forward db.internal:5432        # this link reaches one service
+```
+
 Every successful connect or pairing is saved to `~/.bitbang/devices.json`, so from then on a short name is enough: `bitbang connect nas1`.
 
 ## Platform support
@@ -367,8 +378,9 @@ The install script lives in this repo, next to the code it installs -- so you ca
 Flags accept either form (`-pin` or `--pin`). Boolean flags default off unless noted.
 
 ```
-bitbang serve [flags]                  All capabilities: shell + files + proxy on one URL
+bitbang serve [flags]                  Everything: shell + forward + files + proxy on one URL
 bitbang serve shell [flags]            Shell only
+bitbang serve forward [TARGET …]       TCP forwarding only (TARGETs restrict what it reaches)
 bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)
 bitbang serve proxy [TARGET] [flags]   HTTP/WebSocket reverse proxy (TARGET pins one host:port)
 bitbang share [flags]                  Publish a running tmux session
@@ -381,7 +393,7 @@ bitbang help                           Usage (also --help, -h)
 
 ### `bitbang serve` -- run a listener
 
-**Shared flags** (all four `serve` forms):
+**Shared flags** (every `serve` form):
 
 | Flag                | Default    | Description                                                                                                                                             |
 | ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -391,8 +403,10 @@ bitbang help                           Usage (also --help, -h)
 | `-ice-servers PATH` | (ours)     | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                                                                 |
 | `-nocode`           | off        | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
 | `-program NAME`     | `bitbang`  | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                                                       |
-| `-target HOST:PORT` | (dynamic)  | Fixed proxy target (proxy mode); empty = pick the target in the browser. `serve proxy host:port` is shorthand for this.                                 |
 | `-v`                | off        | Verbose logging (adds the browser `!debug` overlay)                                                                                                     |
+
+Capability flags are only accepted by the forms that serve that capability:
+`serve files -target x` is an error rather than a setting that does nothing.
 
 **Shell flags** (`serve` and `serve shell`):
 
@@ -402,12 +416,26 @@ bitbang help                           Usage (also --help, -h)
 | `-shell-max-sessions N` | `10`                  | Max concurrent shell sessions (0 = unlimited) |
 | `-shell-mirror`         | on                    | Mirror shell output to the listener's console |
 
-**Files flags:**
+**Forward flags** (`serve` and `serve forward`):
 
-| Form                       | Path                            | Upload flag     |
-| -------------------------- | ------------------------------- | --------------- |
-| `serve` (all capabilities) | `-files PATH` (default cwd)     | `-files-upload` |
-| `serve files [PATH]`       | positional `PATH` (default cwd) | `-upload`       |
+| Flag                       | Default        | Description                                                                                 |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| `-allow-forward HOST:PORT` | (unrestricted) | A target `connect -L` may reach. Repeatable. `HOST` with no port allows any port on that host. `serve forward HOST:PORT …` is shorthand. |
+
+**Proxy flags** (`serve` and `serve proxy`):
+
+| Flag                     | Default        | Description                                                                                          |
+| ------------------------ | -------------- | ------------------------------------------------------------------------------------------------------ |
+| `-target HOST:PORT`      | (dynamic)      | Pin one target; empty means the target is picked in the browser. `serve proxy host:port` is shorthand. |
+| `-allow-proxy HOST:PORT` | (unrestricted) | A target the browser may pick. Repeatable, same matching as `-allow-forward`.                          |
+| `-proxy-client-ip`       | off            | Stamp the real browser IP as `X-Forwarded-For` (fixed-target mode). Enable only when the backend trusts localhost for auth. |
+
+**Files flags** (`serve` and `serve files`):
+
+| Form                 | Path                            | Upload flag     |
+| -------------------- | ------------------------------- | --------------- |
+| `serve`              | `-files PATH` (default cwd)     | `-files-upload` |
+| `serve files [PATH]` | positional `PATH` (default cwd) | `-files-upload` |
 
 *(Advanced: `-video-fd N` passes an inherited socketpair FD to an external video helper; for internal/embedding use.)*
 
@@ -438,7 +466,7 @@ socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 | Entry field | Meaning                                                                      |
 |-------------|------------------------------------------------------------------------------|
 | `label`     | Names the link; identifies it to `rm` and `qr`, and must be unique             |
-| `scope`     | Any of `files`, `shell`, `forward`, `proxy`. Omit for everything the listener serves |
+| `scope`     | Any of `files`, `shell`, `forward`, `proxy`. Omit for everything the listener serves. `forward` reaches any host:port the listener can reach unless `-allow-forward` narrows it |
 | `expires`   | RFC 3339 timestamp. Omit for a link that does not lapse                        |
 | `code`      | Filled in by the listener on reload. Leave it out to have one minted           |
 
