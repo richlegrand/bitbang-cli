@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -24,6 +25,15 @@ func TestResolveFSPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// "Absolute" is platform-shaped. On Windows a rooted path with no
+	// volume ("/etc/turn.json") is relative to the current drive, so
+	// filepath.Abs correctly prepends one -- taking the cwd's volume keeps
+	// the case meaningful there instead of skipping it.
+	absPath := "/etc/turn.json"
+	if runtime.GOOS == "windows" {
+		absPath = filepath.Join(filepath.VolumeName(cwd)+string(filepath.Separator), "etc", "turn.json")
+	}
+
 	cases := []struct {
 		in   string
 		want string
@@ -31,7 +41,7 @@ func TestResolveFSPath(t *testing.T) {
 	}{
 		{"~", home, "a bare tilde is the home directory, not an index panic"},
 		{"~/turn.json", filepath.Join(home, "turn.json"), "tilde-rooted"},
-		{"/etc/turn.json", "/etc/turn.json", "absolute passes through"},
+		{absPath, absPath, "absolute passes through"},
 		{"turn.json", filepath.Join(cwd, "turn.json"), "relative resolves against cwd"},
 		{"./turn.json", filepath.Join(cwd, "turn.json"), "dot-relative"},
 	}
