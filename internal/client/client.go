@@ -113,6 +113,10 @@ func Dial(opts DialOptions) (*Session, error) {
 	// --relay forces relay-only gathering on the connector; otherwise we
 	// trickle every candidate immediately and the device (ICE-controlling)
 	// biases toward direct. See internal/peer relayAcceptanceMinWait.
+	// Timed from here, not from the start of Dial, so the number means the
+	// same thing as the listener's: how long ICE took, not how long the
+	// signaling WebSocket took to come up.
+	connStart := time.Now()
 	peer, err := NewPeer(opts.UID, opts.Code, iceServers, opts.ForceRelay, opts.Verbose)
 	if err != nil {
 		sig.Close()
@@ -188,6 +192,11 @@ waitLoop:
 	// path that ICE actually settled on (direct / relay / tcp-relay).
 	// Must run before sig.Close, since the report rides the same WS.
 	sendConnectionPath(sig, detectConnectionPath(peer.PC), "")
+	if opts.Verbose {
+		if line := describeConnectionPath(peer.PC, time.Since(connStart)); line != "" {
+			fmt.Fprintf(stderr, "[client] %s\n", line)
+		}
+	}
 
 	// Signaling is done with us. Stop the candidate drain and close the
 	// WS; from here on traffic flows over WebRTC.

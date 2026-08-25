@@ -1,7 +1,9 @@
 package client
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -61,6 +63,45 @@ func detectConnectionPath(pc *webrtc.PeerConnection) string {
 		path = "relay"
 	}
 	return path
+}
+
+// describeConnectionPath renders the selected candidate pair the way the
+// listener logs it, for `-v`. The listener has always printed this and the
+// connector never did, so the person who asked for verbose output got the
+// half that says least about how the session is actually routed.
+//
+// Reads the pair off the ICE transport rather than GetStats: the stats
+// report is not populated yet at the moment the data channel opens, which
+// is exactly when this runs.
+//
+// Says more than the listener's line on purpose -- the wire protocol of the
+// selected pair is the difference between "relayed" and "relayed over TCP",
+// and only one of those explains the latency.
+func describeConnectionPath(pc *webrtc.PeerConnection, elapsed time.Duration) string {
+	sctp := pc.SCTP()
+	if sctp == nil {
+		return ""
+	}
+	dtls := sctp.Transport()
+	if dtls == nil {
+		return ""
+	}
+	ice := dtls.ICETransport()
+	if ice == nil {
+		return ""
+	}
+	pair, err := ice.GetSelectedCandidatePair()
+	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
+		return ""
+	}
+	kind := "DIRECT"
+	if pair.Local.Typ == webrtc.ICECandidateTypeRelay ||
+		pair.Remote.Typ == webrtc.ICECandidateTypeRelay {
+		kind = "RELAY"
+	}
+	return fmt.Sprintf("connected via %s over %s in %v (local=%s remote=%s)",
+		kind, strings.ToUpper(pair.Local.Protocol.String()),
+		elapsed.Round(time.Millisecond), pair.Local.Typ, pair.Remote.Typ)
 }
 
 // sendConnectionPath fires one telemetry message to the signaling server.

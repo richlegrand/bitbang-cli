@@ -427,6 +427,7 @@ A flag is only accepted by the modes that serve its capability, so
 | `-shell-cmd CMD`           | `serve`, `serve shell`    | platform shell | `$SHELL`/`/bin/sh` on Unix; `%COMSPEC%`/`cmd.exe` on Windows                                                         |
 | `-shell-max-sessions N`    | `serve`, `serve shell`    | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
 | `-shell-mirror`            | `serve`, `serve shell`    | on             | Mirror shell output to the listener's console. Turn off with `-shell-mirror=false` -- the equals sign is required.    |
+| `-shell-restrict`          | `serve`, `serve shell`    | off            | Run only `-shell-cmd`; refuse a command the connector supplies. Without it `-shell-cmd` is a default, which `connect <url> -- cmd` overrides. |
 | `-allow-forward HOST:PORT` | `serve`, `serve forward`  | (unrestricted) | A target `connect -L` may reach. Repeatable. See below.                                                              |
 | `-files PATH`              | `serve`, `serve files`    | cwd            | Directory (or single file) to share                                                                                  |
 | `-files-upload`            | `serve`, `serve files`    | off            | Allow uploads into the shared directory                                                                              |

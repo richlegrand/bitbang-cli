@@ -84,6 +84,11 @@ type serveConfig struct {
 	shellMaxSessions int
 	shellMirror      bool
 
+	// shellRestrict pins every shell to shellCmd. Without it shellCmd is
+	// only a default, which a CLI connector overrides by supplying its own
+	// argv (`connect <url> -- cat /etc/passwd`).
+	shellRestrict bool
+
 	// Files-cap configuration (only meaningful when caps includes files).
 	filesPath   string
 	filesUpload bool
@@ -327,6 +332,7 @@ func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.shellCmd, "shell-cmd", "", "Shell command to spawn (default: "+defaultShellLabel()+")")
 	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", defaultShellMaxSessions, "Max concurrent shell sessions (0 = unlimited)")
 	fs.BoolVar(&cfg.shellMirror, "shell-mirror", true, "Mirror shell output to listener console")
+	fs.BoolVar(&cfg.shellRestrict, "shell-restrict", false, "Run only -shell-cmd; refuse a command supplied by the connector (requires -shell-cmd)")
 }
 
 // startListener is the shared listener loop. Given a populated
@@ -407,6 +413,9 @@ func startListener(cfg serveConfig) {
 	var shellArgv []string
 	if cfg.shellCmd != "" {
 		shellArgv = []string{cfg.shellCmd}
+	}
+	if cfg.shellRestrict && cfg.shellCmd == "" {
+		fail("serve: -shell-restrict needs -shell-cmd -- there is nothing to restrict it to")
 	}
 
 	if cfg.iceServersPath != "" {

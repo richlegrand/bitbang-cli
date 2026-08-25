@@ -113,6 +113,12 @@ var capabilities = []capability{
 		Scope: links.ScopeShell,
 		Build: func(x capContext) []streamtype.StreamHandler {
 			sh := streamtype.NewShell(x.shellArgv, x.cfg.verbose)
+			if x.cfg.shellRestrict {
+				// Same lock `share` uses for its tmux attach: the client's
+				// argv, env and cwd are all ignored, since any of the three
+				// can steer a pinned command.
+				sh.ForcedArgv = x.shellArgv
+			}
 			sh.MaxConcurrent = x.cfg.shellMaxSessions
 			sh.OwnerCredential = x.owner
 			if x.cfg.shellMirror {
@@ -226,6 +232,9 @@ func describeShell(w io.Writer, x capContext) {
 	line := "  • shell  ("
 	if x.cfg.shellCmd != "" {
 		line += x.cfg.shellCmd
+		if x.cfg.shellRestrict {
+			line += " only"
+		}
 	} else {
 		line += defaultShellLabel()
 	}
