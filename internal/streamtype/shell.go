@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -591,6 +593,21 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	// Resolve argv: restricted-mode ours, otherwise client's, otherwise
 	// default, otherwise $SHELL, otherwise /bin/sh.
 	restricted := len(h.ForcedArgv) > 0
+
+	// A pinned listener used to run its own command and say nothing, so a
+	// connector that asked for one got different output with no explanation.
+	// Refusing rather than warning: a warning goes to stderr while the wrong
+	// output goes to stdout, so anything scripted would still read the wrong
+	// thing and believe it. Naming the command reveals nothing -- connecting
+	// without one runs it.
+	if restricted && len(open.Argv) > 0 {
+		log.Printf("Shell refused a command: this listener is pinned to %v", h.ForcedArgv)
+		h.sendShellError(s, fmt.Sprintf(
+			"this listener runs a fixed command and does not accept one (it runs: %s)",
+			strings.Join(h.ForcedArgv, " ")))
+		return nil
+	}
+
 	argv := h.ForcedArgv
 	if len(argv) == 0 {
 		argv = open.Argv
