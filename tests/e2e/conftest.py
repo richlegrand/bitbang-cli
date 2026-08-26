@@ -381,3 +381,24 @@ def browser_context(playwright, proxy_url):
     yield context
     context.close()
     browser.close()
+
+
+@pytest.fixture(scope='session')
+def firefox_context(playwright):
+    """A second engine, for the things that differ between them.
+
+    Worth the extra browser because the differences are not cosmetic: Firefox
+    has no `Request.body`, so every request body took a different path through
+    sw.js, and that path was silently broken while Chromium was fine.
+
+    Skips rather than fails when Firefox is not installed -- `playwright
+    install firefox` is not implied by having the suite.
+    """
+    try:
+        browser = playwright.firefox.launch(headless=True)
+    except Exception as e:
+        pytest.skip(f'firefox not available ({e}); run: playwright install firefox')
+    context = browser.new_context()
+    yield context
+    context.close()
+    browser.close()

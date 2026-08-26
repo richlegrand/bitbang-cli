@@ -93,7 +93,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install flask flask-sock pytest pytest-timeout pytest-playwright playwright pexpect
-          playwright install --with-deps chromium
+          # Firefox as well as Chromium: it has no Request.body, so request
+          # bodies take a different path through sw.js -- one that was broken
+          # while every Chromium test passed. See tests/e2e/test_firefox_bodies.py.
+          playwright install --with-deps chromium firefox
 
       - name: Run E2E tests
         env:
