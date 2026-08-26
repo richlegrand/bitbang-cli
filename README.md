@@ -506,6 +506,7 @@ With no `-- command`, opens an interactive shell (a PTY when stdin is a terminal
 | `-name NAME`                            | (auto)     | Remember this host under NAME (new hosts only; auto-assigns `device<N>` if omitted)                         |
 | `-relay`                                | off        | Request a TURN relay up front instead of only on fallback (ICE still prefers a direct path if one succeeds) |
 | `-norelay`                              | off        | Refuse STUN/TURN entirely -- host candidates only, so a connection that would need a relay fails instead. Answers whether the direct path actually works. |
+| `-nosave`                               | off        | Do not write this device to `~/.bitbang/devices.json`. That table stores the access code, which is a working credential -- so this is what you want on a machine that is not yours. Cannot be combined with `-name`. |
 | `-pin PIN`                              | (prompt)   | PIN to send if the listener requires one (skips the interactive prompt)                                     |
 | `-timeout DUR`                          | `30s`      | Dial timeout (e.g. `45s`, `1m`)                                                                             |
 | `-server HOST`                          | `bitba.ng` | Signaling server -- **pair-code mode only**; the URL form carries its own host                              |

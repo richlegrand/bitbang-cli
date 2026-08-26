@@ -115,3 +115,36 @@ func TestWaitForForwardExit(t *testing.T) {
 		})
 	}
 }
+
+// The device table stores the access code, which is a working credential.
+// -nosave is for a machine that is not yours, so it has to actually suppress
+// the write rather than only the "Saved as" line.
+func TestNoSaveRejectsAName(t *testing.T) {
+	_, err := parseConnectOptions([]string{"-nosave", "-name", "laptop", "https://x/y#z"}, io.Discard)
+	if err == nil {
+		t.Fatal("-nosave with -name was accepted; they ask for opposite things")
+	}
+	if !strings.Contains(err.Error(), "-nosave") {
+		t.Errorf("error = %q, want it to name the flag", err)
+	}
+}
+
+func TestNoSaveParses(t *testing.T) {
+	opts, err := parseConnectOptions([]string{"-nosave", "https://x/y#z"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parseConnectOptions: %v", err)
+	}
+	if !opts.nosave {
+		t.Error("-nosave did not set the flag")
+	}
+	if opts.name != "" {
+		t.Errorf("name = %q, want empty", opts.name)
+	}
+}
+
+// -relay and -norelay are the other pair that cancel out.
+func TestRelayAndNoRelayAreRefused(t *testing.T) {
+	if _, err := parseConnectOptions([]string{"-relay", "-norelay", "https://x/y#z"}, io.Discard); err == nil {
+		t.Fatal("-relay with -norelay was accepted")
+	}
+}
