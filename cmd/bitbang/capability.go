@@ -121,7 +121,7 @@ var capabilities = []capability{
 			}
 			sh.MaxConcurrent = x.cfg.shellMaxSessions
 			sh.OwnerCredential = x.owner
-			if x.cfg.shellMirror {
+			if !x.cfg.disableShellMirror {
 				// Through the hold, not straight to the terminal: the
 				// mirror is the loudest thing on the console and would
 				// otherwise scroll a prompt away mid-question.
@@ -245,7 +245,7 @@ func describeShell(w io.Writer, x capContext) {
 	} else if x.cfg.shellMaxSessions != defaultShellMaxSessions {
 		line += fmt.Sprintf(", max %d concurrent sessions", x.cfg.shellMaxSessions)
 	}
-	if x.cfg.shellMirror {
+	if !x.cfg.disableShellMirror {
 		line += ", mirroring to console"
 	}
 	line += ")"

@@ -47,14 +47,14 @@ func TestSharingBlock(t *testing.T) {
 			cfg:  serveConfig{caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions},
 			want: []string{
 				"Sharing:",
-				"  • shell  (" + defaultShellLabel() + ")",
+				"  • shell  (" + defaultShellLabel() + ", mirroring to console)",
 				"",
 			},
 		},
 		{
 			name: "shell with a command, session cap, and mirroring",
 			cfg: serveConfig{caps: capsOf(links.ScopeShell), shellCmd: "/bin/zsh",
-				shellMaxSessions: 3, shellMirror: true},
+				shellMaxSessions: 3},
 			want: []string{
 				"Sharing:",
 				"  • shell  (/bin/zsh, max 3 concurrent sessions, mirroring to console)",
@@ -66,7 +66,7 @@ func TestSharingBlock(t *testing.T) {
 			cfg:  serveConfig{caps: capsOf(links.ScopeShell), shellMaxSessions: 0},
 			want: []string{
 				"Sharing:",
-				"  • shell  (" + defaultShellLabel() + ", unlimited concurrent sessions)",
+				"  • shell  (" + defaultShellLabel() + ", unlimited concurrent sessions, mirroring to console)",
 				"",
 			},
 		},
@@ -104,7 +104,7 @@ func TestSharingBlock(t *testing.T) {
 			share: shareDir,
 			want: []string{
 				"Sharing:",
-				"  • shell  (" + defaultShellLabel() + ")",
+				"  • shell  (" + defaultShellLabel() + ", mirroring to console)",
 				"  • forward (unrestricted targets, chosen by connect -L; max 64 concurrent connections per session; loopback-bound on connector by default)",
 				"  • files  (" + dir + ")",
 				"  • proxy  (target chosen in browser)",
@@ -156,5 +156,26 @@ func TestSharingBlockNamesAllowedForwards(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("sharing block does not name %q:\n%s", want, got)
 		}
+	}
+}
+
+// The flag is spelled as a negative so it works bare. The zero value is now
+// the shipped default -- mirroring on -- which is what a config straight from
+// the flag package holds.
+func TestSharingBlockShowsMirrorDisabled(t *testing.T) {
+	var on, off strings.Builder
+	printSharingBlock(&on, serveConfig{
+		caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions,
+	}, nil)
+	printSharingBlock(&off, serveConfig{
+		caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions,
+		disableShellMirror: true,
+	}, nil)
+
+	if !strings.Contains(on.String(), "mirroring to console") {
+		t.Errorf("default should mirror:\n%s", on.String())
+	}
+	if strings.Contains(off.String(), "mirroring to console") {
+		t.Errorf("-disable-shell-mirror still claims to mirror:\n%s", off.String())
 	}
 }

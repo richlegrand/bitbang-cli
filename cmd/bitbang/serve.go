@@ -82,7 +82,12 @@ type serveConfig struct {
 	// Shell-cap configuration (only meaningful when caps includes shell).
 	shellCmd         string
 	shellMaxSessions int
-	shellMirror      bool
+
+	// disableShellMirror turns off echoing shell output to the listener's
+	// console. Spelled as the negative so it works bare: a boolean that
+	// defaults to true can only be turned off as `-flag=false`, and the
+	// equals sign is the kind of thing people get wrong once and never find.
+	disableShellMirror bool
 
 	// shellRestrict pins every shell to shellCmd. Without it shellCmd is
 	// only a default, which a CLI connector overrides by supplying its own
@@ -270,15 +275,16 @@ func registerForwardFlags(fs *flag.FlagSet, cfg *serveConfig) {
 }
 
 // rejectPositionals stops a stray word being swallowed. `-shell-mirror off`
-// is the case that prompted it: Go's boolean flags need `-shell-mirror=false`,
-// so `off` parsed as a positional, was ignored, and mirroring stayed on with
-// no error.
+// was the case that prompted it: a boolean defaulting to true could only be
+// turned off with an equals sign, so `off` parsed as a positional, was
+// ignored, and mirroring stayed on with no error. Every boolean defaults to
+// false now, so each works bare -- but a stray word is still worth refusing.
 func rejectPositionals(fs *flag.FlagSet, mode string) {
 	if fs.NArg() == 0 {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "bitbang %s: unexpected argument %q\n", mode, fs.Arg(0))
-	fmt.Fprintf(os.Stderr, "(boolean flags take an equals sign: -shell-mirror=false)\n")
+	fmt.Fprintf(os.Stderr, "(boolean flags take an equals sign, or no value at all)\n")
 	os.Exit(2)
 }
 
@@ -339,7 +345,7 @@ func hideFlags(fs *flag.FlagSet, names ...string) {
 func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.shellCmd, "shell-cmd", "", "Shell command to spawn (default: "+defaultShellLabel()+")")
 	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", defaultShellMaxSessions, "Max concurrent shell sessions (0 = unlimited)")
-	fs.BoolVar(&cfg.shellMirror, "shell-mirror", true, "Mirror shell output to listener console")
+	fs.BoolVar(&cfg.disableShellMirror, "disable-shell-mirror", false, "Stop echoing shell output to the listener's console")
 	fs.BoolVar(&cfg.shellRestrict, "shell-restrict", false, "Run only -shell-cmd; refuse a command supplied by the connector (requires -shell-cmd)")
 }
 
