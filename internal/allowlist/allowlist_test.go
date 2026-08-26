@@ -87,3 +87,25 @@ func TestStringRendersForMessages(t *testing.T) {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
 }
+
+// One flag value may carry several targets. `bitbang serve` has no positional
+// slot, so without this the flag is repeated once per target.
+func TestParseAcceptsSeveralSpecs(t *testing.T) {
+	l, err := Parse([]string{"127.0.0.1:22", "nas.lan", "[fd00::20]:5900"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for _, c := range []struct {
+		host string
+		port int
+	}{{"127.0.0.1", 22}, {"nas.lan", 9999}, {"fd00::20", 5900}} {
+		if !l.Permits(c.host, c.port) {
+			t.Errorf("Permits(%q, %d) = false", c.host, c.port)
+		}
+	}
+	// A bad entry anywhere in the list fails the whole list, rather than
+	// being dropped and quietly narrowing what was asked for.
+	if _, err := Parse([]string{"127.0.0.1:22", "bad:99999"}); err == nil {
+		t.Error("a list containing an invalid target was accepted")
+	}
+}

@@ -433,15 +433,17 @@ A flag is only accepted by the modes that serve its capability, so
 | `-shell-max-sessions N`    | `serve`, `serve shell`    | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
 | `-shell-mirror`            | `serve`, `serve shell`    | on             | Mirror shell output to the listener's console. Turn off with `-shell-mirror=false` -- the equals sign is required.    |
 | `-shell-restrict`          | `serve`, `serve shell`    | off            | Run only `-shell-cmd`; refuse a command the connector supplies. Without it `-shell-cmd` is a default, which `connect <url> -- cmd` overrides. |
-| `-allow-forward HOST:PORT` | `serve`, `serve forward`  | (unrestricted) | A target `connect -L` may reach. Repeatable. See below.                                                              |
+| `-allow-forward HOST:PORT` | `serve`, `serve forward`  | (unrestricted) | A target `connect -L` may reach. Repeatable, or comma-separated. See below.                                          |
 | `-files PATH`              | `serve`, `serve files`    | cwd            | Directory (or single file) to share                                                                                  |
 | `-files-upload`            | `serve`, `serve files`    | off            | Allow uploads into the shared directory                                                                              |
 | `-target HOST:PORT`        | `serve`, `serve proxy`    | (dynamic)      | Pin one proxy target; empty means the target is picked in the browser                                                |
-| `-allow-proxy HOST:PORT`   | `serve`, `serve proxy`    | (unrestricted) | A target the browser may pick. Repeatable. See below.                                                                |
+| `-allow-proxy HOST:PORT`   | `serve`, `serve proxy`    | (unrestricted) | A target the browser may pick. Repeatable, or comma-separated. See below.                                            |
 | `-proxy-client-ip`         | `serve`, `serve proxy`    | off            | Stamp the real browser IP as `X-Forwarded-For` (fixed-target mode). Enable only when the backend trusts localhost for auth. |
 
 **The allow flags.** Both take `HOST:PORT`, or a bare `HOST` to allow any port
-on that host, and both repeat. Targets are matched **as written and never
+on that host. Both repeat, and one value may carry several targets separated by
+commas -- which is what `serve forward a:22 b:80` does positionally, spelled out
+for `bitbang serve`, where there is no positional slot. Targets are matched **as written and never
 resolved**: allowing `192.168.1.50:22` does not allow `nas.lan:22` even when
 the name points there. Resolving would check a name at one moment and dial it
 a moment later, and the two can disagree. Given neither flag, a listener

@@ -252,7 +252,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 func registerProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port; empty = target chosen in the browser")
 	fs.BoolVar(&cfg.proxyClientIP, "proxy-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
-	fs.Var(&allowFlag{&cfg.allowProxy}, "allow-proxy", "`HOST:PORT` the proxy may reach, or HOST for any port (repeatable; default unrestricted)")
+	fs.Var(&allowFlag{&cfg.allowProxy}, "allow-proxy", "`HOST:PORT` the proxy may reach, or HOST for any port. Repeatable, or comma-separated. Default unrestricted")
 }
 
 // registerFilesFlags wires the files-specific flags. `-files` is accepted by
@@ -266,7 +266,7 @@ func registerFilesFlags(fs *flag.FlagSet, cfg *serveConfig) {
 
 // registerForwardFlags wires the forward-specific flags.
 func registerForwardFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.Var(&allowFlag{&cfg.allowForward}, "allow-forward", "`HOST:PORT` that connect -L may reach, or HOST for any port (repeatable; default unrestricted)")
+	fs.Var(&allowFlag{&cfg.allowForward}, "allow-forward", "`HOST:PORT` that connect -L may reach, or HOST for any port. Repeatable, or comma-separated; the same as naming targets after `serve forward`. Default unrestricted")
 }
 
 // rejectPositionals stops a stray word being swallowed. `-shell-mirror off`
@@ -284,6 +284,14 @@ func rejectPositionals(fs *flag.FlagSet, mode string) {
 
 // allowFlag collects a repeatable -allow-* into a List, rejecting a bad
 // target at parse time rather than at the first connection that trips it.
+//
+// One value may carry several targets separated by commas. The single-cap
+// modes take them positionally (`serve forward a:22 b:80`), which is tidier,
+// but `bitbang serve` has no positional slot -- without a list syntax it is
+// the flag repeated once per target.
+//
+// Comma is unambiguous here: IPv6 addresses use colons and are bracketed, and
+// a hostname cannot contain one.
 type allowFlag struct{ list *allowlist.List }
 
 func (a *allowFlag) String() string {
@@ -294,7 +302,7 @@ func (a *allowFlag) String() string {
 }
 
 func (a *allowFlag) Set(v string) error {
-	parsed, err := allowlist.Parse([]string{v})
+	parsed, err := allowlist.Parse(strings.Split(v, ","))
 	if err != nil {
 		return err
 	}
