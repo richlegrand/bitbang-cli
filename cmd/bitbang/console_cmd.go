@@ -91,7 +91,7 @@ func cmdAdd(l *listener, c *console, _ []string) error {
 	// collided with the second link of the day.
 	seed := links.Terms{Label: datedLabel(l.links, "link", time.Now())}
 	terms, err := grantQuestions(c, seed, l.links.offeredScopes(),
-		l.links.takenLabels(""), time.Now())
+		l.links.takenLabels(""), time.Now(), reachOf(l.cfg))
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func cmdEdit(l *listener, c *console, args []string) error {
 		return nil
 	}
 	edited, err := grantQuestions(c, current, l.links.offeredScopes(),
-		l.links.takenLabels(current.Label), time.Now())
+		l.links.takenLabels(current.Label), time.Now(), reachOf(l.cfg))
 	if err != nil {
 		return err
 	}

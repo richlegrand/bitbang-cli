@@ -21,7 +21,7 @@ import (
 //
 // Returning ok=false declines the pairing, and the connector is told the
 // same thing it would have been told by an operator who refused.
-func grantForPairing(c *console, ls *linkState, remoteIP string) (string, bool) {
+func grantForPairing(c *console, ls *linkState, remoteIP string, reach scopeReach) (string, bool) {
 	if !c.Available() {
 		// No terminal to ask on. Refusing here would make pairing
 		// impossible on a listener nobody is watching, which is worse
@@ -45,7 +45,7 @@ func grantForPairing(c *console, ls *linkState, remoteIP string) (string, bool) 
 		terms := links.Terms{Label: datedLabel(ls, "paired", time.Now())}
 		if !strings.EqualFold(strings.TrimSpace(answer), "y") {
 			c.Say("")
-			terms, err = grantQuestions(waiting, terms, ls.offeredScopes(), ls.takenLabels(""), time.Now())
+			terms, err = grantQuestions(waiting, terms, ls.offeredScopes(), ls.takenLabels(""), time.Now(), reach)
 			if err != nil {
 				return err
 			}

@@ -267,7 +267,7 @@ func (l *listener) handlePairRequest(msg signaling.Message) {
 	done := func() { releaseOnce.Do(release) }
 	conn.GrantPairCredential = func() (string, bool) {
 		defer done()
-		return grantForPairing(l.console, l.links, remoteIP)
+		return grantForPairing(l.console, l.links, remoteIP, reachOf(l.cfg))
 	}
 	// A pairing that never reaches the grant -- a mismatched SAS, a
 	// connector that gives up -- must not leave the loop held out.

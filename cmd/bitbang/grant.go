@@ -32,10 +32,10 @@ type asker interface {
 // Seed carries the current values. For `add` and pairing that is the
 // default grant; for `edit` it is the entry as it stands, so pressing
 // Enter through the whole flow changes nothing.
-func grantQuestions(a asker, seed links.Terms, offered []string, taken map[string]bool, now time.Time) (links.Terms, error) {
+func grantQuestions(a asker, seed links.Terms, offered []string, taken map[string]bool, now time.Time, reach scopeReach) (links.Terms, error) {
 	out := seed
 
-	scope, err := askScope(a, seed, offered)
+	scope, err := askScope(a, seed, offered, reach)
 	if err != nil {
 		return links.Terms{}, err
 	}
@@ -62,8 +62,47 @@ func grantQuestions(a asker, seed links.Terms, offered []string, taken map[strin
 var scopeHelp = map[string]string{
 	links.ScopeFiles:   "browse and transfer files",
 	links.ScopeShell:   "a terminal on this machine",
-	links.ScopeForward: "forward TCP ports, without a shell",
+	links.ScopeForward: "forward TCP to any host on this network, without a shell",
 	links.ScopeProxy:   "reach web apps on this network",
+}
+
+// scopeReach carries what the two target-choosing scopes can actually reach,
+// rendered from the listener's allowlists. Empty means unrestricted.
+//
+// The menu is where an operator decides what to hand out, and `forward` read
+// as the narrow option there: it said "without a shell" and nothing about
+// reach, while `proxy` right above it said "on this network". Unrestricted,
+// forward is the wider of the two.
+type scopeReach struct {
+	forward string
+	proxy   string
+}
+
+// reachOf renders a listener's allowlists for the menu. A pinned proxy target
+// counts as a restriction too, since the browser cannot choose another.
+func reachOf(cfg serveConfig) scopeReach {
+	r := scopeReach{forward: cfg.allowForward.String()}
+	switch {
+	case cfg.target != "":
+		r.proxy = cfg.target
+	default:
+		r.proxy = cfg.allowProxy.String()
+	}
+	return r
+}
+
+// helpFor is scopeHelp, but naming the allowlist when the listener has one.
+// A pinned listener should say so here -- the operator gets to see that the
+// link they are minting is genuinely narrow, which is the reward for having
+// set -allow-forward in the first place.
+func (r scopeReach) helpFor(scope string) string {
+	switch {
+	case scope == links.ScopeForward && r.forward != "":
+		return "forward TCP to " + r.forward + ", without a shell"
+	case scope == links.ScopeProxy && r.proxy != "":
+		return "reach " + r.proxy
+	}
+	return scopeHelp[scope]
 }
 
 // menuOrder lists scopes least powerful first, so a mis-keyed 1 grants a
@@ -94,14 +133,14 @@ func orderForMenu(offered []string) []string {
 	return out
 }
 
-func askScope(a asker, seed links.Terms, offered []string) ([]string, error) {
+func askScope(a asker, seed links.Terms, offered []string, reach scopeReach) ([]string, error) {
 	if len(offered) == 0 {
 		return nil, nil
 	}
 	offered = orderForMenu(offered)
 	a.Say("  Grant which?")
 	for i, name := range offered {
-		a.Say("    %d) %-8s  %s", i+1, name, scopeHelp[name])
+		a.Say("    %d) %-8s  %s", i+1, name, reach.helpFor(name))
 	}
 
 	// A nil scope means everything, which is what `a` produces, so the

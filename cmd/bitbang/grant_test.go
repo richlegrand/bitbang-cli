@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/links"
 )
 
@@ -45,7 +46,7 @@ func TestGrantQuestions_PickingScopesAndAnExpiry(t *testing.T) {
 		"3",   // 24 hours; the menu is never, 1h, 24h, 7d, other
 		"ana-phone",
 	}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ func TestGrantQuestions_EnterThroughKeepsTheSeed(t *testing.T) {
 	seed := links.Terms{Label: "ana", Code: "KEEPME", Scope: []string{links.ScopeFiles}, Expires: &at}
 
 	a := &scriptedAsker{t: t, answers: []string{"", "", ""}}
-	got, err := grantQuestions(a, seed, allScopes, nil, now)
+	got, err := grantQuestions(a, seed, allScopes, nil, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestGrantQuestions_EnterThroughKeepsTheSeed(t *testing.T) {
 func TestGrantQuestions_AllAndNever(t *testing.T) {
 	now := time.Now()
 	a := &scriptedAsker{t: t, answers: []string{"a", "1", "kiosk"}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestGrantQuestions_RejectsBadInputAndAsksAgain(t *testing.T) {
 		"   ",   // whitespace; "" would mean Enter and take the default
 		"ok",    // fine
 	}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestGrantQuestions_RejectsBadInputAndAsksAgain(t *testing.T) {
 func TestGrantQuestions_OnlyOffersWhatIsServed(t *testing.T) {
 	now := time.Now()
 	a := &scriptedAsker{t: t, answers: []string{"1", "1", "x"}}
-	got, err := grantQuestions(a, links.Terms{}, []string{links.ScopeFiles}, nil, now)
+	got, err := grantQuestions(a, links.Terms{}, []string{links.ScopeFiles}, nil, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func TestAskOtherExpiry_ConfirmsAndCanBeDeclined(t *testing.T) {
 // file browser rather than a terminal.
 func TestGrantQuestions_MenuPutsShellLast(t *testing.T) {
 	a := &scriptedAsker{t: t, answers: []string{"1", "1", "x"}}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, time.Now())
+	got, err := grantQuestions(a, links.Terms{}, allScopes, nil, time.Now(), scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +237,7 @@ func TestGrantQuestionsRefusesATakenLabel(t *testing.T) {
 		"ana",        // free
 	}}
 	taken := map[string]bool{"contractor": true}
-	got, err := grantQuestions(a, links.Terms{}, allScopes, taken, now)
+	got, err := grantQuestions(a, links.Terms{}, allScopes, taken, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,11 +252,61 @@ func TestGrantQuestionsAcceptsTheSeedsOwnLabel(t *testing.T) {
 	now := time.Now()
 	a := &scriptedAsker{t: t, answers: []string{"a", "1", ""}} // Enter through
 	seed := links.Terms{Label: "contractor"}
-	got, err := grantQuestions(a, seed, allScopes, map[string]bool{"ana": true}, now)
+	got, err := grantQuestions(a, seed, allScopes, map[string]bool{"ana": true}, now, scopeReach{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Label != "contractor" {
 		t.Errorf("label = %q, want the seed kept", got.Label)
+	}
+}
+
+// The menu is where an operator decides what to hand out, so `forward` has to
+// say what it reaches there. It used to say only "without a shell", which
+// reads as the narrow option while being the widest one on an unrestricted
+// listener.
+func TestScopeMenuSaysWhatForwardReaches(t *testing.T) {
+	a := &scriptedAsker{t: t, answers: []string{"3", "1", "label-a"}}
+	_, _ = grantQuestions(a, links.Terms{}, allScopes, nil, time.Now(), scopeReach{})
+	menu := strings.Join(a.said, "\n")
+	if !strings.Contains(menu, "any host on this network") {
+		t.Errorf("unrestricted forward does not say what it reaches:\n%s", menu)
+	}
+}
+
+// And when the listener is pinned, the menu should say so -- that is what
+// makes -allow-forward visible at the moment it matters.
+func TestScopeMenuNamesTheAllowlist(t *testing.T) {
+	a := &scriptedAsker{t: t, answers: []string{"3", "1", "label-b"}}
+	_, _ = grantQuestions(a, links.Terms{}, allScopes, nil, time.Now(),
+		scopeReach{forward: "127.0.0.1:22", proxy: "nas.lan:8080"})
+	menu := strings.Join(a.said, "\n")
+	if !strings.Contains(menu, "forward TCP to 127.0.0.1:22") {
+		t.Errorf("menu does not name the forward allowlist:\n%s", menu)
+	}
+	if !strings.Contains(menu, "reach nas.lan:8080") {
+		t.Errorf("menu does not name the proxy target:\n%s", menu)
+	}
+	if strings.Contains(menu, "any host on this network") {
+		t.Errorf("menu still claims unrestricted reach on a pinned listener:\n%s", menu)
+	}
+}
+
+// reachOf reads the listener config, and a pinned -target is a restriction
+// even though it is not an allowlist.
+func TestReachOfPrefersPinnedTarget(t *testing.T) {
+	allow, err := allowlist.Parse([]string{"a.lan:1", "b.lan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := reachOf(serveConfig{allowForward: allow, target: "127.0.0.1:8096"})
+	if r.forward != "a.lan:1, b.lan:*" {
+		t.Errorf("forward reach = %q", r.forward)
+	}
+	if r.proxy != "127.0.0.1:8096" {
+		t.Errorf("proxy reach = %q, want the pinned target", r.proxy)
+	}
+	if got := reachOf(serveConfig{}).forward; got != "" {
+		t.Errorf("unrestricted forward reach = %q, want empty", got)
 	}
 }

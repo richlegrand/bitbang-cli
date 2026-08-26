@@ -20,8 +20,8 @@ func TestExactAndAnyPort(t *testing.T) {
 		want bool
 	}{
 		{"127.0.0.1", 22, true},
-		{"127.0.0.1", 23, false},  // same host, wrong port
-		{"nas.lan", 22, true},     // portless entry allows any port
+		{"127.0.0.1", 23, false}, // same host, wrong port
+		{"nas.lan", 22, true},    // portless entry allows any port
 		{"nas.lan", 5432, true},
 		{"other.lan", 22, false},
 	}
