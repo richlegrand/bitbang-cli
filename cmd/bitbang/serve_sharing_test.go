@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -178,4 +179,38 @@ func TestSharingBlockShowsMirrorDisabled(t *testing.T) {
 	if strings.Contains(off.String(), "mirroring to console") {
 		t.Errorf("-disable-shell-mirror still claims to mirror:\n%s", off.String())
 	}
+}
+
+// -target and -proxy-client-ip only mean something in fixed-target mode, which
+// `bitbang serve` cannot enter: pinning the whole URL to one app is
+// incompatible with routing /shell/ and /files/. They used to be accepted
+// there and quietly do nothing, while the sharing block claimed the target was
+// pinned. -target is gone entirely -- the positional was always the same
+// thing -- and -proxy-client-ip is registered only where it applies.
+func TestCombinedModeRejectsFixedTargetFlags(t *testing.T) {
+	for _, flag := range []string{"-target", "-proxy-client-ip"} {
+		out, err := exec.Command(bitbangBinary(t), "serve", flag, "x:1").CombinedOutput()
+		if err == nil {
+			t.Errorf("bitbang serve %s was accepted", flag)
+		}
+		if !strings.Contains(string(out), "not defined") {
+			t.Errorf("bitbang serve %s: output = %q, want a not-defined error", flag, out)
+		}
+	}
+	out, err := exec.Command(bitbangBinary(t), "serve", "proxy", "-target", "x:1").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "not defined") {
+		t.Errorf("serve proxy -target: err=%v out=%q, want a not-defined error", err, out)
+	}
+}
+
+// bitbangBinary builds the CLI once for tests that need to exercise argument
+// parsing end to end, which is the only way to see a flag package rejection.
+func bitbangBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "bitbang")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	return bin
 }

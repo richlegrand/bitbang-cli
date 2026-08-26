@@ -415,10 +415,10 @@ argument, where a mode takes one, is shorthand for that mode's flag.
 | `serve shell`               | shell                           | --                             |
 | `serve forward [TARGET …]`  | forward                         | `-allow-forward`, repeatable   |
 | `serve files [PATH]`        | files                           | `-files` (default cwd)         |
-| `serve proxy [TARGET]`      | proxy                           | `-target`                      |
+| `serve proxy [TARGET]`      | proxy                           | pins the target (see below)    |
 
 A flag is only accepted by the modes that serve its capability, so
-`serve files -target x` is an error rather than a setting that does nothing.
+`serve files -proxy-client-ip` is an error rather than a setting that does nothing.
 
 | Flag                       | Modes                     | Default        | Description                                                                                                          |
 | -------------------------- | ------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -436,9 +436,15 @@ A flag is only accepted by the modes that serve its capability, so
 | `-allow-forward HOST:PORT` | `serve`, `serve forward`  | (unrestricted) | A target `connect -L` may reach. Repeatable, or comma-separated. See below.                                          |
 | `-files PATH`              | `serve`, `serve files`    | cwd            | Directory (or single file) to share                                                                                  |
 | `-files-upload`            | `serve`, `serve files`    | off            | Allow uploads into the shared directory                                                                              |
-| `-target HOST:PORT`        | `serve`, `serve proxy`    | (dynamic)      | Pin one proxy target; empty means the target is picked in the browser                                                |
 | `-allow-proxy HOST:PORT`   | `serve`, `serve proxy`    | (unrestricted) | A target the browser may pick. Repeatable, or comma-separated. See below.                                            |
-| `-proxy-client-ip`         | `serve`, `serve proxy`    | off            | Stamp the real browser IP as `X-Forwarded-For` (fixed-target mode). Enable only when the backend trusts localhost for auth. |
+| `-proxy-client-ip`         | `serve proxy`             | off            | Stamp the real browser IP as `X-Forwarded-For`. Enable only when the backend trusts localhost for auth.               |
+
+**Pinning a proxy target.** `serve proxy HOST:PORT` pins one app: the bare
+device URL serves it directly, with no landing page. That is fixed-target
+mode, and `bitbang serve` cannot enter it -- pinning the whole URL to one app
+is incompatible with routing `/shell/` and `/files/` -- so the pin, and
+`-proxy-client-ip` with it, belong to `serve proxy` alone. Without a target,
+the browser picks one, optionally narrowed by `-allow-proxy`.
 
 **The allow flags.** Both take `HOST:PORT`, or a bare `HOST` to allow any port
 on that host. Both repeat, and one value may carry several targets separated by

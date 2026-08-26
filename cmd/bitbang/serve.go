@@ -210,22 +210,20 @@ func runServeFiles(args []string) {
 // reverse proxy. Without TARGET, runs in dynamic-target mode (landing
 // page asks for the host). With TARGET, pins to a single host:port and
 // the bare device URL serves that target directly.
-//
-// TARGET can be supplied either positionally (`serve proxy host:port`)
-// or via the shared `-target` flag. If both are given, the positional
-// wins — the user typed it more explicitly.
 func runServeProxy(args []string) {
 	fs := flag.NewFlagSet("serve proxy", flag.ExitOnError)
 	cfg := serveConfig{caps: capsOf(links.ScopeProxy)}
 	registerSharedFlags(fs, &cfg)
 	registerProxyFlags(fs, &cfg)
+	registerFixedProxyFlags(fs, &cfg)
 	fs.Parse(reorderArgs(fs, args))
 
-	// Optional positional TARGET. Mirrors `serve files [PATH]`.
+	// Optional positional TARGET. Mirrors `serve files [PATH]`, and is the
+	// only way to set it -- -target was a second spelling that did nothing
+	// on any mode that could not enter fixed-target mode anyway.
 	switch fs.NArg() {
 	case 0:
-		// No positional; cfg.target may already be set via -target flag,
-		// or empty (dynamic-target mode).
+		// No positional: dynamic-target mode, target chosen in the browser.
 	case 1:
 		cfg.target = fs.Arg(0)
 	default:
@@ -251,13 +249,20 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	hideFlags(fs, "video-fd")
 }
 
-// registerProxyFlags wires the proxy-specific flags, on the two modes that
-// serve a proxy. Registering them everywhere is how `serve files -target x`
-// came to be accepted and silently ignored.
+// registerProxyFlags wires the flags a proxy takes wherever it is served.
+// Registering flags everywhere is how `serve files -target x` came to be
+// accepted and silently ignored.
 func registerProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port; empty = target chosen in the browser")
-	fs.BoolVar(&cfg.proxyClientIP, "proxy-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
 	fs.Var(&allowFlag{&cfg.allowProxy}, "allow-proxy", "`HOST:PORT` the proxy may reach, or HOST for any port. Repeatable, or comma-separated. Default unrestricted")
+}
+
+// registerFixedProxyFlags wires the flags that only mean something in
+// fixed-target mode, which `bitbang serve` cannot enter: pinning the whole URL
+// to one app is incompatible with routing /shell/ and /files/. Registered on
+// `serve proxy` alone, so `serve -proxy-client-ip` is an error rather than a
+// setting that does nothing.
+func registerFixedProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.BoolVar(&cfg.proxyClientIP, "proxy-client-ip", false, "Stamp the real browser IP as X-Forwarded-For; enable only when the backend trusts localhost for auth")
 }
 
 // registerFilesFlags wires the files-specific flags. `-files` is accepted by
