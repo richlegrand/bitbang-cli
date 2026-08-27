@@ -33,7 +33,7 @@ def expiring(listener, test_server, tmp_path_factory):
         shared = str(tmp_path_factory.mktemp('expiry-share'))
         with open(os.path.join(shared, 'hello.txt'), 'w') as f:
             f.write('still here\n')
-        return listener('serve', '-server', test_server, '-files', shared,
+        return listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server,
                         home=home, links=entries)
     return start
 

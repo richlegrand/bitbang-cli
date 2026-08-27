@@ -369,8 +369,8 @@ def target_app():
 def proxy_url(target_app, listener):
     """Start a fixed-target proxy listener and return its URL. This is the
     mode the OctoPrint plugin runs, and what most tests here exercise."""
-    return listener('serve', 'proxy', '-server', TEST_SERVER,
-                    '-target', target_app, '-ephemeral').url
+    return listener('serve', 'proxy', target_app, '-server', TEST_SERVER,
+                    '-ephemeral').url
 
 
 @pytest.fixture(scope='session')

@@ -232,6 +232,28 @@ func capBarItems(x capContext) []capbar.Item {
 		if c.MenuWhen != nil && !c.MenuWhen(x) {
 			continue
 		}
+		// A proxy given several targets is several entries: the caret is
+		// where someone picks one, so listing them there is what makes a
+		// multi-target proxy usable without a landing page in between.
+		if c.Scope == links.ScopeProxy && len(x.cfg.proxyTargets) > 1 {
+			for _, t := range x.cfg.proxyTargets {
+				items = append(items, capbar.Item{
+					Label: c.Menu + " " + t,
+					Path:  c.MenuPath + t + "/",
+				})
+			}
+			continue
+		}
+		// A single pinned target needs no landing page either -- go
+		// straight there, the way the whole URL would if nothing else
+		// were served.
+		if c.Scope == links.ScopeProxy && len(x.cfg.proxyTargets) == 1 && !fixedTargetMode(x.cfg) {
+			items = append(items, capbar.Item{
+				Label: c.Menu + " " + x.cfg.proxyTargets[0],
+				Path:  c.MenuPath + x.cfg.proxyTargets[0] + "/",
+			})
+			continue
+		}
 		items = append(items, capbar.Item{Label: c.Menu, Path: c.MenuPath})
 	}
 	return items

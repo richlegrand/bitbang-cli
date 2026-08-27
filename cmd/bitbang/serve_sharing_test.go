@@ -181,26 +181,33 @@ func TestSharingBlockShowsMirrorDisabled(t *testing.T) {
 	}
 }
 
-// -target and -proxy-client-ip only mean something in fixed-target mode, which
-// `bitbang serve` cannot enter: pinning the whole URL to one app is
-// incompatible with routing /shell/ and /files/. They used to be accepted
-// there and quietly do nothing, while the sharing block claimed the target was
-// pinned. -target is gone entirely -- the positional was always the same
-// thing -- and -proxy-client-ip is registered only where it applies.
-func TestCombinedModeRejectsFixedTargetFlags(t *testing.T) {
-	for _, flag := range []string{"-target", "-proxy-client-ip"} {
-		out, err := exec.Command(bitbangBinary(t), "serve", flag, "x:1").CombinedOutput()
-		if err == nil {
-			t.Errorf("bitbang serve %s was accepted", flag)
-		}
-		if !strings.Contains(string(out), "not defined") {
-			t.Errorf("bitbang serve %s: output = %q, want a not-defined error", flag, out)
-		}
-	}
-	out, err := exec.Command(bitbangBinary(t), "serve", "proxy", "-target", "x:1").CombinedOutput()
+// -target is gone: `serve proxy <target>` was always the same thing. And a
+// capability flag without its capability is an error naming what is missing,
+// rather than a setting that quietly does nothing -- which is what
+// `serve -proxy-client-ip` used to be, on a mode that cannot enter
+// fixed-target mode at all.
+func TestFlagsNeedTheirCapability(t *testing.T) {
+	bin := bitbangBinary(t)
+
+	out, err := exec.Command(bin, "serve", "-target", "x:1").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "not defined") {
-		t.Errorf("serve proxy -target: err=%v out=%q, want a not-defined error", err, out)
+		t.Errorf("-target still exists: err=%v out=%q", err, out)
 	}
+
+	out, err = exec.Command(bin, "serve", "shell", "-proxy-client-ip").CombinedOutput()
+	if err == nil {
+		t.Error("-proxy-client-ip was accepted without proxy")
+	}
+	if !strings.Contains(string(out), "needs proxy") {
+		t.Errorf("output = %q, want it to name the missing capability", out)
+	}
+
+	// With the capability, the same flag is fine.
+	out, err = exec.Command(bin, "serve", "proxy", "x:1", "-proxy-client-ip", "-h").CombinedOutput()
+	if strings.Contains(string(out), "needs proxy") {
+		t.Errorf("-proxy-client-ip rejected alongside proxy: %q", out)
+	}
+	_ = err
 }
 
 // bitbangBinary builds the CLI once for tests that need to exercise argument

@@ -56,10 +56,15 @@ type serveConfig struct {
 	// OctoPrint plugin) point us at its existing identity so we share its URL.
 	program string
 
-	// Fixed proxy target (host:port). When set (proxy-only mode), every
-	// request goes straight to this target — the plain device URL serves the
-	// app directly, no path-based target selection / landing page.
+	// Fixed proxy target (host:port). Set when exactly one proxy target was
+	// named; with nothing else served, every request goes straight to it and
+	// the plain device URL is the app, with no landing page.
 	target string
+
+	// proxyTargets is every target the proxy was given, in the order typed.
+	// One is the pin above; several are offered as a choice. Empty means the
+	// browser names its own.
+	proxyTargets []string
 
 	// proxyClientIP stamps the real browser IP as X-Forwarded-For on
 	// proxied requests (fixed-target mode only). Off by default: the
@@ -103,24 +108,38 @@ type serveConfig struct {
 	iceServers     []webrtc.ICEServer
 }
 
-// runServe — `bitbang serve` — exposes shell + files + proxy. The
-// launcher tab serves shell at `/`; the hamburger menu lets users open
-// Files or Proxy in new browser tabs. Files-only / Shell-only /
-// Proxy-only modes are dedicated subcommands; this mode is the "I want
-// everything I can get from a single listener" entry point.
+// runServe — `bitbang serve [WORD [ARG]]...` — starts a listener serving the
+// capabilities named. See serve_words.go for the grammar; bare `serve` means
+// all four.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy)}
+	var cfg serveConfig
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)
 	registerForwardFlags(fs, &cfg)
 	registerFilesFlags(fs, &cfg)
 	registerProxyFlags(fs, &cfg)
+	registerFixedProxyFlags(fs, &cfg)
 
 	fs.Parse(reorderArgs(fs, args))
-	rejectPositionals(fs, "serve")
 
-	if cfg.filesPath == "" {
+	plan, err := parseServeWords(fs.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bitbang serve: %v\n", err)
+		os.Exit(2)
+	}
+	if err := applyPlan(&cfg, plan); err != nil {
+		fmt.Fprintf(os.Stderr, "bitbang serve: %v\n", err)
+		os.Exit(2)
+	}
+
+	// Every capability flag is registered on the one command, so a flag that
+	// does not apply is caught here rather than by not existing.
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	rejectFlagsWithoutCapability(set, cfg)
+
+	if cfg.caps.has(links.ScopeFiles) && cfg.filesPath == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
@@ -128,107 +147,8 @@ func runServe(args []string) {
 		}
 		cfg.filesPath = cwd
 	}
-
-	startListener(cfg)
-}
-
-// runServeShell — `bitbang serve shell` — exposes a shell and nothing
-// else. No hamburger; the entire browser tab is the shell.
-//
-// Forwarding used to ride along here, which meant "give me a shell
-// listener" silently also granted "reach any host:port on my network".
-// They are separate capabilities with different blast radii, so they are
-// now separate modes: `serve forward` for the wire, `serve` for both.
-func runServeShell(args []string) {
-	fs := flag.NewFlagSet("serve shell", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeShell)}
-	registerSharedFlags(fs, &cfg)
-	registerShellFlags(fs, &cfg)
-	fs.Parse(reorderArgs(fs, args))
-	rejectPositionals(fs, "serve shell")
-	startListener(cfg)
-}
-
-// runServeForward — `bitbang serve forward [TARGET ...]` — exposes raw TCP
-// forwarding to CLI connectors and nothing else. The shell handler is never
-// registered, so a listener meant to be a wire has nothing to escalate to.
-//
-// TARGETs are positional sugar for -allow-forward; with none, every
-// host:port the listener can reach is allowed.
-func runServeForward(args []string) {
-	fs := flag.NewFlagSet("serve forward", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeForward)}
-	registerSharedFlags(fs, &cfg)
-	registerForwardFlags(fs, &cfg)
-	fs.Parse(reorderArgs(fs, args))
-
-	positional, err := allowlist.Parse(fs.Args())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitbang serve forward: %v\n", err)
-		os.Exit(2)
-	}
-	cfg.allowForward = append(cfg.allowForward, positional...)
-
-	startListener(cfg)
-}
-
-// runServeFiles — `bitbang serve files [PATH]` — exposes files only.
-// PATH is positional (defaults to cwd). No hamburger; the tab is the
-// file browser.
-func runServeFiles(args []string) {
-	fs := flag.NewFlagSet("serve files", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeFiles)}
-	registerSharedFlags(fs, &cfg)
-	registerFilesFlags(fs, &cfg)
-
-	fs.Parse(reorderArgs(fs, args))
-
-	// Positional PATH lives in fs.Args() after Parse — at most one. It wins
-	// over -files, the way `serve proxy TARGET` wins over -target: the user
-	// typed it more explicitly.
-	switch fs.NArg() {
-	case 0:
-		if cfg.filesPath == "" {
-			cwd, err := os.Getwd()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
-				os.Exit(1)
-			}
-			cfg.filesPath = cwd
-		}
-	case 1:
-		cfg.filesPath = fs.Arg(0)
-	default:
-		fmt.Fprintln(os.Stderr, "bitbang serve files: at most one PATH argument")
-		os.Exit(2)
-	}
-
-	startListener(cfg)
-}
-
-// runServeProxy — `bitbang serve proxy [TARGET]` — exposes an HTTP
-// reverse proxy. Without TARGET, runs in dynamic-target mode (landing
-// page asks for the host). With TARGET, pins to a single host:port and
-// the bare device URL serves that target directly.
-func runServeProxy(args []string) {
-	fs := flag.NewFlagSet("serve proxy", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeProxy)}
-	registerSharedFlags(fs, &cfg)
-	registerProxyFlags(fs, &cfg)
-	registerFixedProxyFlags(fs, &cfg)
-	fs.Parse(reorderArgs(fs, args))
-
-	// Optional positional TARGET. Mirrors `serve files [PATH]`, and is the
-	// only way to set it -- -target was a second spelling that did nothing
-	// on any mode that could not enter fixed-target mode anyway.
-	switch fs.NArg() {
-	case 0:
-		// No positional: dynamic-target mode, target chosen in the browser.
-	case 1:
-		cfg.target = fs.Arg(0)
-	default:
-		fmt.Fprintln(os.Stderr, "bitbang serve proxy: at most one TARGET argument")
-		os.Exit(2)
+	if cfg.shellRestrict && cfg.shellCmd == "" {
+		fail("serve: -shell-restrict needs -shell-cmd -- there is nothing to restrict it to")
 	}
 
 	startListener(cfg)
@@ -265,32 +185,15 @@ func registerFixedProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.BoolVar(&cfg.proxyClientIP, "proxy-client-ip", false, "Stamp the real browser IP as X-Forwarded-For; enable only when the backend trusts localhost for auth")
 }
 
-// registerFilesFlags wires the files-specific flags. `-files` is accepted by
-// `serve files` too, where the positional PATH is the shorthand for it --
-// same arrangement as -target/`serve proxy TARGET` and
-// -allow-forward/`serve forward TARGET`.
+// registerFilesFlags wires the files-specific flags. The path is not among
+// them: it is what is served, so it is the argument to the `files` word.
 func registerFilesFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.StringVar(&cfg.filesPath, "files", "", "Files `PATH` to share (default: current working directory)")
 	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
 }
 
 // registerForwardFlags wires the forward-specific flags.
 func registerForwardFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.Var(&allowFlag{&cfg.allowForward}, "allow-forward", "`HOST:PORT` that connect -L may reach, or HOST for any port. Repeatable, or comma-separated; the same as naming targets after `serve forward`. Default unrestricted")
-}
-
-// rejectPositionals stops a stray word being swallowed. `-shell-mirror off`
-// was the case that prompted it: a boolean defaulting to true could only be
-// turned off with an equals sign, so `off` parsed as a positional, was
-// ignored, and mirroring stayed on with no error. Every boolean defaults to
-// false now, so each works bare -- but a stray word is still worth refusing.
-func rejectPositionals(fs *flag.FlagSet, mode string) {
-	if fs.NArg() == 0 {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "bitbang %s: unexpected argument %q\n", mode, fs.Arg(0))
-	fmt.Fprintf(os.Stderr, "(boolean flags take an equals sign, or no value at all)\n")
-	os.Exit(2)
 }
 
 // allowFlag collects a repeatable -allow-* into a List, rejecting a bad
@@ -432,9 +335,6 @@ func startListener(cfg serveConfig) {
 	var shellArgv []string
 	if cfg.shellCmd != "" {
 		shellArgv = []string{cfg.shellCmd}
-	}
-	if cfg.shellRestrict && cfg.shellCmd == "" {
-		fail("serve: -shell-restrict needs -shell-cmd -- there is nothing to restrict it to")
 	}
 
 	if cfg.iceServersPath != "" {

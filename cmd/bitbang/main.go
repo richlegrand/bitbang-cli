@@ -67,40 +67,23 @@ func main() {
 	}
 }
 
-// dispatchServe routes `bitbang serve [mode] [flags]`. With no mode
-// (bare `serve` or `serve --flag`), runs the all-caps umbrella mode.
-// With `shell`, `forward`, `files`, or `proxy` as the next arg, runs that single
-// cap. Anything else after `serve` that starts with `-` is treated as
-// a flag to the all-mode; anything else is an unknown mode.
+// dispatchServe routes `bitbang serve ...`. There is one serve command now:
+// the capability words are arguments, not subcommands, so `serve shell` and
+// `serve shell proxy a:b` go down the same path.
 func dispatchServe(args []string) {
-	if len(args) == 0 || args[0] == "" || args[0][0] == '-' {
-		runServe(args)
-		return
-	}
-	switch args[0] {
-	case "shell":
-		runServeShell(args[1:])
-	case "forward":
-		runServeForward(args[1:])
-	case "files":
-		runServeFiles(args[1:])
-	case "proxy":
-		runServeProxy(args[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "bitbang serve: unknown mode %q (expected shell, forward, files, or proxy)\n\n", args[0])
-		printUsage()
-		os.Exit(2)
-	}
+	runServe(args)
 }
 
 func printUsage() {
 	fmt.Printf("%s v%s\n\n", banner, version)
 	fmt.Println("Usage:")
-	fmt.Println("  bitbang serve [flags]                  All caps (shell + forward + files + proxy)")
-	fmt.Println("  bitbang serve shell [flags]            Shell only")
-	fmt.Println("  bitbang serve forward [TARGET ...]     TCP forwarding only (TARGETs restrict it)")
-	fmt.Println("  bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)")
-	fmt.Println("  bitbang serve proxy [TARGET] [flags]   Proxy only (TARGET pins it; else chosen in browser)")
+	fmt.Println("  bitbang serve                          Everything: shell + proxy + files + forward")
+	fmt.Println("  bitbang serve WORD [ARG] ...           Name what to serve, in any combination:")
+	fmt.Println("      shell                                a terminal")
+	fmt.Println("      proxy [TARGET[,TARGET...]]           web apps; one target pins, several offer a choice")
+	fmt.Println("      files [PATH]                         a directory (default cwd)")
+	fmt.Println("      forward [HOST:PORT[,...]]            TCP for connect -L; targets restrict it")
+	fmt.Println("    e.g. bitbang serve shell files ~/share proxy nas.lan:8096")
 	fmt.Println("  bitbang share [flags]                  Publish the current tmux session as a URL")
 	fmt.Println("  bitbang share status|stop|rotate       Manage a running share")
 	fmt.Println("  bitbang link ls|edit|rm|qr             Manage a listener's access links")

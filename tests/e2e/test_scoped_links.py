@@ -29,7 +29,7 @@ def scoped(listener, test_server, target_app, tmp_path_factory):
     with open(os.path.join(shared, 'notes.txt'), 'w') as f:
         f.write('secret plans\n')
 
-    l = listener('serve', '-server', test_server, '-files', shared, home=home,
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home,
                  links=[{'label': 'contractor', 'scope': ['files']}])
     urls = l.await_links(['contractor'])
     assert 'owner' in urls
@@ -104,7 +104,7 @@ def test_revoking_a_link_closes_the_browser_session(pty_listener, test_server,
     with open(os.path.join(shared, 'notes.txt'), 'w') as f:
         f.write('secret plans\n')
 
-    l = pty_listener('serve', '-server', test_server, '-files', shared,
+    l = pty_listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server,
                      links=[{'label': 'contractor', 'scope': ['files']}])
 
     page = browser_context.new_page()
@@ -161,7 +161,7 @@ def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
     shared = str(tmp_path_factory.mktemp('capbar-share'))
     with open(os.path.join(shared, 'notes.txt'), 'w') as f:
         f.write('hi\n')
-    l = listener('serve', '-server', test_server, '-files', shared, home=home, links=[
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home, links=[
         {'label': 'filesproxy', 'scope': ['files', 'proxy']},
         {'label': 'filesonly', 'scope': ['files']},
     ])
@@ -209,7 +209,7 @@ def test_single_cap_link_has_no_cap_bar(listener, test_server, browser_context,
     shared = str(tmp_path_factory.mktemp('nobar-share'))
     with open(os.path.join(shared, 'notes.txt'), 'w') as f:
         f.write('hi\n')
-    l = listener('serve', '-server', test_server, '-files', shared, home=home,
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home,
                  links=[{'label': 'filesonly', 'scope': ['files']}])
     urls = l.await_links(['filesonly'])
 
@@ -229,7 +229,7 @@ def test_proxy_page_clears_the_caret_without_dropping(listener, test_server,
                                                       tmp_path_factory):
     home = str(tmp_path_factory.mktemp('proxycaret-home'))
     shared = str(tmp_path_factory.mktemp('proxycaret-share'))
-    l = listener('serve', '-server', test_server, '-files', shared, home=home,
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home,
                  links=[{'label': 'filesproxy', 'scope': ['files', 'proxy']}])
     urls = l.await_links(['filesproxy'])
 
