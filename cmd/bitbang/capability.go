@@ -175,7 +175,7 @@ var capabilities = []capability{
 		Scope:    links.ScopeProxy,
 		Build:    buildProxyHandlers,
 		Mount:    "/proxy/",
-		Web:      func(x capContext) http.Handler { return proxyweb.LandingHandler(x.capBar) },
+		Web:      func(x capContext) http.Handler { return proxyweb.LandingHandler(x.capBar, x.cfg.proxyTargets) },
 		Menu:     "Proxy",
 		MenuPath: "/proxy/",
 		Describe: describeProxy,

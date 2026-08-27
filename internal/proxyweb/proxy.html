@@ -48,6 +48,8 @@
         }
         button:hover { background: #f4f4f4; }
         .hint { margin-top: 10px; font-size: 12px; color: #999; }
+        input:disabled { background: #f6f6f6; color: #999; }
+        button:disabled { background: #f6f6f6; color: #aaa; cursor: default; }
         .err { margin-top: 10px; font-size: 13px; color: #c00; display: none; }
     </style>
 </head>
@@ -80,6 +82,13 @@
                 errEl.style.display = 'block';
                 return;
             }
+            bbOpen(target);
+        }
+
+        // Shared by the form and the chooser: bootstrap.js (the top frame)
+        // owns the access code and the sandbox forbids navigating the top
+        // frame from here, so ask it to move. Same message the cap bar sends.
+        function bbOpen(target) {
             parent.postMessage({type:'bb-open-cap', path:'/' + target + '/', newTab:false}, '*');
         }
     </script>
