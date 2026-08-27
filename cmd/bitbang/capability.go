@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/richlegrand/bitbang/internal/capbar"
+	"strings"
 
 	"fmt"
 	"io"
@@ -230,8 +231,8 @@ func fixedTargetMode(cfg serveConfig) bool {
 
 func describeShell(w io.Writer, x capContext) {
 	line := "  • shell  ("
-	if x.cfg.shellCmd != "" {
-		line += x.cfg.shellCmd
+	if len(x.cfg.shellArgv) > 0 {
+		line += strings.Join(x.cfg.shellArgv, " ")
 		if x.cfg.shellRestrict {
 			line += " only"
 		}

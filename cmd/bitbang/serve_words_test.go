@@ -14,6 +14,7 @@ func TestParseServeWords(t *testing.T) {
 		name  string
 		args  []string
 		caps  []string
+		shell []string
 		files string
 		proxy []string
 		fwd   []string
@@ -27,6 +28,28 @@ func TestParseServeWords(t *testing.T) {
 			name: "one word, no argument",
 			args: []string{"shell"},
 			caps: []string{links.ScopeShell},
+		},
+		{
+			name:  "a shell command is what it serves",
+			args:  []string{"shell", "/bin/zsh"},
+			caps:  []string{links.ScopeShell},
+			shell: []string{"/bin/zsh"},
+		},
+		{
+			// -shell-cmd took one token and spawned it as a single binary
+			// name, so `-shell-cmd "tmux attach"` failed with "no such file
+			// or directory". Words up to the next capability fix that.
+			name:  "a command may be several words",
+			args:  []string{"shell", "tmux", "attach"},
+			caps:  []string{links.ScopeShell},
+			shell: []string{"tmux", "attach"},
+		},
+		{
+			name:  "a command stops at the next capability word",
+			args:  []string{"shell", "tmux", "attach", "files", "/srv"},
+			caps:  []string{links.ScopeShell, links.ScopeFiles},
+			shell: []string{"tmux", "attach"},
+			files: "/srv",
 		},
 		{
 			name:  "the single-capability forms parse as they did before",
@@ -78,6 +101,9 @@ func TestParseServeWords(t *testing.T) {
 			if !reflect.DeepEqual(map[string]bool(plan.caps), map[string]bool(want)) {
 				t.Errorf("caps = %v, want %v", plan.caps, want)
 			}
+			if !reflect.DeepEqual(plan.shellArgv, c.shell) {
+				t.Errorf("shellArgv = %v, want %v", plan.shellArgv, c.shell)
+			}
 			if plan.filesPath != c.files {
 				t.Errorf("filesPath = %q, want %q", plan.filesPath, c.files)
 			}
@@ -98,7 +124,6 @@ func TestParseServeWordsRejections(t *testing.T) {
 	}{
 		{[]string{"wat"}, "not something to serve"},
 		{[]string{"proxy", "a:1", "proxy", "b:2"}, "named twice"},
-		{[]string{"shell", "/bin/bash"}, "shell takes no argument"},
 	}
 	for _, c := range cases {
 		_, err := parseServeWords(c.args)

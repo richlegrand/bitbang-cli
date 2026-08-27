@@ -417,11 +417,12 @@ bitbang serve proxy nas.lan:8096                 one web app, straight at the UR
 bitbang serve proxy a.lan:80,b.lan:80            several, chosen in the browser
 bitbang serve forward 127.0.0.1:22               TCP for connect -L, one target
 bitbang serve shell files ~/share proxy nas.lan:8096 forward db:5432
+bitbang serve shell tmux attach                  a command, which may be several words
 ```
 
 | Word              | Argument                        | Without one                      |
 | ----------------- | ------------------------------- | -------------------------------- |
-| `shell`           | none -- see `-shell-cmd`        | --                               |
+| `shell [COMMAND…]`| the command to run              | `$SHELL`, or `%COMSPEC%` on Windows |
 | `files [PATH]`    | a directory or file             | the working directory            |
 | `proxy [TARGET…]` | one target, or a comma list     | the browser names its own        |
 | `forward [HOST:PORT…]` | one target, or a comma list | any host:port the listener can reach |
@@ -448,8 +449,7 @@ does nothing.
 | `-ice-servers PATH`        | --        | (ours)         | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                              |
 | `-nocode`                  | --        | off            | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. For headless listeners that can't complete the SAS prompt. |
 | `-v`                       | --        | off            | Verbose logging (adds the browser `!debug` overlay)                                                                  |
-| `-shell-cmd CMD`           | `shell`   | platform shell | `$SHELL`/`/bin/sh` on Unix; `%COMSPEC%`/`cmd.exe` on Windows                                                         |
-| `-shell-restrict`          | `shell`   | off            | Run only `-shell-cmd`; refuse a command the connector supplies                                                       |
+| `-shell-restrict`          | `shell`   | off            | Run only the command named after `shell`; refuse one the connector supplies                                          |
 | `-shell-max-sessions N`    | `shell`   | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
 | `-disable-shell-mirror`    | `shell`   | off            | Stop echoing shell output to the listener's console                                                                  |
 | `-files-upload`            | `files`   | off            | Allow uploads into the shared directory                                                                              |

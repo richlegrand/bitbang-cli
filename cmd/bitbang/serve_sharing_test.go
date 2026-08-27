@@ -54,7 +54,7 @@ func TestSharingBlock(t *testing.T) {
 		},
 		{
 			name: "shell with a command, session cap, and mirroring",
-			cfg: serveConfig{caps: capsOf(links.ScopeShell), shellCmd: "/bin/zsh",
+			cfg: serveConfig{caps: capsOf(links.ScopeShell), shellArgv: []string{"/bin/zsh"},
 				shellMaxSessions: 3},
 			want: []string{
 				"Sharing:",

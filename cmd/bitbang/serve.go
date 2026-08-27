@@ -85,7 +85,9 @@ type serveConfig struct {
 	caps capSet
 
 	// Shell-cap configuration (only meaningful when caps includes shell).
-	shellCmd         string
+	// shellArgv is the command a shell runs, from the words after `shell`.
+	// Empty means the platform shell.
+	shellArgv        []string
 	shellMaxSessions int
 
 	// disableShellMirror turns off echoing shell output to the listener's
@@ -94,7 +96,7 @@ type serveConfig struct {
 	// equals sign is the kind of thing people get wrong once and never find.
 	disableShellMirror bool
 
-	// shellRestrict pins every shell to shellCmd. Without it shellCmd is
+	// shellRestrict pins every shell to shellArgv. Without it the command is
 	// only a default, which a CLI connector overrides by supplying its own
 	// argv (`connect <url> -- cat /etc/passwd`).
 	shellRestrict bool
@@ -147,8 +149,8 @@ func runServe(args []string) {
 		}
 		cfg.filesPath = cwd
 	}
-	if cfg.shellRestrict && cfg.shellCmd == "" {
-		fail("serve: -shell-restrict needs -shell-cmd -- there is nothing to restrict it to")
+	if cfg.shellRestrict && len(cfg.shellArgv) == 0 {
+		fail("serve: -shell-restrict needs a command after `shell` -- there is nothing to restrict it to")
 	}
 
 	startListener(cfg)
@@ -251,7 +253,6 @@ func hideFlags(fs *flag.FlagSet, names ...string) {
 // registerShellFlags wires the shell-specific flags. Used by both
 // `serve` (all-mode) and `serve shell` since both expose a shell.
 func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.StringVar(&cfg.shellCmd, "shell-cmd", "", "Shell command to spawn (default: "+defaultShellLabel()+")")
 	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", defaultShellMaxSessions, "Max concurrent shell sessions (0 = unlimited)")
 	fs.BoolVar(&cfg.disableShellMirror, "disable-shell-mirror", false, "Stop echoing shell output to the listener's console")
 	fs.BoolVar(&cfg.shellRestrict, "shell-restrict", false, "Run only -shell-cmd; refuse a command supplied by the connector (requires -shell-cmd)")
@@ -332,10 +333,7 @@ func startListener(cfg serveConfig) {
 		share = s
 	}
 
-	var shellArgv []string
-	if cfg.shellCmd != "" {
-		shellArgv = []string{cfg.shellCmd}
-	}
+	shellArgv := cfg.shellArgv
 
 	if cfg.iceServersPath != "" {
 		path, err := resolveFSPath(cfg.iceServersPath)

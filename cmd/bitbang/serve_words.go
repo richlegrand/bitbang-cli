@@ -39,7 +39,8 @@ var capWordOrder = []string{"files", "proxy", "forward", "shell"}
 // servePlan is what the words asked for, before defaults are applied.
 type servePlan struct {
 	caps         capSet
-	filesPath    string // "" means cwd
+	shellArgv    []string // nil means the platform shell
+	filesPath    string   // "" means cwd
 	proxyTargets []string
 	forwardAllow []string
 }
@@ -88,9 +89,20 @@ func parseServeWords(args []string) (servePlan, error) {
 
 		switch word {
 		case "shell":
+			// A command is not one token: `shell tmux attach` has to work,
+			// and as a flag it could not -- -shell-cmd took a single string
+			// and spawned it as one binary name, so a two-word value failed
+			// with "no such file or directory". Everything up to the next
+			// capability word is the command.
 			if arg != "" {
-				return servePlan{}, fmt.Errorf(
-					"shell takes no argument (%q); the command to run is -shell-cmd", arg)
+				plan.shellArgv = append(plan.shellArgv, arg)
+				for i+1 < len(args) {
+					if _, isWord := capWords[args[i+1]]; isWord {
+						break
+					}
+					plan.shellArgv = append(plan.shellArgv, args[i+1])
+					i++
+				}
 			}
 		case "files":
 			plan.filesPath = arg
@@ -120,6 +132,7 @@ func splitList(arg string) []string {
 // behavior that depends on how many targets a proxy was given.
 func applyPlan(cfg *serveConfig, plan servePlan) error {
 	cfg.caps = plan.caps
+	cfg.shellArgv = plan.shellArgv
 	cfg.filesPath = plan.filesPath
 
 	// A single proxy target pins: with nothing else served, the bare device
@@ -155,7 +168,7 @@ func applyPlan(cfg *serveConfig, plan servePlan) error {
 // to happen after the words are known.
 func rejectFlagsWithoutCapability(set map[string]bool, cfg serveConfig) {
 	needs := map[string]string{
-		"shell-cmd": links.ScopeShell, "shell-max-sessions": links.ScopeShell,
+		"shell-max-sessions":   links.ScopeShell,
 		"disable-shell-mirror": links.ScopeShell, "shell-restrict": links.ScopeShell,
 		"files-upload":    links.ScopeFiles,
 		"proxy-client-ip": links.ScopeProxy, "allow-proxy": links.ScopeProxy,

@@ -16,7 +16,7 @@ func TestShellRestrictPinsTheCommand(t *testing.T) {
 	argv := []string{"/bin/login"}
 
 	unrestricted := shellHandlerFor(t, serveConfig{
-		caps: capsOf(links.ScopeShell), shellCmd: "/bin/login",
+		caps: capsOf(links.ScopeShell), shellArgv: []string{"/bin/login"},
 	}, argv)
 	if len(unrestricted.ForcedArgv) != 0 {
 		t.Errorf("ForcedArgv = %v without -shell-restrict; -shell-cmd must stay a default",
@@ -27,7 +27,7 @@ func TestShellRestrictPinsTheCommand(t *testing.T) {
 	}
 
 	restricted := shellHandlerFor(t, serveConfig{
-		caps: capsOf(links.ScopeShell), shellCmd: "/bin/login", shellRestrict: true,
+		caps: capsOf(links.ScopeShell), shellArgv: []string{"/bin/login"}, shellRestrict: true,
 	}, argv)
 	if got := restricted.ForcedArgv; len(got) != 1 || got[0] != "/bin/login" {
 		t.Errorf("ForcedArgv = %v with -shell-restrict, want the -shell-cmd argv", got)
@@ -39,7 +39,7 @@ func TestShellRestrictPinsTheCommand(t *testing.T) {
 func TestSharingBlockSaysWhenTheShellIsPinned(t *testing.T) {
 	var b strings.Builder
 	printSharingBlock(&b, serveConfig{
-		caps: capsOf(links.ScopeShell), shellCmd: "/bin/login",
+		caps: capsOf(links.ScopeShell), shellArgv: []string{"/bin/login"},
 		shellRestrict: true, shellMaxSessions: defaultShellMaxSessions,
 	}, nil)
 	if !strings.Contains(b.String(), "/bin/login only") {
