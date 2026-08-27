@@ -275,7 +275,7 @@ func TestScopeMenuSaysWhatForwardReaches(t *testing.T) {
 }
 
 // And when the listener is pinned, the menu should say so -- that is what
-// makes -allow-forward visible at the moment it matters.
+// makes a pinned listener visible at the moment it matters.
 func TestScopeMenuNamesTheAllowlist(t *testing.T) {
 	a := &scriptedAsker{t: t, answers: []string{"3", "1", "label-b"}}
 	_, _ = grantQuestions(a, links.Terms{}, allScopes, nil, time.Now(),

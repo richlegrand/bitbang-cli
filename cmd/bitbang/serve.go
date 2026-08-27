@@ -118,9 +118,7 @@ func runServe(args []string) {
 	var cfg serveConfig
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)
-	registerForwardFlags(fs, &cfg)
 	registerFilesFlags(fs, &cfg)
-	registerProxyFlags(fs, &cfg)
 	registerFixedProxyFlags(fs, &cfg)
 
 	fs.Parse(reorderArgs(fs, args))
@@ -171,13 +169,6 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	hideFlags(fs, "video-fd")
 }
 
-// registerProxyFlags wires the flags a proxy takes wherever it is served.
-// Registering flags everywhere is how `serve files -target x` came to be
-// accepted and silently ignored.
-func registerProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.Var(&allowFlag{&cfg.allowProxy}, "allow-proxy", "`HOST:PORT` the proxy may reach, or HOST for any port. Repeatable, or comma-separated. Default unrestricted")
-}
-
 // registerFixedProxyFlags wires the flags that only mean something in
 // fixed-target mode, which `bitbang serve` cannot enter: pinning the whole URL
 // to one app is incompatible with routing /shell/ and /files/. Registered on
@@ -191,39 +182,6 @@ func registerFixedProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
 // them: it is what is served, so it is the argument to the `files` word.
 func registerFilesFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
-}
-
-// registerForwardFlags wires the forward-specific flags.
-func registerForwardFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.Var(&allowFlag{&cfg.allowForward}, "allow-forward", "`HOST:PORT` that connect -L may reach, or HOST for any port. Repeatable, or comma-separated; the same as naming targets after `serve forward`. Default unrestricted")
-}
-
-// allowFlag collects a repeatable -allow-* into a List, rejecting a bad
-// target at parse time rather than at the first connection that trips it.
-//
-// One value may carry several targets separated by commas. The single-cap
-// modes take them positionally (`serve forward a:22 b:80`), which is tidier,
-// but `bitbang serve` has no positional slot -- without a list syntax it is
-// the flag repeated once per target.
-//
-// Comma is unambiguous here: IPv6 addresses use colons and are bracketed, and
-// a hostname cannot contain one.
-type allowFlag struct{ list *allowlist.List }
-
-func (a *allowFlag) String() string {
-	if a == nil || a.list == nil {
-		return ""
-	}
-	return a.list.String()
-}
-
-func (a *allowFlag) Set(v string) error {
-	parsed, err := allowlist.Parse(strings.Split(v, ","))
-	if err != nil {
-		return err
-	}
-	*a.list = append(*a.list, parsed...)
-	return nil
 }
 
 // hideFlags keeps internal plumbing out of -h without unregistering it.

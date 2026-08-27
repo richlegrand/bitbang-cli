@@ -70,7 +70,7 @@ func TestForwardAllowlistIsPerPort(t *testing.T) {
 	}
 }
 
-// A listener started without -allow-forward keeps reaching anything.
+// A listener that named no targets keeps reaching anything.
 func TestForwardWithoutAllowlistIsUnrestricted(t *testing.T) {
 	h := NewTCP(false, nil)
 	h.DialContext = func(context.Context, string, string) (net.Conn, error) {

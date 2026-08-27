@@ -137,7 +137,7 @@ func TestSharingBlock(t *testing.T) {
 	}
 }
 
-// A forward listener started with -allow-forward must say what it can
+// A forward listener given targets must say what it can
 // actually reach. "unrestricted targets" on a restricted listener would be
 // worse than saying nothing.
 func TestSharingBlockNamesAllowedForwards(t *testing.T) {

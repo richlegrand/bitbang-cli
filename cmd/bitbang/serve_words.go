@@ -15,16 +15,12 @@ import (
 //	bitbang serve shell proxy a:b,c:d files /home/rich forward g:h,i:j
 //
 // One rule holds it together: a positional says *what* is being served, a flag
-// says *how*. `proxy a:b` and `files /srv` are what; -files-upload, -shell-cmd
-// and -proxy-client-ip are how. Before this there was no rule -- the files path
-// was positional on one subcommand and a flag on another, the proxy target was
-// a positional whose neighbouring flag meant something else, and forwarding's
-// allowlist was both at once. Every question anyone asked about these flags
-// came from having nothing to appeal to.
+// says *how*. `proxy a:b` and `files /srv` are what; -files-upload and
+// -proxy-client-ip are how. A target therefore has exactly one spelling -- the
+// argument to its word -- and no flag repeats it.
 //
-// Bare `bitbang serve` still means all four, and every single-capability form
-// (`serve files ~/share`, `serve proxy host:port`) parses the same as it always
-// did -- they are just this grammar with one word.
+// Bare `bitbang serve` means all four: the listener you want when you have not
+// decided yet, and the only form the grammar does not spell out.
 var capWords = map[string]string{
 	"shell":   links.ScopeShell,
 	"files":   links.ScopeFiles,
@@ -56,7 +52,7 @@ type servePlan struct {
 func parseServeWords(args []string) (servePlan, error) {
 	plan := servePlan{caps: capsOf()}
 	if len(args) == 0 {
-		// Bare `serve`: everything, as it has always meant.
+		// Bare `serve`: everything.
 		return servePlan{caps: capsOf(
 			links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy)}, nil
 	}
@@ -163,16 +159,14 @@ func applyPlan(cfg *serveConfig, plan servePlan) error {
 }
 
 // rejectFlagsWithoutCapability turns "that flag does nothing here" into an
-// error naming what is missing. With one `serve` command every capability flag
-// is registered, so the check that used to be per-subcommand registration has
-// to happen after the words are known.
+// error naming what is missing. One `serve` command registers every capability
+// flag, so which ones apply is only known once the words are parsed.
 func rejectFlagsWithoutCapability(set map[string]bool, cfg serveConfig) {
 	needs := map[string]string{
 		"shell-max-sessions":   links.ScopeShell,
 		"disable-shell-mirror": links.ScopeShell, "shell-restrict": links.ScopeShell,
 		"files-upload":    links.ScopeFiles,
-		"proxy-client-ip": links.ScopeProxy, "allow-proxy": links.ScopeProxy,
-		"allow-forward": links.ScopeForward,
+		"proxy-client-ip": links.ScopeProxy,
 	}
 	for name, scope := range needs {
 		if set[name] && !cfg.caps.has(scope) {

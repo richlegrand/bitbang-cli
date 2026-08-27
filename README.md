@@ -96,9 +96,8 @@ to.
 
 One default worth knowing: **forwarding and the proxy reach any host:port the
 listener can reach**, not only the one you had in mind, so a link handed out
-for a database also reaches the rest of that network. `-allow-forward` and
-`-allow-proxy` narrow that, and the positional form above is shorthand for
-them.
+for a database also reaches the rest of that network. Naming targets after the
+word narrows it -- `forward db.internal:5432` reaches that and nothing else.
 
 ### Sharing a running session: `bitbang share`
 
@@ -272,7 +271,7 @@ credential in front of it.
 The listener needs `bitbang serve forward` or `bitbang serve`. By default a
 `forward` link reaches **any host:port the listener can reach**, not only the
 one you had in mind, so a link handed out for a database also reaches the rest
-of that network. Narrow it with `-allow-forward`:
+of that network. Narrow it by naming what it may reach:
 
 ```
 bitbang serve forward db.internal:5432        # this link reaches one service
@@ -453,9 +452,7 @@ does nothing.
 | `-shell-max-sessions N`    | `shell`   | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
 | `-disable-shell-mirror`    | `shell`   | off            | Stop echoing shell output to the listener's console                                                                  |
 | `-files-upload`            | `files`   | off            | Allow uploads into the shared directory                                                                              |
-| `-allow-proxy HOST:PORT`   | `proxy`   | (unrestricted) | Narrow what the browser may reach, beyond the targets named. Repeatable, or comma-separated.                          |
 | `-proxy-client-ip`         | `proxy`   | off            | Stamp the real browser IP as `X-Forwarded-For`. Enable only when the backend trusts localhost for auth.               |
-| `-allow-forward HOST:PORT` | `forward` | (unrestricted) | Narrow what `connect -L` may reach, beyond the targets named. Repeatable, or comma-separated.                          |
 
 **Targets are matched as written and never resolved**: allowing
 `192.168.1.50:22` does not allow `nas.lan:22` even when the name points there.
@@ -493,7 +490,7 @@ socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 | Entry field | Meaning                                                                      |
 |-------------|------------------------------------------------------------------------------|
 | `label`     | Names the link; identifies it to `rm` and `qr`, and must be unique             |
-| `scope`     | Any of `files`, `shell`, `forward`, `proxy`. Omit for everything the listener serves. `forward` reaches any host:port the listener can reach unless `-allow-forward` narrows it |
+| `scope`     | Any of `files`, `shell`, `forward`, `proxy`. Omit for everything the listener serves. `forward` reaches any host:port the listener can reach unless targets were named after the word |
 | `expires`   | RFC 3339 timestamp. Omit for a link that does not lapse                        |
 | `code`      | Filled in by the listener on reload. Leave it out to have one minted           |
 

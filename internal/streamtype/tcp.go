@@ -35,7 +35,7 @@ type TCPHandler struct {
 
 	// Allow restricts which targets this listener will dial. Empty means
 	// every host:port it can reach, which is what a listener started
-	// without -allow-forward offers.
+	// that named no targets after `forward` offers.
 	Allow allowlist.List
 
 	ctx     context.Context

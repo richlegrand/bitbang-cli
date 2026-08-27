@@ -47,7 +47,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		dispatchServe(os.Args[2:])
+		runServe(os.Args[2:])
 	case "share":
 		dispatchShare(os.Args[2:])
 	case "link":
@@ -65,13 +65,6 @@ func main() {
 		printUsage()
 		os.Exit(2)
 	}
-}
-
-// dispatchServe routes `bitbang serve ...`. There is one serve command now:
-// the capability words are arguments, not subcommands, so `serve shell` and
-// `serve shell proxy a:b` go down the same path.
-func dispatchServe(args []string) {
-	runServe(args)
 }
 
 func printUsage() {

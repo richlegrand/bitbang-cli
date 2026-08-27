@@ -48,7 +48,7 @@ type HTTPHandler struct {
 
 	// Allow restricts which targets this listener will proxy to. Empty
 	// means anything it can reach, which is what a listener started
-	// without -allow-proxy offers. Only dynamic-target mode can reach
+	// that named no targets after `proxy` offers. Only dynamic-target mode can reach
 	// more than one target, but the check covers both so there is one
 	// answer to "where can this listener connect".
 	Allow allowlist.List

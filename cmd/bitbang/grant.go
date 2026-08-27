@@ -94,7 +94,7 @@ func reachOf(cfg serveConfig) scopeReach {
 // helpFor is scopeHelp, but naming the allowlist when the listener has one.
 // A pinned listener should say so here -- the operator gets to see that the
 // link they are minting is genuinely narrow, which is the reward for having
-// set -allow-forward in the first place.
+// named targets after `forward` in the first place.
 func (r scopeReach) helpFor(scope string) string {
 	switch {
 	case scope == links.ScopeForward && r.forward != "":
