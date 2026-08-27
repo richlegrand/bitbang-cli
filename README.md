@@ -7,14 +7,28 @@
 
 ## How it compares
 
-|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | frp                                 | `bitbang`           |
-| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ----------------------------------- | ------------------- |
-| Account required                   | Yes                 | Yes               | Yes                            | No                                  | **No**              |
-| Install on the connecting side     | No                  | No                | **Yes**                        | No (**Yes** for P2P mode)           | **No** (browser)    |
-| End-to-end encrypted               | Not by default      | No                | Yes                            | No -- your server sees traffic      | **Yes**             |
-| Data path                          | Their servers       | Their servers     | P2P                            | Your server (P2P optional)          | **P2P**             |
-| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                             | **Yes**             |
-| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | A public-IP server + TOML both ends | **Run one command** |
+|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | tailcat                   | frp                                 | `bitbang`           |
+| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ------------------------- | ----------------------------------- | ------------------- |
+| Account required                   | Yes                 | Yes               | Yes                            | No                        | No                                  | **No**              |
+| Browser access: what's included    | BYO web server      | BYO web server    | BYO web server, install client on browser's machine | files and text | BYO web server            | **a terminal, a file browser, and web apps on the remote network** |
+| Browser access: data path          | their servers       | their servers     | P2P (relay fallback)           | relay only, no direct     | your server                         | **direct P2P**      |
+| Data path, CLI to CLI              | their servers       | their servers     | P2P (relay fallback)           | P2P (relay fallback)      | your server (P2P optional)          | **P2P (relay fallback)** |
+| End-to-end encrypted               | Not by default      | No                | Yes                            | Yes                       | No -- your server sees traffic      | **Yes**             |
+| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                   | **Yes**                             | **Yes**             |
+| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | **Run one command**       | A public-IP server + TOML both ends | **Run one command** |
+
+[tailcat](https://github.com/tailscale/tailcat) is the closest thing here: no
+account, one static binary, WireGuard end to end, and a direct path when hole
+punching works. The difference is that it needs its binary on both ends.
+`bitbang` was built the other way round: the far end opens a URL and gets a
+terminal, a file browser, and web apps on the remote network -- on a phone if
+that is what is to hand.
+
+That is what the two browser rows are for. Everything else here that a browser
+can open only hands back a web server you were already running -- install ttyd
+first if you want a terminal -- and hands it back through somebody's servers.
+tailcat's browser build moves files and text, and by its own README is
+*"relayed over DERP only, with no direct connections"*.
 
 ![Install bitbang, run bitbang serve, and open the printed URL in a browser to get a shell, a file browser, and a proxy to the machine's network](assets/demo.webp)
 
