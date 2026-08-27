@@ -11,9 +11,9 @@ import (
 	"github.com/pion/webrtc/v4"
 	qrcode "github.com/skip2/go-qrcode"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
@@ -61,11 +61,6 @@ type serveConfig struct {
 	// the plain device URL is the app, with no landing page.
 	target string
 
-	// proxyTargets is every target the proxy was given, in the order typed.
-	// One is the pin above; several are offered as a choice. Empty means the
-	// browser names its own.
-	proxyTargets []string
-
 	// proxyClientIP stamps the real browser IP as X-Forwarded-For on
 	// proxied requests (fixed-target mode only). Off by default: the
 	// OctoPrint plugin enables it ONLY when OctoPrint is configured to make
@@ -73,10 +68,10 @@ type serveConfig struct {
 	// case doesn't trip OctoPrint's "external access" warning needlessly.
 	proxyClientIP bool
 
-	// allowProxy and allowForward restrict which targets each capability
-	// will reach. Empty means every host:port the listener can reach.
-	allowProxy   allowlist.List
-	allowForward allowlist.List
+	// offered is the listener's grant, parsed: the ceiling every link is
+	// narrowed against, and where the target lists live. The fields around
+	// it are conveniences derived from it, never a second source of truth.
+	offered grant.Spec
 
 	// caps is what this mode offers, named in the scope vocabulary links
 	// uses. It is the only place the cap set is written down: what to
@@ -95,11 +90,6 @@ type serveConfig struct {
 	// defaults to true can only be turned off as `-flag=false`, and the
 	// equals sign is the kind of thing people get wrong once and never find.
 	disableShellMirror bool
-
-	// shellRestrict pins every shell to shellArgv. Without it the command is
-	// only a default, which a CLI connector overrides by supplying its own
-	// argv (`connect <url> -- cat /etc/passwd`).
-	shellRestrict bool
 
 	// Files-cap configuration (only meaningful when caps includes files).
 	filesPath   string
@@ -123,12 +113,12 @@ func runServe(args []string) {
 
 	fs.Parse(reorderArgs(fs, args))
 
-	plan, err := parseServeWords(fs.Args())
+	spec, err := grant.Parse(fs.Args())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bitbang serve: %v\n", err)
 		os.Exit(2)
 	}
-	if err := applyPlan(&cfg, plan); err != nil {
+	if err := applySpec(&cfg, spec); err != nil {
 		fmt.Fprintf(os.Stderr, "bitbang serve: %v\n", err)
 		os.Exit(2)
 	}
@@ -147,10 +137,6 @@ func runServe(args []string) {
 		}
 		cfg.filesPath = cwd
 	}
-	if cfg.shellRestrict && len(cfg.shellArgv) == 0 {
-		fail("serve: -shell-restrict needs a command after `shell` -- there is nothing to restrict it to")
-	}
-
 	startListener(cfg)
 }
 
@@ -213,7 +199,6 @@ func hideFlags(fs *flag.FlagSet, names ...string) {
 func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", defaultShellMaxSessions, "Max concurrent shell sessions (0 = unlimited)")
 	fs.BoolVar(&cfg.disableShellMirror, "disable-shell-mirror", false, "Stop echoing shell output to the listener's console")
-	fs.BoolVar(&cfg.shellRestrict, "shell-restrict", false, "Run only -shell-cmd; refuse a command supplied by the connector (requires -shell-cmd)")
 }
 
 // startListener is the shared listener loop. Given a populated
@@ -376,7 +361,7 @@ func startListener(cfg serveConfig) {
 	// `serve files -files /srv` and `serve all` derive different program
 	// names and therefore have separate tables. An ephemeral identity has
 	// no directory to keep one in, so it runs on the implicit row alone.
-	linkState, err := newLinkState(program, offeredScopes(cfg), id.Code,
+	linkState, err := newLinkState(program, cfg.offered, id.Code,
 		cfg.ephemeral, signalingClient.CodeURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Link table error: %v\n", err)

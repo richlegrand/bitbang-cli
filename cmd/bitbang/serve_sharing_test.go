@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/fileshare"
 	"github.com/richlegrand/bitbang/internal/links"
 )
@@ -59,7 +58,7 @@ func TestSharingBlock(t *testing.T) {
 				shellMaxSessions: 3},
 			want: []string{
 				"Sharing:",
-				"  • shell  (/bin/zsh, max 3 concurrent sessions, mirroring to console)",
+				"  • shell  (/bin/zsh only, max 3 concurrent sessions, mirroring to console)",
 				"",
 			},
 		},
@@ -141,15 +140,12 @@ func TestSharingBlock(t *testing.T) {
 // actually reach. "unrestricted targets" on a restricted listener would be
 // worse than saying nothing.
 func TestSharingBlockNamesAllowedForwards(t *testing.T) {
-	allow, err := allowlist.Parse([]string{"127.0.0.1:22", "nas.lan"})
-	if err != nil {
+	var cfg serveConfig
+	if err := applySpec(&cfg, mustSpec(t, "forward 127.0.0.1:22,nas.lan")); err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	printSharingBlock(&buf, serveConfig{
-		caps:         capsOf(links.ScopeForward),
-		allowForward: allow,
-	}, nil)
+	printSharingBlock(&buf, cfg, nil)
 	got := buf.String()
 	if strings.Contains(got, "unrestricted") {
 		t.Errorf("sharing block says unrestricted on a restricted listener:\n%s", got)

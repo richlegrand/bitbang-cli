@@ -213,12 +213,16 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
-// TestUnrestrictedStillHonorsClientArgv guards the default path: the
-// hardening must not change `serve shell` behavior for peers that are
-// supposed to choose their own command.
-func TestUnrestrictedStillHonorsClientArgv(t *testing.T) {
+// TestUnpinnedHonorsClientArgv guards the open path: a listener that named
+// no command still lets the connector choose one, which is what plain
+// `bitbang serve shell` is for.
+//
+// Naming a command is the only thing that closes this path, and it closes
+// it completely -- there is no in-between where the listener names one and
+// the connector may still replace it.
+func TestUnpinnedHonorsClientArgv(t *testing.T) {
 	skipIfWindows(t)
-	h := NewShell([]string{"/bin/echo", "default"}, false)
+	h := NewShell(nil, false)
 
 	s := newShellCapture()
 	syn, _ := json.Marshal(shellOpen{Type: "shell", Argv: []string{"/bin/echo", "client"}})

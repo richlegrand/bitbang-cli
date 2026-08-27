@@ -10,23 +10,12 @@ import (
 	"strings"
 
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
 	"github.com/richlegrand/bitbang/internal/shellweb"
 	"github.com/richlegrand/bitbang/internal/streamtype"
 )
-
-// offeredScopes lists what this listener supports, which is what an absent
-// scope on a link resolves to and what a requested one is intersected with.
-func offeredScopes(cfg serveConfig) []string {
-	var out []string
-	for _, c := range capabilities {
-		if cfg.caps.has(c.Scope) {
-			out = append(out, c.Scope)
-		}
-	}
-	return out
-}
 
 // sessionHandlers is the stream-handler set for one peer, plus the two
 // handlers whose resources outlive a stream and must be closed when the
@@ -47,16 +36,16 @@ type sessionHandlers struct {
 // not advertise the 'shell' capability"; and OnConnect never runs for a
 // handler that was never built, which matters because the HTTP proxy's
 // OnConnect resolves and probes its target.
-func buildHandlers(cfg serveConfig, granted map[string]bool, share *fileshare.FileShare,
-	shellArgv []string, id *identity.Identity, browserIP string, mirror io.Writer,
+func buildHandlers(cfg serveConfig, eff grant.Spec, share *fileshare.FileShare,
+	id *identity.Identity, browserIP string, mirror io.Writer,
 	owner bool) sessionHandlers {
 
-	x := capContext{cfg: cfg, share: share, shellArgv: shellArgv, id: id,
-		browserIP: browserIP, granted: granted, mirror: mirror, owner: owner}
+	x := capContext{cfg: cfg, share: share, id: id,
+		browserIP: browserIP, eff: eff, mirror: mirror, owner: owner}
 
 	var out sessionHandlers
 	for _, c := range capabilities {
-		if !x.reaches(c.Scope) {
+		if !x.eff.Has(c.Scope) {
 			continue
 		}
 		for _, h := range c.Build(x) {
@@ -84,7 +73,7 @@ func buildHandlers(cfg serveConfig, granted map[string]bool, share *fileshare.Fi
 	// the link reaches proxy, and a nil proxy is already how the dispatcher
 	// is told there is none.
 	var proxyHTTP streamtype.StreamHandler
-	if x.reaches(links.ScopeProxy) {
+	if x.eff.Has(links.ScopeProxy) {
 		proxyHTTP = dynamicProxy(x)
 	}
 	local := streamtype.NewHTTPLocal(buildServeHTTPHandler(x), cfg.verbose)
@@ -117,7 +106,7 @@ func buildServeHTTPHandler(x capContext) http.Handler {
 	}
 	var live []mounted
 	for _, c := range capabilities {
-		if c.Web == nil || !x.reaches(c.Scope) {
+		if c.Web == nil || !x.eff.Has(c.Scope) {
 			continue
 		}
 		if h := c.Web(x); h != nil {
@@ -150,7 +139,7 @@ func buildServeHTTPHandler(x capContext) http.Handler {
 
 	// "/" is the launcher tab: shell plus the strip. Without shell, the
 	// first granted cap takes the root instead.
-	if x.reaches(links.ScopeShell) {
+	if x.eff.Has(links.ScopeShell) {
 		mux.Handle("/", launcher)
 	} else {
 		mux.Handle("/", live[0].handler)
@@ -173,7 +162,7 @@ func buildServeHTTPHandler(x capContext) http.Handler {
 func noBrowserPage(x capContext) http.Handler {
 	var granted []string
 	for _, c := range capabilities {
-		if x.reaches(c.Scope) {
+		if x.eff.Has(c.Scope) {
 			granted = append(granted, c.Scope)
 		}
 	}
@@ -226,7 +215,7 @@ allows. No CLI yet?</p>
 func capBarItems(x capContext) []capbar.Item {
 	var items []capbar.Item
 	for _, c := range capabilities {
-		if c.Menu == "" || !x.reaches(c.Scope) {
+		if c.Menu == "" || !x.eff.Has(c.Scope) {
 			continue
 		}
 		if c.MenuWhen != nil && !c.MenuWhen(x) {
@@ -235,8 +224,8 @@ func capBarItems(x capContext) []capbar.Item {
 		// A proxy given several targets is several entries: the caret is
 		// where someone picks one, so listing them there is what makes a
 		// multi-target proxy usable without a landing page in between.
-		if c.Scope == links.ScopeProxy && len(x.cfg.proxyTargets) > 1 {
-			for _, t := range x.cfg.proxyTargets {
+		if c.Scope == links.ScopeProxy && len(x.eff.ProxyTargets) > 1 {
+			for _, t := range x.eff.ProxyTargets {
 				items = append(items, capbar.Item{
 					Label: c.Menu + " " + t,
 					Path:  c.MenuPath + t + "/",
@@ -247,10 +236,10 @@ func capBarItems(x capContext) []capbar.Item {
 		// A single pinned target needs no landing page either -- go
 		// straight there, the way the whole URL would if nothing else
 		// were served.
-		if c.Scope == links.ScopeProxy && len(x.cfg.proxyTargets) == 1 && !fixedTargetMode(x.cfg) {
+		if c.Scope == links.ScopeProxy && len(x.eff.ProxyTargets) == 1 && !fixedTargetMode(x.cfg) {
 			items = append(items, capbar.Item{
-				Label: c.Menu + " " + x.cfg.proxyTargets[0],
-				Path:  c.MenuPath + x.cfg.proxyTargets[0] + "/",
+				Label: c.Menu + " " + x.eff.ProxyTargets[0],
+				Path:  c.MenuPath + x.eff.ProxyTargets[0] + "/",
 			})
 			continue
 		}

@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
 	"github.com/richlegrand/bitbang/internal/proxyweb"
@@ -34,15 +36,16 @@ func (c capSet) has(name string) bool { return c[name] }
 type capContext struct {
 	cfg       serveConfig
 	share     *fileshare.FileShare
-	shellArgv []string
 	id        *identity.Identity
 	browserIP string
 	// mirror is where shell output is echoed for the operator, held while
 	// a prompt is on screen.
 	mirror io.Writer
-	// granted is what this peer's link allows, which is what decides
-	// whether a capability contributes at all.
-	granted map[string]bool
+	// eff is what this peer's link actually reaches: the listener's grant
+	// narrowed by the link's. It decides which capabilities contribute and
+	// what each of them is pointed at, so a link can hand out one forward
+	// target, one proxy, or a subdirectory without a second mechanism.
+	eff grant.Spec
 	// owner is true when this peer presented the device's own code
 	// rather than a link. Only shell displacement reads it.
 	owner bool
@@ -52,8 +55,7 @@ type capContext struct {
 	capBar []capbar.Item
 }
 
-func (x capContext) offers(scope string) bool  { return x.cfg.caps.has(scope) }
-func (x capContext) reaches(scope string) bool { return x.offers(scope) && x.granted[scope] }
+func (x capContext) offers(scope string) bool { return x.cfg.caps.has(scope) }
 
 // A capability is one thing a link can grant. Scope is the permanent part
 // -- those names live in config files people keep -- and the rest is how
@@ -113,13 +115,11 @@ var capabilities = []capability{
 	{
 		Scope: links.ScopeShell,
 		Build: func(x capContext) []streamtype.StreamHandler {
-			sh := streamtype.NewShell(x.shellArgv, x.cfg.verbose)
-			if x.cfg.shellRestrict {
-				// Same lock `share` uses for its tmux attach: the client's
-				// argv, env and cwd are all ignored, since any of the three
-				// can steer a pinned command.
-				sh.ForcedArgv = x.shellArgv
-			}
+			// A command named after `shell` -- by the listener or by the
+			// link narrowing it -- is the command that runs. NewShell pins
+			// it, which also ignores the client's env and cwd, since any of
+			// those can steer a pinned command as surely as argv can.
+			sh := streamtype.NewShell(x.eff.ShellArgv, x.cfg.verbose)
 			sh.MaxConcurrent = x.cfg.shellMaxSessions
 			sh.OwnerCredential = x.owner
 			if !x.cfg.disableShellMirror {
@@ -144,7 +144,7 @@ var capabilities = []capability{
 	{
 		Scope: links.ScopeForward,
 		Build: func(x capContext) []streamtype.StreamHandler {
-			return []streamtype.StreamHandler{streamtype.NewTCP(x.cfg.verbose, x.cfg.allowForward)}
+			return []streamtype.StreamHandler{streamtype.NewTCP(x.cfg.verbose, allowOf(x.eff.ForwardTargets))}
 		},
 		// No Mount and no Menu: forwarding is driven by `connect -L`, and
 		// there is nothing for a browser to show.
@@ -172,10 +172,14 @@ var capabilities = []capability{
 		Describe: describeFiles,
 	},
 	{
-		Scope:    links.ScopeProxy,
-		Build:    buildProxyHandlers,
-		Mount:    "/proxy/",
-		Web:      func(x capContext) http.Handler { return proxyweb.LandingHandler(x.capBar, x.cfg.proxyTargets) },
+		Scope: links.ScopeProxy,
+		Build: buildProxyHandlers,
+		Mount: "/proxy/",
+		// eff, not cfg, so the page is built from what this link reaches.
+		// The two agree on emptiness today, which is all the landing page
+		// asks of the list -- but reading the listener's grant on a
+		// per-link page is how that stops being true.
+		Web:      func(x capContext) http.Handler { return proxyweb.LandingHandler(x.capBar, x.eff.ProxyTargets) },
 		Menu:     "Proxy",
 		MenuPath: "/proxy/",
 		Describe: describeProxy,
@@ -203,7 +207,7 @@ func buildProxyHandlers(x capContext) []streamtype.StreamHandler {
 		xffIP = x.browserIP
 	}
 	p := streamtype.NewHTTPProxy(x.cfg.target, x.id.UID, x.cfg.server, xffIP, x.cfg.verbose)
-	p.Allow = x.cfg.allowProxy
+	p.Allow = allowOf(x.eff.ProxyTargets)
 	return []streamtype.StreamHandler{p, streamtype.NewWebSocket(p, xffIP, x.cfg.verbose)}
 }
 
@@ -214,7 +218,7 @@ func buildProxyHandlers(x capContext) []streamtype.StreamHandler {
 // backend is known.
 func dynamicProxy(x capContext) *streamtype.HTTPHandler {
 	p := streamtype.NewHTTPProxy("", x.id.UID, x.cfg.server, "", x.cfg.verbose)
-	p.Allow = x.cfg.allowProxy
+	p.Allow = allowOf(x.eff.ProxyTargets)
 	return p
 }
 
@@ -232,10 +236,10 @@ func fixedTargetMode(cfg serveConfig) bool {
 func describeShell(w io.Writer, x capContext) {
 	line := "  • shell  ("
 	if len(x.cfg.shellArgv) > 0 {
-		line += strings.Join(x.cfg.shellArgv, " ")
-		if x.cfg.shellRestrict {
-			line += " only"
-		}
+		// "only", always: a named command is the command, so the operator
+		// reading this block should not have to wonder whether a connector
+		// can ask for something else.
+		line += strings.Join(x.cfg.shellArgv, " ") + " only"
 	} else {
 		line += defaultShellLabel()
 	}
@@ -255,8 +259,8 @@ func describeShell(w io.Writer, x capContext) {
 
 func describeForward(w io.Writer, x capContext) {
 	reach := "unrestricted targets"
-	if !x.cfg.allowForward.Empty() {
-		reach = x.cfg.allowForward.String()
+	if allow := allowOf(x.cfg.offered.ForwardTargets); !allow.Empty() {
+		reach = allow.String()
 	}
 	fmt.Fprintf(w, "  • forward (%s, chosen by connect -L; max %d concurrent connections per session; loopback-bound on connector by default)\n",
 		reach, streamtype.DefaultTCPMaxConcurrent)
@@ -283,9 +287,18 @@ func describeProxy(w io.Writer, x capContext) {
 		fmt.Fprintf(w, "  • proxy  (%s)\n", x.cfg.target)
 		return
 	}
-	if !x.cfg.allowProxy.Empty() {
-		fmt.Fprintf(w, "  • proxy  (target chosen in browser, from %s)\n", x.cfg.allowProxy)
+	if allow := allowOf(x.cfg.offered.ProxyTargets); !allow.Empty() {
+		fmt.Fprintf(w, "  • proxy  (target chosen in browser, from %s)\n", allow)
 		return
 	}
 	fmt.Fprintln(w, "  • proxy  (target chosen in browser)")
+}
+
+// allowOf turns a narrowed grant's targets into the allowlist a handler
+// enforces. The targets were validated when the grant was parsed, so a
+// parse error here cannot happen -- and an empty list means unrestricted,
+// which is what an unpinned listener already offered.
+func allowOf(targets []string) allowlist.List {
+	l, _ := allowlist.Parse(targets)
+	return l
 }

@@ -339,13 +339,16 @@ const (
 //	FIN:  {exit_code, signal?}  on normal exit
 //	      {error:"..."}         on early failure (spawn, etc.)
 type ShellHandler struct {
-	// DefaultArgv is what gets exec'd when the client doesn't supply an
-	// argv (e.g. the listener was started with `bitbang shell --cmd
-	// /bin/bash`). Empty means "use $SHELL, or /bin/sh if unset."
-	DefaultArgv []string
-
 	// ForcedArgv, when non-empty, locks every connection to this exact
-	// command. It also ignores client-supplied argv, environment, and cwd.
+	// command: a connector that supplies one is refused rather than
+	// quietly given something else, and its environment and cwd are
+	// ignored too. Empty means the connector chooses, falling back to
+	// $SHELL and then /bin/sh.
+	//
+	// There is deliberately no "default command" alongside it. A command
+	// the operator named is the command that runs -- treating it as a
+	// suggestion the far end may replace is not a narrower listener, it
+	// is a shell with extra steps.
 	ForcedArgv []string
 
 	// ForcedEnv is the environment used verbatim when ForcedArgv is
@@ -464,11 +467,12 @@ func (s *shellSession) takePTY() ptylib.Pty {
 	return terminal
 }
 
-// NewShell returns a ShellHandler with the given default argv. Pass nil
-// or empty to default to $SHELL.
-func NewShell(defaultArgv []string, verbose bool) *ShellHandler {
+// NewShell returns a ShellHandler pinned to argv, or unpinned when argv is
+// empty. Set ForcedEnv afterwards to control the environment of a pinned
+// command.
+func NewShell(argv []string, verbose bool) *ShellHandler {
 	return &ShellHandler{
-		DefaultArgv:        defaultArgv,
+		ForcedArgv:         argv,
 		Verbose:            verbose,
 		streams:            make(map[uint32]*shellSession),
 		outputDrainTimeout: shellOutputDrainTimeout,
@@ -590,8 +594,8 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		}
 	}()
 
-	// Resolve argv: restricted-mode ours, otherwise client's, otherwise
-	// default, otherwise $SHELL, otherwise /bin/sh.
+	// Resolve argv: the pinned command, else the client's, else $SHELL,
+	// else /bin/sh.
 	restricted := len(h.ForcedArgv) > 0
 
 	// A pinned listener used to run its own command and say nothing, so a
@@ -611,9 +615,6 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	argv := h.ForcedArgv
 	if len(argv) == 0 {
 		argv = open.Argv
-	}
-	if len(argv) == 0 {
-		argv = h.DefaultArgv
 	}
 	if len(argv) == 0 {
 		argv = defaultShellArgv()

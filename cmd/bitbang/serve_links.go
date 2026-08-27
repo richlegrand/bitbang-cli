@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
 )
@@ -25,7 +26,7 @@ const linkPoll = time.Minute
 // so a poll cannot observe a half-applied edit.
 type linkState struct {
 	path     string
-	offered  []string
+	offered  grant.Spec
 	code     string
 	codeURL  func(code string, flags ...string) string
 	readOnly bool // ephemeral identity: no file, just the implicit row
@@ -37,7 +38,7 @@ type linkState struct {
 	mod time.Time
 }
 
-func newLinkState(program string, offered []string, code string, ephemeral bool,
+func newLinkState(program string, offered grant.Spec, code string, ephemeral bool,
 	codeURL func(string, ...string) string) (*linkState, error) {
 
 	ls := &linkState{
@@ -183,11 +184,11 @@ func (ls *linkState) listing(bold, reset string) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	for i, e := range entries {
-		scopes := strings.Join(e.Grants(ls.offered), " ")
-		if scopes == "" {
-			scopes = "(nothing)"
+		reach := effectiveWords(e, ls.offered)
+		if reach == "" {
+			reach = "(nothing)"
 		}
-		head := fmt.Sprintf("  %d) %s%-*s%s  %s", i, bold, labelW, e.Label, reset, scopes)
+		head := fmt.Sprintf("  %d) %s%-*s%s  %s", i, bold, labelW, e.Label, reset, reach)
 		if note := expiryNote(e, now); note != "" {
 			head += "  " + note
 		}
@@ -420,6 +421,3 @@ func (ls *linkState) replace(oldLabel string, entry links.Terms) error {
 
 // url composes the URL for a code.
 func (ls *linkState) url(code string) string { return ls.codeURL(code) }
-
-// offeredScopes is what a grant may draw from on this listener.
-func (ls *linkState) offeredScopes() []string { return append([]string(nil), ls.offered...) }

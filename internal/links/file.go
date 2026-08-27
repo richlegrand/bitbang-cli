@@ -71,14 +71,11 @@ func Validate(entries []Terms) error {
 		if strings.TrimSpace(e.Label) == "" {
 			return fmt.Errorf("entry %d: every link needs a label", n)
 		}
-		if e.Scope != nil && len(e.Scope) == 0 {
-			return fmt.Errorf("link %q: empty scope grants nothing; omit the field to grant everything served", e.Label)
-		}
-		for _, name := range e.Scope {
-			if !knownScopes[name] {
-				return fmt.Errorf("link %q: unknown scope %q (known: %s)",
-					e.Label, name, strings.Join(ScopeNames(), ", "))
-			}
+		// The grammar validates itself, and its errors are the ones the
+		// command line gives -- so a typo in the file reads the same as a
+		// typo at the prompt.
+		if _, err := e.Spec(); err != nil {
+			return err
 		}
 	}
 	return nil

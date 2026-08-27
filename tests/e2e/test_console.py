@@ -48,17 +48,42 @@ def test_the_loop_keeps_accepting_commands(pty_listener, test_server):
     l.command('help', 'leave the console')
 
 
+# The prompt runs the answer through the same parser `serve` uses, which
+# is what lets a link narrow targets and paths rather than only picking
+# capabilities. The unit tests cover the parser with a fake asker; this
+# covers the seam it has to survive -- a real terminal, a real answer with
+# a space in it, and the value landing in links.json intact.
+def test_add_takes_a_grant_with_an_argument(pty_listener, test_server, tmp_path):
+    shared = str(tmp_path / 'share')
+    inner = shared + '/public'
+    os.makedirs(inner)
+    l = pty_listener('serve', 'files', shared, '-server', test_server)
+    l.open_console()
+
+    l.command('add', 'Grant')
+    # Outside what the listener shares: refused in the listener's own
+    # words, and the prompt comes back rather than minting a dead link.
+    l.command('files /etc', 'is not inside')
+    l.command('files ' + inner, 'Expires')
+    l.command('2', 'Label')            # 1 hour
+    l.command('contractor', 'contractor -- ')
+
+    entry = [e for e in l.links() if e['label'] == 'contractor']
+    assert entry, 'add did not write the entry'
+    assert entry[0]['grant'] == 'files ' + inner, entry[0]['grant']
+
+
 def test_add_list_edit_rm(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server)
     l.open_console()
 
-    l.command('add', 'Grant which')
-    l.command('1', 'Expires')          # files, the first entry: least powerful first
+    l.command('add', 'Grant')
+    l.command('files', 'Expires')      # the same words `serve` takes
     l.command('3', 'Label')            # 24 hours
     l.command('contractor', 'contractor -- ')
     entry = [e for e in l.links() if e['label'] == 'contractor']
     assert entry, 'add did not write the entry'
-    assert entry[0]['scope'] == ['files']
+    assert entry[0]['grant'] == 'files'
     assert entry[0]['code'], 'add did not mint a code'
     assert entry[0]['expires'].endswith('Z'), 'expiry should be absolute UTC'
 
@@ -66,14 +91,14 @@ def test_add_list_edit_rm(pty_listener, test_server):
 
     # edit re-asks the same questions seeded with the current values, so
     # pressing Enter through changes nothing but the label.
-    l.command('edit contractor', 'Grant which')
+    l.command('edit contractor', 'Grant')
     l.command('', 'Expires')
     l.command('', 'Label')
     l.command('renamed', 'renamed -- ')
     labels = [e['label'] for e in l.links()]
     assert 'renamed' in labels and 'contractor' not in labels
     kept = [e for e in l.links() if e['label'] == 'renamed'][0]
-    assert kept['scope'] == ['files'], 'Enter-through changed the scope'
+    assert kept['grant'] == 'files', 'Enter-through changed the grant'
     assert kept['code'] == entry[0]['code'], 'a rename should not reissue the code'
 
     l.command('rm renamed', 'removed "renamed"')
@@ -136,8 +161,8 @@ def test_pairing_prompt_is_not_stolen_by_the_console(pty_listener, test_server, 
 
         # Decline the default and take the narrow path, so the grant
         # questions are exercised too.
-        l.command('n', 'Grant which')
-        l.command('1', 'Expires')
+        l.command('n', 'Grant')
+        l.command('files', 'Expires')
         l.command('3', 'Label')
         l.command('phone', 'phone -- ')
 
@@ -147,7 +172,7 @@ def test_pairing_prompt_is_not_stolen_by_the_console(pty_listener, test_server, 
 
         entry = [e for e in l.links() if e['label'] == 'phone']
         assert entry, 'pairing did not write a link'
-        assert entry[0]['scope'] == ['files']
+        assert entry[0]['grant'] == 'files'
         # The whole point: what the connector is handed is the minted
         # link, not the identity's own code, so it can be revoked and
         # expired on its own.
@@ -173,7 +198,7 @@ def test_enter_shows_the_url_with_no_links(pty_listener, test_server):
 # thing you came for rather than a hint to type `help`.
 def test_enter_reprints_the_table(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server,
-                     links=[{'label': 'contractor', 'scope': ['files']}])
+                     links=[{'label': 'contractor', 'grant': 'files'}])
     l.child.sendline('')
     l.child.expect('contractor', timeout=20)   # the table, before the prompt
     l.child.expect('console --', timeout=20)
@@ -184,8 +209,8 @@ def test_enter_reprints_the_table(pty_listener, test_server):
 # a convenience resolved at the edge.
 def test_links_can_be_addressed_by_number(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server, links=[
-        {'label': 'contractor', 'scope': ['files']},
-        {'label': 'ana', 'scope': ['files']},
+        {'label': 'contractor', 'grant': 'files'},
+        {'label': 'ana', 'grant': 'files'},
     ])
     l.open_console()
     l.command('list', r'1\) contractor')
@@ -198,7 +223,7 @@ def test_links_can_be_addressed_by_number(pty_listener, test_server):
 # would revoke the operator's own access.
 def test_number_zero_is_the_owner_and_is_refused(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server,
-                     links=[{'label': 'contractor', 'scope': ['files']}])
+                     links=[{'label': 'contractor', 'grant': 'files'}])
     l.open_console()
     l.command('rm 0', 'own code')
     l.command('rm 7', 'no link called')
@@ -208,9 +233,9 @@ def test_number_zero_is_the_owner_and_is_refused(pty_listener, test_server):
 # so a label match wins over the index it collides with.
 def test_a_label_that_looks_like_a_number_wins(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server, links=[
-        {'label': 'contractor', 'scope': ['files']},
-        {'label': 'ana', 'scope': ['files']},
-        {'label': '2', 'scope': ['files']},
+        {'label': 'contractor', 'grant': 'files'},
+        {'label': 'ana', 'grant': 'files'},
+        {'label': '2', 'grant': 'files'},
     ])
     l.open_console()
     l.command('rm 2', 'removed "2"')
@@ -226,10 +251,10 @@ def test_add_proposes_a_label_that_is_free(pty_listener, test_server):
     import datetime
     day = datetime.date.today().strftime('%b%-d').lower()
     l = pty_listener('serve', '-server', test_server,
-                     links=[{'label': f'link-{day}', 'scope': ['files']}])
+                     links=[{'label': f'link-{day}', 'grant': 'files'}])
     l.open_console()
-    l.command('add', 'Grant which')
-    l.command('1', 'Expires')
+    l.command('add', 'Grant')
+    l.command('files', 'Expires')
     l.command('1', f'Label .link-{day}-2.')   # suffixed past the collision
     l.command('', f'link-{day}-2 --')          # Enter is accepted
     assert f'link-{day}-2' in [e['label'] for e in l.links()]
@@ -239,10 +264,10 @@ def test_add_proposes_a_label_that_is_free(pty_listener, test_server):
 # question, not after the whole flow has been answered.
 def test_a_taken_label_is_refused_in_the_question(pty_listener, test_server):
     l = pty_listener('serve', '-server', test_server,
-                     links=[{'label': 'contractor', 'scope': ['files']}])
+                     links=[{'label': 'contractor', 'grant': 'files'}])
     l.open_console()
-    l.command('add', 'Grant which')
-    l.command('1', 'Expires')
+    l.command('add', 'Grant')
+    l.command('files', 'Expires')
     l.command('1', 'Label')
     l.command('contractor', 'already exists')
     l.command('ana', 'ana --')

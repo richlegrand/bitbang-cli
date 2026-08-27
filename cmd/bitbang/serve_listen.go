@@ -208,8 +208,31 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		p.close()
 		return
 	}
-	granted := terms.GrantSet(offeredScopes(l.cfg))
-	h := buildHandlers(l.cfg, granted, l.share, l.shellArgv, l.id, p.browserIP, l.mirror,
+	// What this peer reaches: the listener's grant, narrowed by the link's.
+	// One computation feeds the handler set, the shell command, the file
+	// share and the target allowlists, so they cannot disagree about what
+	// was granted.
+	eff, err := terms.Effective(l.cfg.offered)
+	if err != nil {
+		log.Printf("Dropping %s: %v", clientID, err)
+		p.close()
+		return
+	}
+	share := l.share
+	if eff.FilesPath != "" && eff.FilesPath != l.cfg.filesPath {
+		// A link narrowed to a subdirectory gets its own view of the tree.
+		// Narrowing was checked when the grant was resolved; this only
+		// fails if the directory has since gone.
+		s, err := fileshare.New(eff.FilesPath)
+		if err != nil {
+			log.Printf("Dropping %s: link %q shares %s: %v", clientID, label, eff.FilesPath, err)
+			p.close()
+			return
+		}
+		s.UploadEnabled = l.cfg.filesUpload
+		share = s
+	}
+	h := buildHandlers(l.cfg, eff, share, l.id, p.browserIP, l.mirror,
 		label == links.OwnerLabel)
 
 	sess := session.New(p.conn.DC, l.pinAuth, l.cfg.verbose, h.all...)
@@ -227,7 +250,7 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		return
 	}
 	if label != links.OwnerLabel {
-		log.Printf("Peer %s authorized on link %q (%v)", clientID, label, terms.Grants(offeredScopes(l.cfg)))
+		log.Printf("Peer %s authorized on link %q (%s)", clientID, label, effectiveWords(terms, l.cfg.offered))
 	}
 }
 
@@ -267,7 +290,7 @@ func (l *listener) handlePairRequest(msg signaling.Message) {
 	done := func() { releaseOnce.Do(release) }
 	conn.GrantPairCredential = func() (string, bool) {
 		defer done()
-		return grantForPairing(l.console, l.links, remoteIP, reachOf(l.cfg))
+		return grantForPairing(l.console, l.links, remoteIP, l.cfg.offered)
 	}
 	// A pairing that never reaches the grant -- a mismatched SAS, a
 	// connector that gives up -- must not leave the loop held out.

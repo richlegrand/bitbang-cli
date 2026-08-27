@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
 )
@@ -121,30 +122,39 @@ func runLinkLs(args []string) {
 		uid = id.UID
 	}
 
-	now := time.Now()
-	labelW, scopeW := 0, 0
+	fmt.Print(renderLinkListing(entries, server, uid, time.Now()))
+}
+
+// renderLinkListing lays out the table. Separate from the printing so the
+// column arithmetic can be tested: a grant carrying a target or a path is
+// far wider than a bare capability word, and the widths are what keep the
+// listing readable when a table holds both.
+func renderLinkListing(entries []links.Terms, server, uid string, now time.Time) string {
+	labelW, grantW := 0, 0
 	for _, e := range entries {
 		if n := len(e.Label); n > labelW {
 			labelW = n
 		}
-		if n := len(scopeOf(e)); n > scopeW {
-			scopeW = n
+		if n := len(grantOf(e)); n > grantW {
+			grantW = n
 		}
 	}
+	var b strings.Builder
 	for _, e := range entries {
-		fmt.Printf("  %-*s  %-*s  %-14s  %s\n",
-			labelW, e.Label, scopeW, scopeOf(e), expiryNote(e, now), linkURL(server, uid, e))
+		fmt.Fprintf(&b, "  %-*s  %-*s  %-14s  %s\n",
+			labelW, e.Label, grantW, grantOf(e), expiryNote(e, now), linkURL(server, uid, e))
 	}
+	return b.String()
 }
 
-// scopeOf renders the scope as written in the file. Unlike the
-// listener's own listing this cannot narrow it to what is actually
-// served, because nothing here knows which mode the listener is running.
-func scopeOf(e links.Terms) string {
-	if e.Scope == nil {
+// grantOf renders the grant as written in the file. Unlike the listener's
+// own listing this cannot narrow it to what is actually served, because
+// nothing here knows which mode the listener is running.
+func grantOf(e links.Terms) string {
+	if e.Grant == "" {
 		return "(everything served)"
 	}
-	return strings.Join(e.Scope, " ")
+	return e.Grant
 }
 
 func linkURL(server, uid string, e links.Terms) string {
@@ -320,6 +330,6 @@ func validateTable(path string) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = links.Build(entries, links.ScopeNames(), "placeholder")
+	_, _, err = links.Build(entries, grant.Everything(), "placeholder")
 	return err
 }

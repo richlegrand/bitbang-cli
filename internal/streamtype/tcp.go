@@ -91,7 +91,11 @@ func (h *TCPHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	if !h.Allow.Permits(open.Host, open.Port) {
 		log.Printf("TCP refused %s:%d: not in the allowed forwards (%s)",
 			open.Host, open.Port, h.Allow)
-		h.sendError(s, fmt.Sprintf("%s:%d is not one of this listener's allowed forwards (%s)",
+		// "your link", not "this listener": the allowlist here is the
+		// listener's narrowed by the link, so a target the listener does
+		// reach can still be refused, and blaming the listener for that
+		// sends someone looking in the wrong place.
+		h.sendError(s, fmt.Sprintf("%s:%d is not one of the allowed forwards for your link (%s)",
 			open.Host, open.Port, h.Allow))
 		return nil
 	}

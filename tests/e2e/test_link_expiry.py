@@ -43,7 +43,7 @@ def expiring(listener, test_server, tmp_path_factory):
 # one, and it is why await_links cannot be used -- the entry will never
 # have a URL to wait for.
 def test_expired_link_is_retired_and_has_no_url(expiring):
-    l = expiring([{'label': 'lapsed', 'scope': ['files'], 'expires': _in(-3600)}])
+    l = expiring([{'label': 'lapsed', 'grant': 'files', 'expires': _in(-3600)}])
 
     # Two lines per entry now: the label and its state on one, the URL
     # (or its absence) on the next.
@@ -71,7 +71,7 @@ def test_expired_link_is_retired_and_has_no_url(expiring):
 @pytest.mark.slow
 @pytest.mark.timeout(240)
 def test_expiry_closes_a_session_already_open(expiring, browser_context):
-    l = expiring([{'label': 'shortlived', 'scope': ['files'], 'expires': _in(45)}])
+    l = expiring([{'label': 'shortlived', 'grant': 'files', 'expires': _in(45)}])
     urls = l.await_links(['shortlived'])
 
     page = browser_context.new_page()

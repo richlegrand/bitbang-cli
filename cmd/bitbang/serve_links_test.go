@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/links"
 )
 
@@ -44,7 +45,7 @@ func TestExpiryNote(t *testing.T) {
 // granting everything served.
 func TestListing_SilentWithOnlyTheImplicitRow(t *testing.T) {
 	ls := &linkState{
-		offered: []string{links.ScopeFiles},
+		offered: mustSpec(t, "files"),
 		code:    "CODE",
 		codeURL: func(code string, flags ...string) string { return "https://x/uid#" + code },
 	}
@@ -61,13 +62,13 @@ func TestListing_SilentWithOnlyTheImplicitRow(t *testing.T) {
 func TestListing_ShowsEveryRowWithItsURL(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	ls := &linkState{
-		offered: []string{links.ScopeFiles, links.ScopeShell},
+		offered: grant.Everything(),
 		code:    "OWNERCODE",
 		codeURL: func(code string, flags ...string) string { return "https://x/uid#" + code },
 	}
 	table, _, err := links.Build([]links.Terms{
-		{Label: "contractor", Code: "CONTRACTOR", Scope: []string{links.ScopeFiles}},
-		{Label: "photographer", Code: "PHOTO", Scope: []string{links.ScopeFiles}, Expires: &past},
+		{Label: "contractor", Code: "CONTRACTOR", Grant: "files"},
+		{Label: "photographer", Code: "PHOTO", Grant: "files", Expires: &past},
 	}, ls.offered, ls.code)
 	if err != nil {
 		t.Fatal(err)

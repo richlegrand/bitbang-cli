@@ -7,20 +7,21 @@ import (
 	"testing"
 
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/links"
 )
 
 // testCtx builds the context the capability table works from: a listener
 // offering these caps, with a link that reaches all of them.
 func testCtx(share *fileshare.FileShare, maxSessions int, caps ...string) capContext {
-	granted := make(map[string]bool, len(caps))
+	eff := grant.Spec{Caps: map[string]bool{}}
 	for _, c := range caps {
-		granted[c] = true
+		eff.Caps[c] = true
 	}
 	return capContext{
-		cfg:     serveConfig{caps: capsOf(caps...), shellMaxSessions: maxSessions},
-		share:   share,
-		granted: granted,
+		cfg:   serveConfig{caps: capsOf(caps...), shellMaxSessions: maxSessions},
+		share: share,
+		eff:   eff,
 	}
 }
 

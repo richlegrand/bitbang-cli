@@ -90,8 +90,7 @@ func cmdAdd(l *listener, c *console, _ []string) error {
 	// bare fallback used to propose a dated name without checking, which
 	// collided with the second link of the day.
 	seed := links.Terms{Label: datedLabel(l.links, "link", time.Now())}
-	terms, err := grantQuestions(c, seed, l.links.offeredScopes(),
-		l.links.takenLabels(""), time.Now(), reachOf(l.cfg))
+	terms, err := grantQuestions(c, seed, l.cfg.offered, l.links.takenLabels(""), time.Now())
 	if err != nil {
 		return err
 	}
@@ -101,7 +100,7 @@ func cmdAdd(l *listener, c *console, _ []string) error {
 		return nil
 	}
 	c.Say("")
-	c.Say("  %s -- %s", terms.Label, describeGrant(terms, l.links.offeredScopes()))
+	c.Say("  %s -- %s", terms.Label, describeGrant(terms, l.cfg.offered))
 	c.Say("  %s", l.links.url(code))
 	return nil
 }
@@ -120,8 +119,7 @@ func cmdEdit(l *listener, c *console, args []string) error {
 		c.Say("  no link called %q", args[0])
 		return nil
 	}
-	edited, err := grantQuestions(c, current, l.links.offeredScopes(),
-		l.links.takenLabels(current.Label), time.Now(), reachOf(l.cfg))
+	edited, err := grantQuestions(c, current, l.cfg.offered, l.links.takenLabels(current.Label), time.Now())
 	if err != nil {
 		return err
 	}
@@ -132,7 +130,7 @@ func cmdEdit(l *listener, c *console, args []string) error {
 	l.pollNow()
 	after, _ := l.links.current().ByLabel(edited.Label)
 	c.Say("")
-	c.Say("  %s -- %s", edited.Label, describeGrant(edited, l.links.offeredScopes()))
+	c.Say("  %s -- %s", edited.Label, describeGrant(edited, l.cfg.offered))
 	if after.Code != current.Code {
 		c.Say("  code changed, so the old URL is dead: %s", l.links.url(after.Code))
 	}
@@ -194,7 +192,7 @@ func cmdStatus(l *listener, c *console, _ []string) error {
 			live = append(live, "  (handshaking)")
 		default:
 			live = append(live, fmt.Sprintf("  %-14s %s",
-				label, strings.Join(terms.Grants(l.links.offeredScopes()), " ")))
+				label, effectiveWords(terms, l.cfg.offered)))
 		}
 	}
 	if len(live) == 0 {

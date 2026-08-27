@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/links"
 )
 
@@ -32,14 +32,14 @@ type asker interface {
 // Seed carries the current values. For `add` and pairing that is the
 // default grant; for `edit` it is the entry as it stands, so pressing
 // Enter through the whole flow changes nothing.
-func grantQuestions(a asker, seed links.Terms, offered []string, taken map[string]bool, now time.Time, reach scopeReach) (links.Terms, error) {
+func grantQuestions(a asker, seed links.Terms, offered grant.Spec, taken map[string]bool, now time.Time) (links.Terms, error) {
 	out := seed
 
-	scope, err := askScope(a, seed, offered, reach)
+	g, err := askGrant(a, seed, offered)
 	if err != nil {
 		return links.Terms{}, err
 	}
-	out.Scope = scope
+	out.Grant = g
 
 	expires, err := askExpiry(a, seed, now)
 	if err != nil {
@@ -56,149 +56,80 @@ func grantQuestions(a asker, seed links.Terms, offered []string, taken map[strin
 	return out, nil
 }
 
-// scopeHelp is the one-line description beside each scope. forward's
-// earns its place: TCP without a shell is the combination people do not
-// expect, and the answer to "can they have the NAS but not the box".
-var scopeHelp = map[string]string{
-	links.ScopeFiles:   "browse and transfer files",
-	links.ScopeShell:   "a terminal on this machine",
-	links.ScopeForward: "forward TCP to any host on this network, without a shell",
-	links.ScopeProxy:   "reach web apps on this network",
-}
-
-// scopeReach carries what the two target-choosing scopes can actually reach,
-// rendered from the listener's allowlists. Empty means unrestricted.
+// askGrant asks what a link reaches, in the words `serve` takes.
 //
-// The menu is where an operator decides what to hand out, and `forward` read
-// as the narrow option there: it said "without a shell" and nothing about
-// reach, while `proxy` right above it said "on this network". Unrestricted,
-// forward is the wider of the two.
-type scopeReach struct {
-	forward string
-	proxy   string
-}
-
-// reachOf renders a listener's allowlists for the menu. A pinned proxy target
-// counts as a restriction too, since the browser cannot choose another.
-func reachOf(cfg serveConfig) scopeReach {
-	r := scopeReach{forward: cfg.allowForward.String()}
-	switch {
-	case cfg.target != "":
-		r.proxy = cfg.target
-	default:
-		r.proxy = cfg.allowProxy.String()
+// The same grammar, the same parser, the same errors: an operator who has
+// typed a listener command already knows this one, and a mistake here reads
+// exactly as it would there. It also replaces two questions with one, since
+// naming a target names the capability that carries it.
+//
+// The listener's own grant is shown above the prompt, because a link can
+// only narrow it -- and because a pinned listener should get the credit for
+// having been pinned.
+func askGrant(a asker, seed links.Terms, offered grant.Spec) (string, error) {
+	if len(offered.Caps) == 0 {
+		return "", nil
 	}
-	return r
-}
-
-// helpFor is scopeHelp, but naming the allowlist when the listener has one.
-// A pinned listener should say so here -- the operator gets to see that the
-// link they are minting is genuinely narrow, which is the reward for having
-// named targets after `forward` in the first place.
-func (r scopeReach) helpFor(scope string) string {
-	switch {
-	case scope == links.ScopeForward && r.forward != "":
-		return "forward TCP to " + r.forward + ", without a shell"
-	case scope == links.ScopeProxy && r.proxy != "":
-		return "reach " + r.proxy
+	a.Say("  This listener serves:")
+	for _, w := range offered.Words() {
+		a.Say("    %-8s  %s", w, describeOffer(w, offered))
 	}
-	return scopeHelp[scope]
-}
+	a.Say("  Grant what? Same words, narrower -- or Enter for all of it.")
 
-// menuOrder lists scopes least powerful first, so a mis-keyed 1 grants a
-// file browser rather than a terminal. The capability table's order suits
-// the Sharing block, where it describes a listener; here the numbers are
-// something an operator types in a hurry.
-var menuOrder = []string{links.ScopeFiles, links.ScopeProxy, links.ScopeForward, links.ScopeShell}
-
-// orderForMenu sorts what the listener offers into menuOrder, keeping
-// anything unrecognized at the end rather than dropping it.
-func orderForMenu(offered []string) []string {
-	rank := make(map[string]int, len(menuOrder))
-	for i, name := range menuOrder {
-		rank[name] = i
+	def := seed.Grant
+	if def == "" {
+		def = "all"
 	}
-	out := append([]string(nil), offered...)
-	sort.SliceStable(out, func(i, j int) bool {
-		ri, ok := rank[out[i]]
-		if !ok {
-			ri = len(menuOrder)
-		}
-		rj, ok := rank[out[j]]
-		if !ok {
-			rj = len(menuOrder)
-		}
-		return ri < rj
-	})
-	return out
-}
-
-func askScope(a asker, seed links.Terms, offered []string, reach scopeReach) ([]string, error) {
-	if len(offered) == 0 {
-		return nil, nil
-	}
-	offered = orderForMenu(offered)
-	a.Say("  Grant which?")
-	for i, name := range offered {
-		a.Say("    %d) %-8s  %s", i+1, name, reach.helpFor(name))
-	}
-
-	// A nil scope means everything, which is what `a` produces, so the
-	// default reads the same way whichever the seed holds.
-	def := "a"
-	if seed.Scope != nil {
-		var picks []string
-		for i, name := range offered {
-			for _, s := range seed.Scope {
-				if s == name {
-					picks = append(picks, strconv.Itoa(i+1))
-				}
-			}
-		}
-		if len(picks) > 0 {
-			def = strings.Join(picks, ",")
-		}
-	}
-
 	for {
-		answer, err := a.Ask(fmt.Sprintf("  [1-%d, comma-separated, or a for all]", len(offered)), def)
+		answer, err := a.Ask("  Grant", def)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
-		scope, err := parseScopeAnswer(answer, offered)
+		answer = strings.TrimSpace(answer)
+		if answer == "" || strings.EqualFold(answer, "all") {
+			return "", nil
+		}
+		spec, err := grant.ParseString(answer)
 		if err != nil {
 			a.Say("  %v", err)
 			continue
 		}
-		return scope, nil
+		// Refuse a widening grant here rather than minting a link that
+		// silently reaches nothing.
+		if _, err := offered.Narrow(spec); err != nil {
+			a.Say("  %v", err)
+			continue
+		}
+		return spec.String(), nil
 	}
 }
 
-// parseScopeAnswer turns "1,3" or "a" into scope names. A nil result
-// means everything offered, which is how an unscoped link is stored.
-func parseScopeAnswer(answer string, offered []string) ([]string, error) {
-	answer = strings.TrimSpace(answer)
-	if answer == "" {
-		return nil, fmt.Errorf("pick at least one, or a for all")
-	}
-	if strings.EqualFold(answer, "a") {
-		return nil, nil
-	}
-	seen := make(map[string]bool)
-	var out []string
-	for _, field := range strings.Split(answer, ",") {
-		field = strings.TrimSpace(field)
-		n, err := strconv.Atoi(field)
-		if err != nil || n < 1 || n > len(offered) {
-			return nil, fmt.Errorf("%q is not one of 1-%d", field, len(offered))
+// describeOffer says what one capability of the listener's grant reaches,
+// so the prompt above shows the ceiling a link is narrowing.
+func describeOffer(word string, offered grant.Spec) string {
+	switch word {
+	case "shell":
+		if len(offered.ShellArgv) > 0 {
+			return strings.Join(offered.ShellArgv, " ")
 		}
-		if name := offered[n-1]; !seen[name] {
-			seen[name] = true
-			out = append(out, name)
+		return "a terminal on this machine"
+	case "files":
+		if offered.FilesPath != "" {
+			return offered.FilesPath
 		}
+		return "browse and transfer files"
+	case "proxy":
+		if len(offered.ProxyTargets) > 0 {
+			return strings.Join(offered.ProxyTargets, ", ")
+		}
+		return "web apps on this network, chosen in the browser"
+	case "forward":
+		if len(offered.ForwardTargets) > 0 {
+			return strings.Join(offered.ForwardTargets, ", ")
+		}
+		return "TCP to any host on this network, without a shell"
 	}
-	sort.Strings(out)
-	return out, nil
+	return ""
 }
 
 // expiryChoice is one row of the expiry menu.
@@ -391,4 +322,24 @@ func relativeTo(at, now time.Time) string {
 	default:
 		return "very shortly"
 	}
+}
+
+// effectiveWords renders what a link actually reaches on this listener, in
+// the grammar it was written in. Every place that shows a link's reach --
+// the console listing, the pairing confirmation, the authorization log --
+// goes through here, so they cannot drift from each other or from the file.
+func effectiveWords(t links.Terms, offered grant.Spec) string {
+	eff, err := t.Effective(offered)
+	if err != nil {
+		// Validate rejects an unparseable grant at load, so this is a link
+		// asking for more than the listener serves. Say so rather than
+		// printing a reach that is not real. The label is already the row
+		// this is printed beside, so drop the copy the error carries.
+		return "nothing (" + strings.TrimPrefix(err.Error(),
+			fmt.Sprintf("link %q: ", t.Label)) + ")"
+	}
+	// The whole grant, arguments and all: a link narrowed to one forward
+	// target reads identically to the other three rows without them, and
+	// the narrowing is the thing worth seeing.
+	return eff.String()
 }

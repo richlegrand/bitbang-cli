@@ -175,9 +175,9 @@ code, reload the listener at its console, and it mints one:
 
 ```json
 [
-  {"label": "ana",  "scope": ["files"], "expires": "2026-09-01T00:00:00Z"},
-  {"label": "ben",  "scope": ["files"]},
-  {"label": "dev",  "scope": ["shell", "forward"]}
+  {"label": "ana",  "grant": "files", "expires": "2026-09-01T00:00:00Z"},
+  {"label": "ben",  "grant": "files /srv/photos"},
+  {"label": "dev",  "grant": "shell forward 127.0.0.1:5432"}
 ]
 ```
 
@@ -186,21 +186,25 @@ code, reload the listener at its console, and it mints one:
      https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#_vtQ0JCPe7s
   1) ana    files  expires in 6d
      https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#T-Ty_HhvLfY
-  2) ben    files
+  2) ben    files /srv/photos
      https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#L6La8OzBO74
-  3) dev    forward shell
+  3) dev    forward 127.0.0.1:5432 shell
      https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#8kmI3LYzB7E
 ```
 
 `owner` is the identity's own code and grants everything the listener serves; send
 one of the others instead. The console takes either the label or the number beside
-it, so `rm 2` and `rm ben` do the same thing. `scope` is drawn from `files`, `shell`, `forward`, and
-`proxy`, intersected with what the listener actually offers -- a `files` link
-cannot open a shell, and says so to anyone who tries. Omit `scope` and the link
-grants whatever the listener does.
+it, so `rm 2` and `rm ben` do the same thing.
+
+A `grant` is written in the words `serve` takes, and it can only narrow what the
+listener already serves. That means a link is not limited to picking capabilities:
+it can name a subdirectory of the shared folder, a subset of the forward targets, or
+a single command for `shell`. Omit `grant` and the link grants whatever the listener
+does. Ask for something outside the listener's reach and the console refuses it with
+the same message `serve` would give you.
 
 The label is what identifies a link, not its terms, so two people can hold links
-with identical scope and expiry and you can still revoke one without touching the
+with identical grants and expiry and you can still revoke one without touching the
 other.
 
 Revocation and expiry reach sessions that are already open: the connection closes
@@ -302,7 +306,7 @@ everywhere except the two rows called out below.
 | ---------------------------------------- | :---: | :---: | :-----: |
 | Shell, files, proxy (`bitbang serve`)     |  yes  |  yes  |   yes   |
 | TCP forwarding (`-L`)                     |  yes  |  yes  |   yes   |
-| Access links -- scope, expiry, revocation |  yes  |  yes  |   yes   |
+| Access links -- grant, expiry, revocation |  yes  |  yes  |   yes   |
 | Bring your own TURN                       |  yes  |  yes  |   yes   |
 | Pairing with a 6-digit code               |  yes  |  yes  |   yes   |
 | The listener console (Enter)              |  yes  |  yes  |   yes   |
@@ -462,7 +466,6 @@ does nothing.
 | `-ice-servers PATH`        | --        | (ours)         | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                              |
 | `-nocode`                  | --        | off            | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. For headless listeners that can't complete the SAS prompt. |
 | `-v`                       | --        | off            | Verbose logging (adds the browser `!debug` overlay)                                                                  |
-| `-shell-restrict`          | `shell`   | off            | Run only the command named after `shell`; refuse one the connector supplies                                          |
 | `-shell-max-sessions N`    | `shell`   | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
 | `-disable-shell-mirror`    | `shell`   | off            | Stop echoing shell output to the listener's console                                                                  |
 | `-files-upload`            | `files`   | off            | Allow uploads into the shared directory                                                                              |
@@ -496,7 +499,7 @@ socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 
 | Command                  | What it does                                            |
 |--------------------------|---------------------------------------------------------|
-| `bitbang link ls`        | List this listener's links: scope, expiry, code          |
+| `bitbang link ls`        | List this listener's links: grant, expiry, code          |
 | `bitbang link edit`      | Open `links.json` in `$EDITOR`, validated on save        |
 | `bitbang link rm LABEL`  | Delete a link (reload the listener to close its sessions)|
 | `bitbang link qr LABEL`  | Print a link's URL and QR code                           |
@@ -504,7 +507,7 @@ socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 | Entry field | Meaning                                                                      |
 |-------------|------------------------------------------------------------------------------|
 | `label`     | Names the link; identifies it to `rm` and `qr`, and must be unique             |
-| `scope`     | Any of `files`, `shell`, `forward`, `proxy`. Omit for everything the listener serves. `forward` reaches any host:port the listener can reach unless targets were named after the word |
+| `grant`     | What the link reaches, in the words `serve` takes: `files [DIR]`, `proxy [TARGETS]`, `forward [TARGETS]`, `shell [COMMAND]`. Can only narrow what the listener serves. Omit for all of it |
 | `expires`   | RFC 3339 timestamp. Omit for a link that does not lapse                        |
 | `code`      | Filled in by the listener on reload. Leave it out to have one minted           |
 
@@ -596,7 +599,7 @@ Windows 10 version 1809 or Windows Server 2019 or later.
 
 ## Roadmap
 
-Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, **terminal sharing** (`bitbang share`), and **access links** (`bitbang link`) that scope and expire what a URL grants. Designed and on the way:
+Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, **terminal sharing** (`bitbang share`), and **access links** (`bitbang link`) that narrow and expire what a URL grants. Designed and on the way:
 
 - **Serial bridging** -- drive a remote `/dev/ttyUSB0` from a local virtual port (e.g. run Arduino IDE over the internet). An issue has been opened [here](https://github.com/richlegrand/bitbang-cli/issues/3).
 - **Remote desktop** -- screen over a WebRTC video track, keyboard/mouse over the data channel.

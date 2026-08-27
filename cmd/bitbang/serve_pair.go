@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/links"
 )
 
@@ -21,7 +22,7 @@ import (
 //
 // Returning ok=false declines the pairing, and the connector is told the
 // same thing it would have been told by an operator who refused.
-func grantForPairing(c *console, ls *linkState, remoteIP string, reach scopeReach) (string, bool) {
+func grantForPairing(c *console, ls *linkState, remoteIP string, offered grant.Spec) (string, bool) {
 	if !c.Available() {
 		// No terminal to ask on. Refusing here would make pairing
 		// impossible on a listener nobody is watching, which is worse
@@ -45,7 +46,7 @@ func grantForPairing(c *console, ls *linkState, remoteIP string, reach scopeReac
 		terms := links.Terms{Label: datedLabel(ls, "paired", time.Now())}
 		if !strings.EqualFold(strings.TrimSpace(answer), "y") {
 			c.Say("")
-			terms, err = grantQuestions(waiting, terms, ls.offeredScopes(), ls.takenLabels(""), time.Now(), reach)
+			terms, err = grantQuestions(waiting, terms, offered, ls.takenLabels(""), time.Now())
 			if err != nil {
 				return err
 			}
@@ -57,7 +58,7 @@ func grantForPairing(c *console, ls *linkState, remoteIP string, reach scopeReac
 		}
 		code = minted
 		c.Say("")
-		c.Say("  Paired. %s -- %s", terms.Label, describeGrant(terms, ls.offeredScopes()))
+		c.Say("  Paired. %s -- %s", terms.Label, describeGrant(terms, ls.offered))
 		c.Say("  %s", ls.url(minted))
 		c.Say("")
 		return nil
@@ -102,15 +103,15 @@ func datedLabel(ls *linkState, prefix string, now time.Time) string {
 }
 
 // describeGrant renders what a link reaches, for the confirmation line.
-func describeGrant(t links.Terms, offered []string) string {
-	scopes := strings.Join(t.Grants(offered), " ")
-	if scopes == "" {
-		scopes = "(nothing this listener serves)"
+func describeGrant(t links.Terms, offered grant.Spec) string {
+	reach := effectiveWords(t, offered)
+	if reach == "" {
+		reach = "(nothing this listener serves)"
 	}
 	if t.Expires == nil {
-		return scopes + ", no expiry"
+		return reach + ", no expiry"
 	}
-	return fmt.Sprintf("%s, %s", scopes, relativeTo(*t.Expires, time.Now()))
+	return fmt.Sprintf("%s, %s", reach, relativeTo(*t.Expires, time.Now()))
 }
 
 // boundedAsker is the console with a deadline on every question, for

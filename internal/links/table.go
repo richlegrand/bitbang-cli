@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/richlegrand/bitbang/internal/grant"
 )
 
 // Table is the resolved link table: the entries from links.json plus the
@@ -16,9 +18,9 @@ import (
 // edit.
 type Table struct {
 	entries []Terms
-	// offered is the scope vocabulary this listener supports, needed to
-	// resolve a nil scope and to intersect a requested one.
-	offered []string
+	// offered is the listener's own grant: the ceiling every link here is
+	// narrowed against, and what an unspecified link resolves to.
+	offered grant.Spec
 }
 
 // Build assembles a Table from parsed entries. The identity's own code
@@ -31,7 +33,7 @@ type Table struct {
 //
 // Warnings name links whose scope asks for something this listener does
 // not serve. That grants nothing, which is expensive to debug silently.
-func Build(entries []Terms, offered []string, identityCode string) (*Table, []string, error) {
+func Build(entries []Terms, offered grant.Spec, identityCode string) (*Table, []string, error) {
 	all := make([]Terms, 0, len(entries)+1)
 	all = append(all, Terms{Label: OwnerLabel, Code: identityCode})
 	all = append(all, entries...)
@@ -47,15 +49,25 @@ func Build(entries []Terms, offered []string, identityCode string) (*Table, []st
 		seen[e.Label] = true
 	}
 
-	offeredSet := make(map[string]bool, len(offered))
-	for _, name := range offered {
-		offeredSet[name] = true
-	}
 	var warnings []string
 	for _, e := range entries {
+		spec, err := e.Spec()
+		if err != nil {
+			continue // Validate reports this; do not double-report here.
+		}
+		// A grant reaching past the listener -- a forward target it cannot
+		// dial, a directory outside the share -- resolves to nothing at
+		// connect time. Say so now: the operator is reading this output,
+		// and the person who fails to connect later is not.
+		if _, err := e.Effective(offered); err != nil {
+			warnings = append(warnings, err.Error())
+			continue
+		}
+		// Capability words are the lenient case: an entry written for a
+		// fuller listener keeps working for whatever overlaps.
 		var missing []string
-		for _, name := range e.Scope {
-			if !offeredSet[name] {
+		for _, name := range spec.Words() {
+			if !offered.Has(name) {
 				missing = append(missing, name)
 			}
 		}
@@ -66,17 +78,16 @@ func Build(entries []Terms, offered []string, identityCode string) (*Table, []st
 		}
 	}
 
-	sorted := append([]string(nil), offered...)
-	sort.Strings(sorted)
-	return &Table{entries: all, offered: sorted}, warnings, nil
+	return &Table{entries: all, offered: offered}, warnings, nil
 }
 
 // Entries returns the rows in table order: `owner` first, then the file's
 // own, unsorted, so the listing matches what you wrote.
 func (t *Table) Entries() []Terms { return append([]Terms(nil), t.entries...) }
 
-// Offered returns the scopes this listener supports.
-func (t *Table) Offered() []string { return append([]string(nil), t.offered...) }
+// Offered returns the listener's own grant -- the ceiling every link in this
+// table is narrowed against.
+func (t *Table) Offered() grant.Spec { return t.offered }
 
 // ByLabel finds a row. The poll uses it to re-resolve a live session
 // against the table as it stands now; a missing label means the entry was
