@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -214,7 +215,13 @@ func TestFlagsNeedTheirCapability(t *testing.T) {
 // parsing end to end, which is the only way to see a flag package rejection.
 func bitbangBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "bitbang")
+	// Windows will not exec a path with no known extension, and `go build -o`
+	// writes exactly the name it is given rather than adding one.
+	name := "bitbang"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
