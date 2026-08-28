@@ -140,11 +140,27 @@ func defaultOnPreempted() {
 // Bitbang flags; the signaling server never sees any of it because
 // browsers don't transmit fragments. Grammar and flag list live in
 // CONVENTIONS.md.
-func (c *Client) URL(debug bool) string {
-	if debug {
-		return c.CodeURL(c.ID.Code, "debug")
+func (c *Client) URL(flags ...string) string {
+	return c.CodeURL(c.ID.Code, flags...)
+}
+
+// URLFlags is the flag list a listener's URLs carry, given how it was
+// started. One place rather than each call site assembling its own, since
+// the device URL and every link URL have to agree -- a link to an ephemeral
+// listener is exactly as dead as its device URL once the process exits.
+func URLFlags(debug, ephemeral bool) []string {
+	var flags []string
+	if ephemeral {
+		// The identity is generated per run and thrown away, so anything a
+		// connector saved would point at a UID that never comes back --
+		// a stored credential for something unreachable. `bitbang share`
+		// has always marked its URLs this way for the same reason.
+		flags = append(flags, "ephemeral")
 	}
-	return c.CodeURL(c.ID.Code)
+	if debug {
+		flags = append(flags, "debug")
+	}
+	return flags
 }
 
 // CodeURL composes a device URL carrying an explicit access code and

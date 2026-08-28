@@ -388,14 +388,21 @@ func startListener(cfg serveConfig) {
 		fmt.Fprintln(os.Stderr, "Another instance with the same UID has taken over. Exiting.")
 		os.Exit(2)
 	}
-	url := signalingClient.URL(cfg.verbose)
+	urlFlags := signaling.URLFlags(cfg.verbose, cfg.ephemeral)
+	url := signalingClient.URL(urlFlags...)
 
 	// The link table lives beside the identity, so it is per program:
 	// `serve files -files /srv` and `serve all` derive different program
 	// names and therefore have separate tables. An ephemeral identity has
 	// no directory to keep one in, so it runs on the implicit row alone.
 	linkState, err := newLinkState(program, cfg.offered, id.Code,
-		cfg.ephemeral, signalingClient.CodeURL)
+		cfg.ephemeral, func(code string, extra ...string) string {
+			// Fresh slice per call: appending to urlFlags directly would
+			// write into its backing array whenever it has spare capacity,
+			// so one link's flags could reach another's URL.
+			flags := append(append([]string{}, urlFlags...), extra...)
+			return signalingClient.CodeURL(code, flags...)
+		})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Link table error: %v\n", err)
 		os.Exit(1)

@@ -475,7 +475,7 @@ does nothing.
 | -------------------------- | --------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `-server HOST`             | --        | `bitba.ng`     | Signaling server hostname                                                                                            |
 | `-pin PIN`                 | --        | (none)         | Require this PIN for connections                                                                                     |
-| `-ephemeral`               | --        | off            | Temporary identity (a fresh URL each run)                                                                            |
+| `-ephemeral`               | --        | off            | Temporary identity: a fresh URL each run, and connectors do not save it to `devices.json`                            |
 | `-program NAME`            | --        | `bitbang`      | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                    |
 | `-ice-servers PATH`        | --        | (ours)         | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                              |
 | `-nocode`                  | --        | off            | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. For headless listeners that can't complete the SAS prompt. |
