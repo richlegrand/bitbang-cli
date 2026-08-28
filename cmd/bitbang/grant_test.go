@@ -186,3 +186,60 @@ func TestGrantQuestions_ShowsWhatTheListenerServes(t *testing.T) {
 		}
 	}
 }
+
+// The prompt has to say what may be typed, not only what is served. An
+// operator who has never run `serve` with an argument has no other way to
+// learn that `files` takes a directory.
+func TestArgumentForm(t *testing.T) {
+	open := mustSpec(t, "files proxy forward shell")
+	for word, want := range map[string]string{
+		"files":   " [DIR]",
+		"proxy":   " [HOST:PORT,...]",
+		"forward": " [HOST:PORT,...]",
+		"shell":   " [COMMAND]",
+	} {
+		if got := argumentForm(word, open); got != want {
+			t.Errorf("argumentForm(%q) = %q, want %q", word, got, want)
+		}
+	}
+	// A pinned command cannot be narrowed -- Narrow refuses a different
+	// one -- so offering the placeholder would invite a refusal.
+	pinned := mustSpec(t, "shell /bin/login")
+	if got := argumentForm("shell", pinned); got != "" {
+		t.Errorf("argumentForm(shell) = %q on a pinned listener, want none", got)
+	}
+}
+
+// The example has to be an answer this listener would accept. A generic one
+// is worse than none: it gets refused, and the refusal reads as the
+// operator's mistake.
+func TestGrantExampleIsAcceptedByTheListener(t *testing.T) {
+	for _, words := range []string{
+		"files proxy forward shell",
+		"files /home/rich",
+		"forward 127.0.0.1:22,db.internal:5432",
+		"proxy nas.lan:8096,pi.lan:80",
+		"shell",
+		"files /srv shell /bin/login",
+	} {
+		offered := mustSpec(t, words)
+		example := strings.Trim(grantExample(offered), "`")
+		spec, err := grant.ParseString(example)
+		if err != nil {
+			t.Errorf("listener %q: example %q does not parse: %v", words, example, err)
+			continue
+		}
+		if _, err := offered.Narrow(spec); err != nil {
+			t.Errorf("listener %q: example %q would be refused: %v", words, example, err)
+		}
+	}
+}
+
+// A multi-target listener should illustrate narrowing rather than restate
+// what it already serves.
+func TestGrantExamplePrefersARealNarrowing(t *testing.T) {
+	offered := mustSpec(t, "files /srv forward a:22,b:80")
+	if got := grantExample(offered); !strings.Contains(got, "forward a:22") {
+		t.Errorf("grantExample = %q, want the one-of-several forward target", got)
+	}
+}

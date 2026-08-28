@@ -71,10 +71,20 @@ func askGrant(a asker, seed links.Terms, offered grant.Spec) (string, error) {
 		return "", nil
 	}
 	a.Say("  This listener serves:")
+	rows := make([][2]string, 0, 4)
+	width := 0
 	for _, w := range offered.Words() {
-		a.Say("    %-8s  %s", w, describeOffer(w, offered))
+		form := w + argumentForm(w, offered)
+		if len(form) > width {
+			width = len(form)
+		}
+		rows = append(rows, [2]string{form, describeOffer(w, offered)})
 	}
-	a.Say("  Grant what? Same words, narrower -- or Enter for all of it.")
+	for _, r := range rows {
+		a.Say("    %-*s  %s", width, r[0], r[1])
+	}
+	a.Say("  Grant what? The same words `serve` takes, e.g. %s", grantExample(offered))
+	a.Say("  Enter grants all of it.")
 
 	def := seed.Grant
 	if def == "" {
@@ -102,6 +112,66 @@ func askGrant(a asker, seed links.Terms, offered grant.Spec) (string, error) {
 		}
 		return spec.String(), nil
 	}
+}
+
+// argumentForm is the placeholder shown beside a capability, so the prompt
+// says what may be typed rather than only what is served.
+//
+// Shown only where narrowing is actually available. A listener that pinned
+// its shell command has fixed it -- a link may not choose another -- so
+// offering `[COMMAND]` there would invite an answer that gets refused.
+func argumentForm(word string, offered grant.Spec) string {
+	switch word {
+	case "files":
+		return " [DIR]"
+	case "proxy", "forward":
+		return " [HOST:PORT,...]"
+	case "shell":
+		if len(offered.ShellArgv) > 0 {
+			return ""
+		}
+		return " [COMMAND]"
+	}
+	return ""
+}
+
+// grantExample picks an example from what this listener actually serves, so
+// the shape shown is one that would be accepted if typed.
+func grantExample(offered grant.Spec) string {
+	// A listener offering several targets gives the best example, because
+	// picking one of them is narrowing rather than just restating what is
+	// already served.
+	if len(offered.ForwardTargets) > 1 {
+		return "`forward " + offered.ForwardTargets[0] + "`"
+	}
+	if len(offered.ProxyTargets) > 1 {
+		return "`proxy " + offered.ProxyTargets[0] + "`"
+	}
+	switch {
+	case offered.Has(grant.ScopeFiles):
+		if offered.FilesPath != "" {
+			// Under what is shared, so the example is one that would be
+			// accepted -- a generic path would be refused here.
+			return "`files " + strings.TrimSuffix(offered.FilesPath, "/") + "/SUBDIR`"
+		}
+		return "`files ~/Downloads`"
+	case offered.Has(grant.ScopeForward):
+		if len(offered.ForwardTargets) == 1 {
+			return "`forward " + offered.ForwardTargets[0] + "`"
+		}
+		return "`forward db:5432`"
+	case offered.Has(grant.ScopeProxy):
+		if len(offered.ProxyTargets) == 1 {
+			return "`proxy " + offered.ProxyTargets[0] + "`"
+		}
+		return "`proxy nas:8096`"
+	}
+	if len(offered.ShellArgv) == 0 {
+		// Pinning a command is the only narrowing a shell-only listener
+		// offers, so that is the example worth showing.
+		return "`shell /bin/login`"
+	}
+	return "`shell`"
 }
 
 // describeOffer says what one capability of the listener's grant reaches,
