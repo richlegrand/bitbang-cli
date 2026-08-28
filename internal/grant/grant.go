@@ -95,7 +95,22 @@ func Everything() Spec {
 // capability word, so `files proxy` shares the working directory and serves
 // a proxy rather than sharing a directory called "proxy". A directory
 // genuinely named `proxy` needs `./proxy`.
-func Parse(args []string) (Spec, error) {
+func Parse(args []string) (Spec, error) { return parse(args) }
+
+// ParseString reads a grant written as one line, the form links.json holds.
+//
+// Quotes are honored here rather than by a shell, so an argument containing
+// a space survives: `shell "/opt/my app/bin" --login`.
+func ParseString(s string) (Spec, error) {
+	fields, err := splitFields(s)
+	if err != nil {
+		return Spec{}, err
+	}
+	return parse(fields)
+}
+
+// parse is the grammar.
+func parse(args []string) (Spec, error) {
 	if len(args) == 0 {
 		// Unspecified, not empty. The caller decides what that means: a
 		// listener takes Everything, a link takes whatever is offered.
@@ -129,17 +144,17 @@ func Parse(args []string) (Spec, error) {
 
 		switch word {
 		case "shell":
-			// A command is not one token -- `shell tmux attach` has to work.
-			// Everything up to the next capability word belongs to it.
+			// One argument, like every other word. It is a command line, so
+			// it is split into argv here -- `shell "ssh -p 2222 host"`.
+			// Quoting is the only way to spell a command of several words,
+			// which is what keeps `shell tmux attach forward` from having
+			// to guess where the command ends and the next word begins.
 			if arg != "" {
-				spec.ShellArgv = append(spec.ShellArgv, arg)
-				for i+1 < len(args) {
-					if _, isWord := words[args[i+1]]; isWord {
-						break
-					}
-					spec.ShellArgv = append(spec.ShellArgv, args[i+1])
-					i++
+				argv, err := splitFields(arg)
+				if err != nil {
+					return Spec{}, fmt.Errorf("shell: %w", err)
 				}
+				spec.ShellArgv = argv
 			}
 		case "files":
 			spec.FilesPath = arg
@@ -150,11 +165,6 @@ func Parse(args []string) (Spec, error) {
 		}
 	}
 	return spec, nil
-}
-
-// ParseString reads a grant written as one line, the form links.json holds.
-func ParseString(s string) (Spec, error) {
-	return Parse(strings.Fields(s))
 }
 
 func splitList(arg string) []string {
@@ -186,12 +196,12 @@ func (s Spec) String() string {
 		case "shell":
 			if len(s.ShellArgv) > 0 {
 				b.WriteByte(' ')
-				b.WriteString(strings.Join(s.ShellArgv, " "))
+				b.WriteString(quoteCommand(s.ShellArgv))
 			}
 		case "files":
 			if s.FilesPath != "" {
 				b.WriteByte(' ')
-				b.WriteString(s.FilesPath)
+				b.WriteString(quoteField(s.FilesPath))
 			}
 		case "proxy":
 			if len(s.ProxyTargets) > 0 {
@@ -353,4 +363,78 @@ func (s Spec) Words() []string {
 		}
 	}
 	return out
+}
+
+// splitFields splits a line into tokens on whitespace, honoring single and
+// double quotes so an argument containing a space stays one token.
+//
+// A grant lives in a file as well as on a command line, and in the file
+// there is no shell to do this. Without it, `shell "/opt/my app/bin"` in
+// links.json would parse as two arguments and run neither.
+//
+// Deliberately not a shell: no variable expansion, no escapes beyond the
+// quotes themselves, no operators. A grant says what is reached, and
+// anything that turned it into a program someone else could steer would be
+// working against the point.
+func splitFields(s string) ([]string, error) {
+	var (
+		out   []string
+		cur   strings.Builder
+		quote rune // 0 when not inside quotes
+		open  bool // cur holds a token, even if it is empty
+	)
+	for _, r := range s {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote == 0 && (r == '\'' || r == '"'):
+			quote, open = r, true
+		case quote == 0 && (r == ' ' || r == '\t' || r == '\n' || r == '\r'):
+			if open {
+				out = append(out, cur.String())
+				cur.Reset()
+				open = false
+			}
+		default:
+			cur.WriteRune(r)
+			open = true
+		}
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unbalanced %c in %q", quote, s)
+	}
+	if open {
+		out = append(out, cur.String())
+	}
+	return out, nil
+}
+
+// quoteCommand renders argv as the single field the grammar expects: the
+// arguments quoted against each other, then the whole quoted again so it
+// survives being split off the line.
+//
+// Two levels because there are two splits. `["ssh","-p","22"]` becomes
+// `"ssh -p 22"`, and `["/opt/my app/bin","--login"]` becomes
+// `"'/opt/my app/bin' --login"`.
+func quoteCommand(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = quoteField(a)
+	}
+	return quoteField(strings.Join(parts, " "))
+}
+
+// quoteField is splitFields' inverse for one token, so String round-trips a
+// command whose arguments contain spaces.
+func quoteField(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(s, " \t\n\r'\"") {
+		return s
+	}
+	if !strings.Contains(s, `"`) {
+		return `"` + s + `"`
+	}
+	return `'` + s + `'`
 }

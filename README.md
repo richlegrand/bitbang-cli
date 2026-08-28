@@ -439,7 +439,7 @@ bitbang serve shell tmux attach                  a command, which may be several
 
 | Word              | Argument                        | Without one                      |
 | ----------------- | ------------------------------- | -------------------------------- |
-| `shell [COMMAND…]`| the command to run              | `$SHELL`, or `%COMSPEC%` on Windows |
+| `shell [COMMAND]` | the command to run, quoted if it is more than one word | `$SHELL`, or `%COMSPEC%` on Windows |
 | `files [PATH]`    | a directory or file             | the working directory            |
 | `proxy [TARGET…]` | one target, or a comma list     | the browser names its own        |
 | `forward [HOST:PORT…]` | one target, or a comma list | any host:port the listener can reach |
@@ -452,6 +452,20 @@ choice, and in both cases the proxy can reach only what was named.
 **A capability word is never eaten as another word's argument**, so
 `serve files proxy` shares the working directory and serves a proxy. A
 directory genuinely called `proxy` needs `./proxy`.
+
+**A command of more than one word is quoted.** Every word takes exactly one
+argument, so quoting is what says where a command ends -- nothing has to guess,
+and a flag inside the quotes belongs to the command rather than to `bitbang`:
+
+```
+bitbang serve shell "ssh -p 2222 host"
+bitbang serve shell "tmux attach" forward     # a command, and forwarding
+bitbang serve shell "tmux attach forward"     # one command, no forwarding
+bitbang serve shell tmux attach               # error: "attach" is not something to serve
+```
+
+An argument that itself contains a space is quoted again inside, which is how
+a Windows path is spelled: `shell "'C:\Program Files\Git\bin\bash.exe' --login"`.
 
 The rule for the flags below: **a word says what is served, a flag says how.**
 A flag whose capability was not named is an error rather than a setting that

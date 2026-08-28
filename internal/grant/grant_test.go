@@ -27,13 +27,13 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "a command may be several words",
-			in:   "shell tmux attach",
+			in:   `shell "tmux attach"`,
 			want: Spec{Caps: map[string]bool{ScopeShell: true},
 				ShellArgv: []string{"tmux", "attach"}},
 		},
 		{
 			name: "a command stops at the next capability",
-			in:   "shell tmux attach files /srv",
+			in:   `shell "tmux attach" files /srv`,
 			want: Spec{Caps: map[string]bool{ScopeShell: true, ScopeFiles: true},
 				ShellArgv: []string{"tmux", "attach"}, FilesPath: "/srv"},
 		},
@@ -80,7 +80,7 @@ func TestStringRoundTrips(t *testing.T) {
 		"files /srv",
 		"proxy a:80,b:80",
 		"forward g:22",
-		"files /srv proxy a:80 forward g:22 shell tmux attach",
+		`files /srv proxy a:80 forward g:22 shell "tmux attach"`,
 	} {
 		spec, err := ParseString(in)
 		if err != nil {
@@ -116,7 +116,7 @@ func TestNarrow(t *testing.T) {
 		{"targets on an unrestricted listener", "forward", "forward a:22", "forward a:22"},
 		{"no targets keeps the listener's", "forward a:22,b:80", "forward", "forward a:22,b:80"},
 		{"a link may pin a shell the listener left open", "shell", "shell /bin/login", "shell /bin/login"},
-		{"the listener's command carries through", "shell tmux attach", "shell", "shell tmux attach"},
+		{"the listener's command carries through", `shell "tmux attach"`, "shell", `shell "tmux attach"`},
 		{"empty grant takes everything offered", "files /srv proxy a:80", "", "files /srv proxy a:80"},
 	}
 	for _, c := range cases {
@@ -184,5 +184,104 @@ func TestNarrowFilesPath(t *testing.T) {
 		if _, err := l.Narrow(k); err == nil {
 			t.Errorf("%q was accepted as inside %q", outside, base)
 		}
+	}
+}
+
+// A command with arguments reaches us as one token, because the shell
+// stripped the quotes: `serve shell "ssh -p 2222 host"` is one argv
+// element. Treating it as a filename is what produced
+// `fork/exec /usr/bin/ssh 127.0.0.1: no such file or directory`.
+func TestParse_QuotedShellCommandBecomesArgv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"quoted, with a flag of its own",
+			[]string{"shell", "ssh -p 2222 host"},
+			[]string{"ssh", "-p", "2222", "host"}},
+		{"quoted, two words",
+			[]string{"shell", "tmux attach"},
+			[]string{"tmux", "attach"}},
+		{"one word stays one word",
+			[]string{"shell", "/bin/login"},
+			[]string{"/bin/login"}},
+		// The escape hatch for a path with a space: quote again inside.
+		{"inner quotes protect a spaced path",
+			[]string{"shell", "'/opt/my app/bin' --login"},
+			[]string{"/opt/my app/bin", "--login"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := Parse(tc.args)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if strings.Join(spec.ShellArgv, "\x00") != strings.Join(tc.want, "\x00") {
+				t.Errorf("ShellArgv = %q, want %q", spec.ShellArgv, tc.want)
+			}
+		})
+	}
+}
+
+// A grant in a file goes through both splits: the line into words, then the
+// command field into argv. Quoting has to survive each, which is why the
+// command is quoted as a whole and its spaced argument quoted again inside.
+func TestParseString_QuotesSurviveBothSplits(t *testing.T) {
+	spec, err := ParseString(`shell "'/opt/my app/bin' --login"`)
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	want := []string{"/opt/my app/bin", "--login"}
+	if strings.Join(spec.ShellArgv, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("ShellArgv = %q, want %q", spec.ShellArgv, want)
+	}
+}
+
+// Whatever String writes, ParseString has to read back -- links.json stores
+// exactly this, and a grant that changed meaning on reload would hand out
+// something nobody wrote.
+func TestSpec_RoundTripsArgumentsWithSpaces(t *testing.T) {
+	for _, argv := range [][]string{
+		{"ssh", "-p", "2222", "host"},
+		{"/opt/my app/bin", "--login"},
+		{"sh", "-c", "echo one two"},
+	} {
+		orig := Spec{Caps: map[string]bool{ScopeShell: true}, ShellArgv: argv}
+		back, err := ParseString(orig.String())
+		if err != nil {
+			t.Fatalf("ParseString(%q): %v", orig.String(), err)
+		}
+		if strings.Join(back.ShellArgv, "\x00") != strings.Join(argv, "\x00") {
+			t.Errorf("%q -> %q -> %q", argv, orig.String(), back.ShellArgv)
+		}
+	}
+}
+
+func TestSplitFields_UnbalancedQuoteIsAnError(t *testing.T) {
+	if _, err := ParseString(`shell "ssh -p 2222`); err == nil {
+		t.Error("an unbalanced quote parsed cleanly; it would silently drop the rest")
+	}
+}
+
+// A command of several words has to be quoted. Unquoted, the second word is
+// read as a capability -- which is the whole reason the grammar gives shell
+// exactly one argument like every other word, rather than guessing where a
+// command ends.
+func TestParse_UnquotedMultiWordCommandIsAnError(t *testing.T) {
+	for _, args := range [][]string{
+		{"shell", "tmux", "attach"},
+		{"shell", "ssh", "-l", "alice", "host"},
+	} {
+		if _, err := Parse(args); err == nil {
+			t.Errorf("Parse(%q) succeeded; an unquoted command must not parse", args)
+		}
+	}
+	// And the word really is a capability when that is what was meant.
+	spec, err := Parse([]string{"shell", "echo hi", "forward"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !spec.Has(ScopeForward) || strings.Join(spec.ShellArgv, " ") != "echo hi" {
+		t.Errorf("argv=%q forward=%v", spec.ShellArgv, spec.Has(ScopeForward))
 	}
 }

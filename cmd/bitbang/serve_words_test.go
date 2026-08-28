@@ -11,7 +11,7 @@ import (
 // tested in internal/grant, so this covers the derivation and nothing else.
 func TestApplySpecDerivesFromTheGrant(t *testing.T) {
 	var cfg serveConfig
-	spec, err := grant.ParseString("shell tmux attach files /srv proxy a:80 forward g:22,i:5432")
+	spec, err := grant.ParseString(`shell "tmux attach" files /srv proxy a:80 forward g:22,i:5432`)
 	if err != nil {
 		t.Fatal(err)
 	}

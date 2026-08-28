@@ -227,7 +227,7 @@ def shell_narrowed(listener, test_server, tmp_path_factory):
     """A listener whose shell is open, and a link pinning one command."""
     home = str(tmp_path_factory.mktemp('narrow-shell-home'))
     l = listener('serve', 'shell', '-server', test_server, home=home,
-                 links=[{'label': 'narrow', 'grant': 'shell /bin/echo pinned-output'}])
+                 links=[{'label': 'narrow', 'grant': 'shell "/bin/echo pinned-output"'}])
     l.await_links(['narrow'])
     return l, l.urls_by_label()
 
