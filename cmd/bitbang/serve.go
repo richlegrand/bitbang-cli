@@ -263,6 +263,39 @@ func smallQR(url string) string {
 	return b.String()
 }
 
+// exposureNotice is what the operator is told about reach the URL carries
+// but the sharing block does not make obvious.
+//
+// Two configurations qualify. A shell is the older one. Unrestricted
+// forwarding is the newer, and it only became possible when `forward`
+// stopped riding along with `shell`: alongside a shell it granted nothing
+// a shell could not already reach, so it needed no notice of its own. On
+// its own it is every host this machine can route to, and nothing else the
+// listener prints says that out loud.
+//
+// A PIN suppresses both -- it is the second factor the notices point at, so
+// having taken the advice should not keep the warning.
+//
+// The bool reports a warning, which the caller sends to stderr.
+func exposureNotice(cfg serveConfig, pinned bool, bold, reset string) (string, bool) {
+	if pinned {
+		return "PIN protection enabled.\n", false
+	}
+	warn := func(what, bound string) (string, bool) {
+		return fmt.Sprintf("%sWarning: anyone with this URL %s.%s\n  %s\n",
+			bold, what, reset, bound), true
+	}
+	switch {
+	case cfg.caps.has(links.ScopeShell):
+		return warn("gets a shell on this machine",
+			"Use --pin <PIN> for a second factor, or pick a non-shell mode.")
+	case cfg.caps.has(links.ScopeForward) && len(cfg.offered.ForwardTargets) == 0:
+		return warn("can open a TCP connection to any host this machine can reach",
+			"Name targets after `forward` to bound it, or use --pin <PIN>.")
+	}
+	return "", false
+}
+
 func startListener(cfg serveConfig) {
 	// Build the file share if files enabled.
 	var share *fileshare.FileShare
@@ -381,12 +414,14 @@ func startListener(cfg serveConfig) {
 	out.ready()
 	printSharingBlock(os.Stdout, cfg, share)
 
-	// PIN status / shell-without-PIN warning.
-	if pinAuth.Required() {
-		fmt.Println("PIN protection enabled.")
-	} else if cfg.caps.has(links.ScopeShell) {
-		fmt.Fprintf(os.Stderr, "%sWarning: anyone with this URL gets a shell and unrestricted TCP access from this machine.%s\n", out.bold, out.reset)
-		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
+	if notice, warning := exposureNotice(cfg, pinAuth.Required(), out.bold, out.reset); notice != "" {
+		// Warnings on stderr, the PIN line on stdout, as before: a script
+		// capturing the URL should not have to filter warnings out of it.
+		w := os.Stdout
+		if warning {
+			w = os.Stderr
+		}
+		fmt.Fprint(w, notice)
 	}
 
 	if listing := linkState.listing(out.bold, out.reset); listing != "" {
