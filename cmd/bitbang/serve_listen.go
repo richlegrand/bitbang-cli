@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,29 +39,33 @@ type listener struct {
 
 	peers *peerset.Set[*servePeer]
 
+	// console is the operator's interactive surface, nil when there is no
+	// controlling terminal. Pairing asks it what to grant.
+	console *console
+
+	// mirror is where a shell session's output goes, held while a prompt
+	// is up. Handlers write to it rather than to os.Stdout directly.
+	mirror io.Writer
+
 	// unauthSessions counts peers that have not completed the PIN
 	// handshake. Bounds parallel brute-force; released on auth or close.
 	unauthSessions atomic.Int32
 }
 
-// watch starts the two things that run on their own schedule: the triggers
-// that replace the link table, and the timer that retires expired links.
-func (l *listener) watch(bold, reset string) {
-	poll := func(now time.Time) { pollPeers(l.peers.All(), l.links.current(), now) }
-	watchReload(func() {
-		if err := l.links.reload(); err != nil {
-			// The previous table stays in force: an unreadable file must
-			// never degrade to "no links", which grants everything.
-			fmt.Fprintf(os.Stderr, "Reload failed, keeping the previous links: %v\n", err)
-			return
-		}
-		if listing := l.links.listing(bold, reset); listing != "" {
-			fmt.Print(listing)
-			fmt.Print(reloadHint())
-		}
-		poll(time.Now())
+// watch starts the timer that retires expired links. Everything else
+// that changes the table -- add, edit, rm -- applies as it happens, from
+// the console.
+func (l *listener) watch() {
+	watchExpiry(linkPoll, func(now time.Time) {
+		pollPeers(l.peers.All(), l.links.current(), now)
 	})
-	watchExpiry(linkPoll, poll)
+}
+
+// pollNow re-checks live sessions against the table as it stands.
+// Called after anything that changes the table, so a revocation reaches
+// sessions already open rather than only the next connection.
+func (l *listener) pollNow() {
+	pollPeers(l.peers.All(), l.links.current(), time.Now())
 }
 
 func (l *listener) handleSignal(msg signaling.Message) {
@@ -204,8 +208,32 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		p.close()
 		return
 	}
-	granted := terms.GrantSet(offeredScopes(l.cfg))
-	h := buildHandlers(l.cfg, granted, l.share, l.shellArgv, l.id, p.browserIP)
+	// What this peer reaches: the listener's grant, narrowed by the link's.
+	// One computation feeds the handler set, the shell command, the file
+	// share and the target allowlists, so they cannot disagree about what
+	// was granted.
+	eff, err := terms.Effective(l.cfg.offered)
+	if err != nil {
+		log.Printf("Dropping %s: %v", clientID, err)
+		p.close()
+		return
+	}
+	share := l.share
+	if eff.FilesPath != "" && eff.FilesPath != l.cfg.filesPath {
+		// A link narrowed to a subdirectory gets its own view of the tree.
+		// Narrowing was checked when the grant was resolved; this only
+		// fails if the directory has since gone.
+		s, err := fileshare.New(eff.FilesPath)
+		if err != nil {
+			log.Printf("Dropping %s: link %q shares %s: %v", clientID, label, eff.FilesPath, err)
+			p.close()
+			return
+		}
+		s.UploadEnabled = l.cfg.filesUpload
+		share = s
+	}
+	h := buildHandlers(l.cfg, eff, share, l.id, p.browserIP, l.mirror,
+		label == links.OwnerLabel)
 
 	sess := session.New(p.conn.DC, l.pinAuth, l.cfg.verbose, h.all...)
 	sess.OnReady = func() {
@@ -221,8 +249,8 @@ func (l *listener) handleAnswer(msg signaling.Message) {
 		sess.Close()
 		return
 	}
-	if label != links.MeLabel {
-		log.Printf("Peer %s authorized on link %q (%v)", clientID, label, terms.Grants(offeredScopes(l.cfg)))
+	if label != links.OwnerLabel {
+		log.Printf("Peer %s authorized on link %q (%s)", clientID, label, effectiveWords(terms, l.cfg.offered))
 	}
 }
 
@@ -237,12 +265,36 @@ func (l *listener) handlePairRequest(msg signaling.Message) {
 		log.Printf("Rejecting duplicate pair client ID %q", clientID)
 		return
 	}
+	// The SAS prompt runs on the console so its question is not scrolled
+	// away by a mirroring shell session -- it is the one prompt that
+	// cannot be answered if you miss it.
+	// Announcements go to the console when there is one, so they land in
+	// the same place as the prompt they introduce.
+	// One hold for the whole exchange -- the SAS and then the grant
+	// questions. Per-question holds let the command loop take a turn
+	// between them, printing a prompt that could swallow the next answer.
+	release := l.console.Hold()
 	conn, err := peer.HandlePairRequest(msg, l.signaling, l.id,
-		pairing.DefaultTTYPrompt, l.cfg.verbose)
+		l.sasPrompt(), l.console.Writer(), l.cfg.verbose)
 	if err != nil {
+		release()
 		log.Printf("Failed to handle pair request: %v", err)
 		return
 	}
+
+	// Hand over a minted link rather than the identity's own code, so the
+	// pairing is visible in the table, revocable on its own, and can be
+	// limited or made to lapse.
+	remoteIP, _ := msg["remote_ip"].(string)
+	var releaseOnce sync.Once
+	done := func() { releaseOnce.Do(release) }
+	conn.GrantPairCredential = func() (string, bool) {
+		defer done()
+		return grantForPairing(l.console, l.links, remoteIP, l.cfg.offered)
+	}
+	// A pairing that never reaches the grant -- a mismatched SAS, a
+	// connector that gives up -- must not leave the loop held out.
+	conn.OnPairDone = done
 	p := newServePeer(clientID)
 	p.conn = conn
 	p.q.SetConn(conn)
@@ -268,4 +320,28 @@ func (l *listener) handleCandidate(msg signaling.Message) {
 	}
 	candidate, _ := msg["candidate"].(map[string]interface{})
 	_ = p.conn.AddICECandidate(candidate)
+}
+
+// sasPrompt reads the SAS on the console, falling back to the package
+// default when there is no terminal.
+//
+// The listener never displays the code -- the operator hears it from the
+// connector and types it -- so this stays a free-text prompt rather than
+// becoming a confirmation. A y/n here would be exactly the autopilot
+// approval the pairing design exists to prevent.
+func (l *listener) sasPrompt() pairing.PromptFunc {
+	if !l.console.Available() {
+		return pairing.DefaultTTYPrompt
+	}
+	return func(attempt int) (string, pairing.PromptStatus) {
+		// A connector is waiting on this one, so it does not wait
+		// forever. The console's command loop has no such limit.
+		typed, err := l.console.AskNow(
+			fmt.Sprintf("Enter code (attempt %d/%d)", attempt, pairing.MaxSASAttempts),
+			"", peerWaitLimit)
+		if err != nil {
+			return "", pairing.PromptAbort
+		}
+		return typed, pairing.PromptOK
+	}
 }

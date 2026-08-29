@@ -1,9 +1,34 @@
-# BitBang CLI 
-
-BitBang CLI is a single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
+# BitBang CLI
 
 [![Tests](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/richlegrand/bitbang-cli/actions/workflows/tests.yml)
 ![License](https://img.shields.io/github/license/richlegrand/bitbang-cli)
+
+`bitbang` is a single static binary remote-access multitool: open an interactive shell, browse and transfer files, and access web apps on the remote machine's network from any browser, no port forwarding, no configuring, and no account.
+
+## How it compares
+
+|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | tailcat                   | frp                                 | `bitbang`           |
+| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ------------------------- | ----------------------------------- | ------------------- |
+| Account required                   | Yes                 | Yes               | Yes                            | No                        | No                                  | **No**              |
+| Browser access: what's included    | BYO web server      | BYO web server    | BYO web server, install client on browser's machine | files and text | BYO web server            | **a terminal, a file browser, and web apps on the remote network** |
+| Browser access: data path          | their servers       | their servers     | P2P (relay fallback)           | relay only, no direct     | your server                         | **direct P2P**      |
+| Data path, CLI to CLI              | their servers       | their servers     | P2P (relay fallback)           | P2P (relay fallback)      | your server (P2P optional)          | **P2P (relay fallback)** |
+| End-to-end encrypted               | Not by default      | No                | Yes                            | Yes                       | No -- your server sees traffic      | **Yes**             |
+| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                   | **Yes**                             | **Yes**             |
+| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | **Run one command**       | A public-IP server + TOML both ends | **Run one command** |
+
+[tailcat](https://github.com/tailscale/tailcat) is the closest thing here: no
+account, one static binary, WireGuard end to end, and a direct path when hole
+punching works. The difference is that it needs its binary on both ends.
+`bitbang` was built the other way round: the far end opens a URL and gets a
+terminal, a file browser, and web apps on the remote network -- on a phone if
+that is what is to hand.
+
+That is what the two browser rows are for. Everything else here that a browser
+can open only hands back a web server you were already running -- install ttyd
+first if you want a terminal -- and hands it back through somebody's servers.
+tailcat's browser build moves files and text, and by its own README is
+*"relayed over DERP only, with no direct connections"*.
 
 ![Install bitbang, run bitbang serve, and open the printed URL in a browser to get a shell, a file browser, and a proxy to the machine's network](assets/demo.webp)
 
@@ -18,31 +43,48 @@ bitbang serve
 
 `bitbang` is a single static Go binary. It's part of the [BitBang project](https://github.com/richlegrand/bitbang); this [whitepaper](https://github.com/richlegrand/bitbang/blob/main/whitepaper.md) covers the design in depth.
 
-## Pairing with a 6-digit code
 
-When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.  If you know [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole), the shape is similar -- a spoken code that securely introduces two machines.
-	
-![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
+## Quickie recipes
 
-## Why?
+**Reach a service at home**
 
-- **Nothing to forward or configure.** Works from behind NAT, CGNAT, or a locked-down network -- no router changes, no VPN, no tunnel daemon.
-- **Nothing to install on the connecting side.** A browser is enough. A CLI is there when you want scripting, pipes, and file copy.
-- **Private by design.** Traffic is WebRTC/DTLS, peer-to-peer. The signaling server never sees it; if a direct path isn't possible, a TURN relay carries ciphertext only.
-- **No account, no telemetry.**
+- [Mount your home NAS from anywhere (SMB)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#mount-your-home-nas-from-anywhere-smb)
+- [Watch your media library from anywhere (Jellyfin)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-your-media-library-from-anywhere-jellyfin)
+- [Use your own LLM from anywhere (Ollama, Open WebUI)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#use-your-own-llm-from-anywhere-ollama-open-webui)
+- [Check your security cameras (Frigate)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-security-cameras-frigate)
+- [Reach your home automation without exposing it (Home Assistant)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-your-home-automation-without-exposing-it-home-assistant)
+- [Print to your home printer (IPP, CUPS)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#print-to-your-home-printer-ipp-cups)
 
+**Get on a machine**
 
-### Why not just use SSH?
+- [Get a shell on a machine behind NAT](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-on-a-machine-behind-nat)
+- [Get a shell from your phone](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#get-a-shell-from-your-phone)
+- [Remote desktop into a Windows machine (RDP)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#remote-desktop-into-a-windows-machine-rdp)
+- [Reach a Linux or Mac desktop (VNC)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-linux-or-mac-desktop-vnc)
+- [SSH to a machine with no open port (OpenSSH)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#ssh-to-a-machine-with-no-open-port-openssh)
+- [Set up a headless Raspberry Pi](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#set-up-a-headless-raspberry-pi)
 
-`bitbang` is shaped like ssh: `serve`, `connect`, and `cp` map to `sshd`, `ssh`, and `scp`, with WebRTC as the transport instead of TCP. For a machine you can already SSH into comfortably, that difference doesn't buy you much. But most of `bitbang` came out of annoyances I seem to hit more often than I should:
+**Share with someone else**
 
-**Reach.** Remote SSH access needs an inbound path, and on most networks opening one isn't your call -- CGNAT (cellular, Starlink, many ISPs), corporate, university, municipal. So in practice you bolt on a second system: Tailscale, a VPN, ngrok -- another install, another account, another daemon to keep running. `bitbang serve` needs no open port and works from anywhere.
+Sharing entails simply giving someone a unique URL or QR code that gives them access. Permissions can be tailored and set to expire in minutes, hours, etc. 
 
-**Setup.** SSH has to be enabled and configured before it will let you in. It's disabled by default on Raspberry Pi OS, and often key-only, which means getting your public key onto the machine first. And how do you do that? Email or a USB stick are usually the most painless options. `bitbang` sets up the connection with a 6-digit code exchange instead -- something you can do safely over the phone, or call out across the room. It also runs as an ordinary user -- no root, no daemon, no config file.
+- [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#share-files-without-uploading-them-anywhere)
+- [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-your-project)
+- [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#give-someone-access-that-expires)
+- [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-agent-session-from-your-phone-claude-code-tmux)
+- [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#fix-someone-elses-router)
 
-**Proxying.** If you want a web app on that machine's network, SSH gives you a separate tunnel per app, named in advance. The `bitbang` proxy is generic: specify the web app's URL at connection time.
+**Development and devices**
 
-**Browser client.** SSH needs an SSH client and a key or password on the connecting side. `bitbang` needs a browser -- which means a phone, a borrowed laptop, or someone who has never opened a terminal. Hand them the URL and they get the access that you've granted them.
+- [Reach a database from your dev machine (Postgres, MySQL)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#reach-a-database-from-your-dev-machine-postgres-mysql)
+- [Sync devices that cannot find each other (Syncthing)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#sync-devices-that-cannot-find-each-other-syncthing)
+- [Watch a robot from a browser (ROS, Foxglove)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#watch-a-robot-from-a-browser-ros-foxglove)
+
+**Techniques**
+
+- [What a forwarding listener exposes](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#what-a-forwarding-listener-exposes)
+- [Let other machines on your LAN use a forward](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#let-other-machines-on-your-lan-use-a-forward)
+- [Known not to work](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#known-not-to-work)
 
 ## Using `bitbang`
 
@@ -51,14 +93,25 @@ Every connection has two ends: a **listener** (`bitbang serve`, running on the m
 ### The listener: `bitbang serve`
 
 ```
-bitbang serve                    # everything: shell + files + proxy on one URL
-bitbang serve shell              # shell only
-bitbang serve files ~/share      # files only (add -upload to allow uploads)
-bitbang serve proxy              # proxy; pick the target in the browser
-bitbang serve proxy localhost:8080   # ...or pin a single target
+bitbang serve                    # everything: shell + proxy + files + forward
+bitbang serve shell              # just a terminal
+bitbang serve files ~/share      # just a directory (-files-upload to allow uploads)
+bitbang serve proxy localhost:8080       # just one web app, straight at the URL
+bitbang serve proxy a.lan:80,b.lan:80    # ...or several, chosen in the browser
+bitbang serve forward 127.0.0.1:22       # just TCP, for `connect -L`
+
+bitbang serve shell files ~/share proxy nas.lan:8096   # any combination
 ```
 
-Each prints a QR code, URL and a pairing code.
+Each prints a QR code, URL and a pairing code. The mode picks what the
+listener can do at all: `serve shell` has no forwarding to grant, and a
+forward-only listener never starts a shell, so there is nothing to escalate
+to.
+
+One default worth knowing: **forwarding and the proxy reach any host:port the
+listener can reach**, not only the one you had in mind, so a link handed out
+for a database also reaches the rest of that network. Naming targets after the
+word narrows it -- `forward db.internal:5432` reaches that and nothing else.
 
 ### Sharing a running session: `bitbang share`
 
@@ -104,6 +157,107 @@ window follows the active read-write client; a lone viewer still supplies the
 only available size. If `window-size` has been overridden, `share` reports it
 but does not change the user's configuration.
 
+### Handing out limited access: `bitbang link`
+
+One listener, one URL, and as many **access links** as you need. Each is a
+separate code on that same URL, granting a subset of what the listener offers
+and optionally lapsing at a fixed time:
+
+```
+bitbang link edit                # add entries in $EDITOR
+bitbang link ls                  # what you have handed out
+bitbang link rm <label>          # revoke one
+bitbang link qr <label>          # its URL and QR code
+```
+
+An entry is a line of JSON in `~/.bitbang/bitbang/links.json`. Write one with no
+code, reload the listener at its console, and it mints one:
+
+```json
+[
+  {"label": "ana",  "grant": "files", "expires": "2026-09-01T00:00:00Z"},
+  {"label": "ben",  "grant": "files /srv/photos"},
+  {"label": "dev",  "grant": "shell forward 127.0.0.1:5432"}
+]
+```
+
+```
+  0) owner  files forward proxy shell
+     https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#_vtQ0JCPe7s
+  1) ana    files  expires in 6d
+     https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#T-Ty_HhvLfY
+  2) ben    files /srv/photos
+     https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#L6La8OzBO74
+  3) dev    forward 127.0.0.1:5432 shell
+     https://bitba.ng/8ach_I7oQk2vBb9xYzT0Lw#8kmI3LYzB7E
+```
+
+`owner` is the identity's own code and grants everything the listener serves; send
+one of the others instead. The console takes either the label or the number beside
+it, so `rm 2` and `rm ben` do the same thing.
+
+A `grant` is written in the words `serve` takes, and it can only narrow what the
+listener already serves. That means a link is not limited to picking capabilities:
+it can name a subdirectory of the shared folder, a subset of the forward targets, or
+a single command for `shell`. Omit `grant` and the link grants whatever the listener
+does. Ask for something outside the listener's reach and the console refuses it with
+the same message `serve` would give you.
+
+The label is what identifies a link, not its terms, so two people can hold links
+with identical grants and expiry and you can still revoke one without touching the
+other.
+
+Revocation and expiry reach sessions that are already open: the connection closes
+and the holder is told why, rather than going quiet. And an expired code is
+retired rather than paused -- renewing an entry mints a new one, so the URL you
+already sent stays dead.
+
+### Pairing with a 6-digit code
+
+When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.  If you know [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole), the shape is similar -- a spoken code that securely introduces two machines.
+	
+![Server prints a 5-minute pairing code; the other party enters it at bitba.ng, their screen shows a 6-digit challenge to read aloud, and typing it back on the serving machine approves the connection](assets/pairing.webp)
+
+### Bring your own TURN
+
+Most connections go straight peer-to-peer. When both ends sit behind a NAT that
+won't hole-punch, the traffic needs a relay, and by default that's ours. `-ice-servers`
+points the listener at your own instead:
+
+```
+bitbang serve -ice-servers ~/turn.json
+```
+
+The listener hands the config to the signaling server at registration, and the server
+gives it to whoever connects -- so both ends use your relay and ours is never involved.
+Any coturn, or a hosted provider like Cloudflare or Twilio, works.
+
+The file is JSON, in whichever of these three shapes your provider handed you:
+
+```json
+[{"urls": ["turn:turn.example.net:3478"], "username": "user", "credential": "pass"}]
+```
+
+```json
+{"ice_servers": [{"urls": "stun:stun.example.net:3478"}]}
+```
+
+```json
+{"iceServers": [{"urls": ["turn:turn.example.net:3478"], "username": "u", "credential": "p"}]}
+```
+
+`urls` takes a string or a list; `username` and `credential` are for TURN and can be
+left off a STUN-only entry. The path may be absolute, relative, or `~`-rooted. A file
+that doesn't parse stops the listener at startup rather than quietly falling back.
+
+If a session ends up relayed without being asked to, `bitbang connect` says so
+rather than leaving you to wonder why it feels slow. The listener logs it
+either way (`via RELAY`), and `-relay` / `-norelay` force the question one way
+or the other when you are diagnosing a path.
+
+Worth saying: this is about who carries the bytes, not who can read them. A relay only
+ever sees DTLS ciphertext, ours included. Run your own when you need more TURN than we can provide (we currently limit the time).
+
 ### Connecting from a browser
 
 Open the URL. Depending on what's served, you get:
@@ -127,7 +281,78 @@ bitbang cp <url>:/var/log/app.log ./app.log             # copy files, scp-style
 bitbang cp - <url>:/tmp/firmware.bin < firmware.bin     # stdin/stdout work too
 ```
 
+`-L` forwards **TCP only**, like `ssh -L`. `-L` binds `127.0.0.1` unless you pass
+`-g`, which makes the forwarded port reachable from your local network -- and
+anyone who reaches it gets whatever the tunnel reaches, with no BitBang
+credential in front of it.
+
+The listener needs `bitbang serve forward` or `bitbang serve`. By default a
+`forward` link reaches **any host:port the listener can reach**, not only the
+one you had in mind, so a link handed out for a database also reaches the rest
+of that network. Narrow it by naming what it may reach:
+
+```
+bitbang serve forward db.internal:5432        # this link reaches one service
+```
+
 Every successful connect or pairing is saved to `~/.bitbang/devices.json`, so from then on a short name is enough: `bitbang connect nas1`.
+
+## Platform support
+
+One binary per platform, no runtime dependencies. Everything works
+everywhere except the two rows called out below.
+
+|                                          | Linux | macOS | Windows |
+| ---------------------------------------- | :---: | :---: | :-----: |
+| Shell, files, proxy (`bitbang serve`)     |  yes  |  yes  |   yes   |
+| TCP forwarding (`-L`)                     |  yes  |  yes  |   yes   |
+| Access links -- grant, expiry, revocation |  yes  |  yes  |   yes   |
+| Bring your own TURN                       |  yes  |  yes  |   yes   |
+| Pairing with a 6-digit code               |  yes  |  yes  |   yes   |
+| The listener console (Enter)              |  yes  |  yes  |   yes   |
+| `bitbang connect`, `bitbang cp`           |  yes  |  yes  |   yes   |
+| Viewing a shared session                  |  yes  |  yes  |   yes   |
+| **Hosting a share** (`bitbang share`)     |  yes  |  yes  |  no *   |
+| **Terminal resize while connected**       |  yes  |  yes  |  no **  |
+
+\* `bitbang share` publishes a tmux session, so hosting one needs tmux --
+Linux, macOS, or WSL. Native Windows can still open share URLs with
+`bitbang connect`.
+
+\*\* A Windows connector does not notice its terminal being resized, so the
+remote shell keeps the size it started with until you reconnect. Unix
+gets this from `SIGWINCH`, which Windows has no equivalent of.
+
+## Security
+
+- **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is derived from the public key, so impersonating a device means finding a second preimage of its UID.
+- **The secret never touches the server.** The access code lives in the URL fragment (`#…`), which browsers never send -- `bitba.ng` brokers the connection without ever seeing the credential that authorizes it.
+- **End-to-end encryption.** All traffic rides WebRTC's DTLS. The signaling server sees only the public key, the derived UID, and connection metadata -- never your data. A TURN relay, if one is needed, sees ciphertext only.
+- **Verified pairing.** The read-aloud number in code pairing is a short authentication string (SAS), computed independently on both ends from the negotiated DTLS fingerprints and two committed nonces -- a machine-in-the-middle, whose fingerprints necessarily differ, can't make the two numbers match.
+- **The URL is a bearer credential.** Anyone who has it gets whatever you chose to serve -- a shell, if you ran `serve shell`. Share it accordingly.
+- **Optional PIN** (`--pin`) for permanent or headless setups, and **throwaway mode** (`-ephemeral`) for a fresh identity each run.
+
+How the two ends authenticate each other without trusting the signaling server is covered in detail here: [*Trustless Signaling: Authentication Without a Central Authority*](https://github.com/richlegrand/bitbang/blob/main/trustless-signaling.md).
+
+## Why?
+
+- **Nothing to forward or configure.** Works from behind NAT, CGNAT, or a locked-down network -- no router changes, no VPN, no tunnel daemon.
+- **Nothing to install on the connecting side.** A browser is enough. A CLI is there when you want scripting, pipes, and file copy.
+- **Private by design.** Traffic is WebRTC/DTLS, peer-to-peer. The signaling server never sees it; if a direct path isn't possible, a TURN relay carries ciphertext only.
+- **No account, no telemetry.**
+
+
+### Why not just use SSH?
+
+`bitbang` is shaped like ssh: `serve`, `connect`, and `cp` map to `sshd`, `ssh`, and `scp`, with WebRTC as the transport instead of TCP. For a machine you can already SSH into comfortably, that difference doesn't buy you much. But most of `bitbang` came out of annoyances I seem to hit more often than I should:
+
+**Reach.** Remote SSH access needs an inbound path, and on most networks opening one isn't your call -- CGNAT (cellular, Starlink, many ISPs), corporate, university, municipal. So in practice you bolt on a second system: Tailscale, a VPN, ngrok -- another install, another account, another daemon to keep running. `bitbang serve` needs no open port and works from anywhere.
+
+**Setup.** SSH has to be enabled and configured before it will let you in. It's disabled by default on Raspberry Pi OS, and often key-only, which means getting your public key onto the machine first. And how do you do that? Email or a USB stick are usually the most painless options. `bitbang` sets up the connection with a 6-digit code exchange instead -- something you can do safely over the phone, or call out across the room. It also runs as an ordinary user -- no root, no daemon, no config file.
+
+**Proxying.** If you want a web app on that machine's network, SSH gives you a separate tunnel per app, named in advance. The `bitbang` proxy is generic: specify the web app's URL at connection time.
+
+**Browser client.** SSH needs an SSH client and a key or password on the connecting side. `bitbang` needs a browser -- which means a phone, a borrowed laptop, or someone who has never opened a terminal. Hand them the URL and they get the access that you've granted them.
 
 ## Install
 
@@ -155,6 +380,13 @@ xattr -d com.apple.quarantine ./bitbang-darwin-arm64
 or right-click the file in Finder and choose Open, which offers a one-time
 override. Alternatively, build from source, which never quarantines.
 
+**Windows and SmartScreen.** The same thing happens on Windows, for the same
+reason. A browser download attaches Mark-of-the-Web, so the first run shows
+*"Windows protected your PC"* -- choose **More info**, then **Run anyway**. The
+release binaries are not code-signed, so this is expected rather than a sign
+anything is wrong. Fetching the `.exe` with `curl` or PowerShell's
+`Invoke-WebRequest` does not attach it, and neither does building from source.
+
 ### Install options
 
 Pin a version, change the location, or read the script before running it:
@@ -179,38 +411,15 @@ Release tags have no `v` prefix (`0.5.0`, not `v0.5.0`).
 
 The install script lives in this repo, next to the code it installs -- so you can review it alongside the binary, and the canonical bitba.ng host owns only the short URL. Self-hosters can point their own host's `/install` at whatever script they ship: the signaling server's `INSTALL_URL` env var controls the redirect target (empty → 404).
 
-## Security
-
-- **Self-certifying identity.** On first run, `bitbang` generates an RSA keypair under `~/.bitbang/<program>/`; the device UID is derived from the public key, so impersonating a device means finding a second preimage of its UID.
-- **The secret never touches the server.** The access code lives in the URL fragment (`#…`), which browsers never send -- `bitba.ng` brokers the connection without ever seeing the credential that authorizes it.
-- **End-to-end encryption.** All traffic rides WebRTC's DTLS. The signaling server sees only the public key, the derived UID, and connection metadata -- never your data. A TURN relay, if one is needed, sees ciphertext only.
-- **Verified pairing.** The read-aloud number in code pairing is a short authentication string (SAS), computed independently on both ends from the negotiated DTLS fingerprints and two committed nonces -- a machine-in-the-middle, whose fingerprints necessarily differ, can't make the two numbers match.
-- **The URL is a bearer credential.** Anyone who has it gets whatever you chose to serve -- a shell, if you ran `serve shell`. Share it accordingly.
-- **Optional PIN** (`--pin`) for permanent or headless setups, and **throwaway mode** (`-ephemeral`) for a fresh identity each run.
-
-How the two ends authenticate each other without trusting the signaling server is covered in detail here: [*Trustless Signaling: Authentication Without a Central Authority*](https://github.com/richlegrand/bitbang/blob/main/trustless-signaling.md).
-
-## How it compares
-
-|                                    | ngrok               | Cloudflare Tunnel | Tailscale                      | frp                                 | `bitbang`           |
-| ---------------------------------- | ------------------- | ----------------- | ------------------------------ | ----------------------------------- | ------------------- |
-| Account required                   | Yes                 | Yes               | Yes                            | No                                  | **No**              |
-| Install on the connecting side     | No                  | No                | **Yes**                        | No (**Yes** for P2P mode)           | **No** (browser)    |
-| End-to-end encrypted               | Not by default      | No                | Yes                            | No -- your server sees traffic      | **Yes**             |
-| Data path                          | Their servers       | Their servers     | P2P                            | Your server (P2P optional)          | **P2P**             |
-| Self-hostable server (open source) | No                  | No                | No (Headscale is third-party)  | **Yes**                             | **Yes**             |
-| Setup before first use             | Account + authtoken | Account + DNS     | Account + login on each device | A public-IP server + TOML both ends | **Run one command** |
-
-
 ## Command reference
 
 Flags accept either form (`-pin` or `--pin`). Boolean flags default off unless noted.
 
 ```
-bitbang serve [flags]                  All capabilities: shell + files + proxy on one URL
-bitbang serve shell [flags]            Shell only
-bitbang serve files [PATH] [flags]     Files only (PATH defaults to cwd)
-bitbang serve proxy [TARGET] [flags]   HTTP/WebSocket reverse proxy (TARGET pins one host:port)
+bitbang serve                          Everything: shell + proxy + files + forward
+bitbang serve WORD [ARG] ...           Name what to serve, in any combination:
+                                         shell, proxy [TARGET,...],
+                                         files [PATH], forward [HOST:PORT,...]
 bitbang share [flags]                  Publish a running tmux session
 bitbang share status|stop|rotate       Inspect, stop, or replace a share
 bitbang connect <target> [-- cmd …]    Client shell (interactive or one-shot)
@@ -221,34 +430,76 @@ bitbang help                           Usage (also --help, -h)
 
 ### `bitbang serve` -- run a listener
 
-**Shared flags** (all four `serve` forms):
+Name what to serve. Each word takes the one thing it serves; bare `serve`
+means all four.
 
-| Flag                | Default    | Description                                                                                                                                             |
-| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-server HOST`      | `bitba.ng` | Signaling server hostname                                                                                                                               |
-| `-pin PIN`          | (none)     | Require this PIN for connections                                                                                                                        |
-| `-ephemeral`        | off        | Temporary identity (a fresh URL each run)                                                                                                               |
-| `-nocode`           | off        | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. Use for headless/non-TTY listeners that can't complete the SAS prompt. |
-| `-program NAME`     | `bitbang`  | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                                                       |
-| `-target HOST:PORT` | (dynamic)  | Fixed proxy target (proxy mode); empty = pick the target in the browser. `serve proxy host:port` is shorthand for this.                                 |
-| `-v`                | off        | Verbose logging (adds the browser `!debug` overlay)                                                                                                     |
+```
+bitbang serve                                    everything, files from cwd
+bitbang serve shell                              a terminal, nothing else
+bitbang serve files ~/share                      one directory
+bitbang serve proxy nas.lan:8096                 one web app, straight at the URL
+bitbang serve proxy a.lan:80,b.lan:80            several, chosen in the browser
+bitbang serve forward 127.0.0.1:22               TCP for connect -L, one target
+bitbang serve shell files ~/share proxy nas.lan:8096 forward db:5432
+bitbang serve shell tmux attach                  a command, which may be several words
+```
 
-**Shell flags** (`serve` and `serve shell`):
+| Word              | Argument                        | Without one                      |
+| ----------------- | ------------------------------- | -------------------------------- |
+| `shell [COMMAND]` | the command to run, quoted if it is more than one word | `$SHELL`, or `%COMSPEC%` on Windows |
+| `files [PATH]`    | a directory or file             | the working directory            |
+| `proxy [TARGET…]` | one target, or a comma list     | the browser names its own        |
+| `forward [HOST:PORT…]` | one target, or a comma list | any host:port the listener can reach |
 
-| Flag                    | Default               | Description                                   |
-| ----------------------- | --------------------- | --------------------------------------------- |
-| `-shell-cmd CMD`        | platform shell        | `$SHELL`/`/bin/sh` on Unix; `%COMSPEC%`/`cmd.exe` on Windows |
-| `-shell-max-sessions N` | `1`                   | Max concurrent shell sessions (0 = unlimited) |
-| `-shell-mirror`         | on                    | Mirror shell output to the listener's console |
+**One proxy target pins it.** With nothing else served, the bare device URL is
+that app -- no landing page. Alongside other capabilities it becomes an entry in
+the caret menu that goes straight there. Several targets are offered as a
+choice, and in both cases the proxy can reach only what was named.
 
-**Files flags:**
+**A capability word is never eaten as another word's argument**, so
+`serve files proxy` shares the working directory and serves a proxy. A
+directory genuinely called `proxy` needs `./proxy`.
 
-| Form                       | Path                            | Upload flag     |
-| -------------------------- | ------------------------------- | --------------- |
-| `serve` (all capabilities) | `-files PATH` (default cwd)     | `-files-upload` |
-| `serve files [PATH]`       | positional `PATH` (default cwd) | `-upload`       |
+**A command of more than one word is quoted.** Every word takes exactly one
+argument, so quoting is what says where a command ends -- nothing has to guess,
+and a flag inside the quotes belongs to the command rather than to `bitbang`:
 
-*(Advanced: `-video-fd N` passes an inherited socketpair FD to an external video helper; for internal/embedding use.)*
+```
+bitbang serve shell "ssh -p 2222 host"
+bitbang serve shell "tmux attach" forward     # a command, and forwarding
+bitbang serve shell "tmux attach forward"     # one command, no forwarding
+bitbang serve shell tmux attach               # error: "attach" is not something to serve
+```
+
+An argument that itself contains a space is quoted again inside, which is how
+a Windows path is spelled: `shell "'C:\Program Files\Git\bin\bash.exe' --login"`.
+
+The rule for the flags below: **a word says what is served, a flag says how.**
+A flag whose capability was not named is an error rather than a setting that
+does nothing.
+
+| Flag                       | Needs     | Default        | Description                                                                                                          |
+| -------------------------- | --------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `-server HOST`             | --        | `bitba.ng`     | Signaling server hostname                                                                                            |
+| `-pin PIN`                 | --        | (none)         | Require this PIN for connections                                                                                     |
+| `-ephemeral`               | --        | off            | Temporary identity: a fresh URL each run, and connectors do not save it to `devices.json`                            |
+| `-program NAME`            | --        | `bitbang`      | Identity name; keypair stored at `~/.bitbang/<NAME>/identity.pem`                                                    |
+| `-ice-servers PATH`        | --        | (ours)         | JSON file of your own STUN/TURN servers; see [Bring your own TURN](#bring-your-own-turn)                              |
+| `-nocode`                  | --        | off            | Disable code-exchange pairing -- no 6-digit code is issued; the URL still works. For headless listeners that can't complete the SAS prompt. |
+| `-v`                       | --        | off            | Verbose logging (adds the browser `!debug` overlay)                                                                  |
+| `-shell-max-sessions N`    | `shell`   | `10`           | Max concurrent shell sessions (0 = unlimited)                                                                        |
+| `-disable-shell-mirror`    | `shell`   | off            | Stop echoing shell output to the listener's console                                                                  |
+| `-files-upload`            | `files`   | off            | Allow uploads into the shared directory                                                                              |
+| `-proxy-client-ip`         | `proxy`   | off            | Stamp the real browser IP as `X-Forwarded-For`. Enable only when the backend trusts localhost for auth.               |
+
+**Targets are matched as written and never resolved**: allowing
+`192.168.1.50:22` does not allow `nas.lan:22` even when the name points there.
+Resolving would check a name at one moment and dial it a moment later, and the
+two can disagree. Given no targets at all, forwarding reaches any host:port the
+listener can reach.
+
+*(Advanced: `-video-fd N` passes an inherited socketpair FD to an external
+video helper; for internal/embedding use, and hidden from `--help`.)*
 
 ### `bitbang share` -- publish a running tmux session
 
@@ -265,6 +516,25 @@ bitbang help                           Usage (also --help, -h)
 `share status`, `share stop`, and `share rotate` accept the same target and
 socket flags. `rotate` also accepts publication flags and issues fresh URLs.
 
+### `bitbang link` -- access links for a listener
+
+| Command                  | What it does                                            |
+|--------------------------|---------------------------------------------------------|
+| `bitbang link ls`        | List this listener's links: grant, expiry, code          |
+| `bitbang link edit`      | Open `links.json` in `$EDITOR`, validated on save        |
+| `bitbang link rm LABEL`  | Delete a link (reload the listener to close its sessions)|
+| `bitbang link qr LABEL`  | Print a link's URL and QR code                           |
+
+| Entry field | Meaning                                                                      |
+|-------------|------------------------------------------------------------------------------|
+| `label`     | Names the link; identifies it to `rm` and `qr`, and must be unique             |
+| `grant`     | What the link reaches, in the words `serve` takes: `files [DIR]`, `proxy [TARGETS]`, `forward [TARGETS]`, `shell [COMMAND]`. Can only narrow what the listener serves. Omit for all of it |
+| `expires`   | RFC 3339 timestamp. Omit for a link that does not lapse                        |
+| `code`      | Filled in by the listener on reload. Leave it out to have one minted           |
+
+`--program NAME` picks a listener other than the default, matching `serve
+--program`.
+
 ### `bitbang connect <target> [-- command …]` -- client shell
 
 `<target>` may be any of:
@@ -277,10 +547,12 @@ With no `-- command`, opens an interactive shell (a PTY when stdin is a terminal
 
 | Flag                                    | Default    | Description                                                                                                 |
 | --------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------- |
-| `-L LOCAL_PORT:REMOTE_HOST:REMOTE_PORT` | (none)     | Forward `LOCAL_PORT` to `REMOTE_HOST:REMOTE_PORT` without a shell (repeatable; bracket IPv6 hosts)           |
+| `-L LOCAL_PORT:REMOTE_HOST:REMOTE_PORT` | (none)     | Forward `LOCAL_PORT` to `REMOTE_HOST:REMOTE_PORT` without a shell. TCP only (repeatable; bracket IPv6 hosts) |
 | `-g`                                    | off        | Bind forwarded ports on `0.0.0.0` instead of `127.0.0.1`                                                   |
 | `-name NAME`                            | (auto)     | Remember this host under NAME (new hosts only; auto-assigns `device<N>` if omitted)                         |
 | `-relay`                                | off        | Request a TURN relay up front instead of only on fallback (ICE still prefers a direct path if one succeeds) |
+| `-norelay`                              | off        | Refuse STUN/TURN entirely -- host candidates only, so a connection that would need a relay fails instead. Answers whether the direct path actually works. |
+| `-nosave`                               | off        | Do not write this device to `~/.bitbang/devices.json`. That table stores the access code, which is a working credential -- so this is what you want on a machine that is not yours. Cannot be combined with `-name`. |
 | `-pin PIN`                              | (prompt)   | PIN to send if the listener requires one (skips the interactive prompt)                                     |
 | `-timeout DUR`                          | `30s`      | Dial timeout (e.g. `45s`, `1m`)                                                                             |
 | `-server HOST`                          | `bitba.ng` | Signaling server -- **pair-code mode only**; the URL form carries its own host                              |
@@ -344,11 +616,11 @@ Windows 10 version 1809 or Windows Server 2019 or later.
 <p align="center">
   <img src="assets/bitbang-cli-shell-files.png" alt="bitbang CLI shell and file sharing" width="760">
   <img src="assets/bitbang-cli-proxy.png" alt="bitbang CLI proxy operation" width="720">  
-</p> 
+</p>
 
 ## Roadmap
 
-Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, and **terminal sharing** (`bitbang share`). Designed and on the way:
+Shipping today: **shell, files, and proxy**, reachable from the browser or the CLI, plus **TCP port forwarding**, scp-style file copy, **ad-hoc pairing** with a saved device table, **terminal sharing** (`bitbang share`), and **access links** (`bitbang link`) that narrow and expire what a URL grants. Designed and on the way:
 
 - **Serial bridging** -- drive a remote `/dev/ttyUSB0` from a local virtual port (e.g. run Arduino IDE over the internet). An issue has been opened [here](https://github.com/richlegrand/bitbang-cli/issues/3).
 - **Remote desktop** -- screen over a WebRTC video track, keyboard/mouse over the data channel.
@@ -360,3 +632,12 @@ MIT -- see [LICENSE](LICENSE).
 ## Contributing
 
 Issues and PRs welcome.
+
+Recipes are different: they live in the [cookbook](https://github.com/richlegrand/bitbang/blob/main/cookbook.md),
+in the [bitbang](https://github.com/richlegrand/bitbang) repo, because they span
+every project rather than this one. Adding a recipe is a PR there.
+
+Getting it *listed* is a second, small PR per project whose README should surface
+it -- the [Recipes](#recipes) list above is maintained here by hand. That is
+deliberate: each project decides which recipes are worth putting in front of its
+own readers, rather than every README growing every recipe.

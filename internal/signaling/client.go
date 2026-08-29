@@ -38,6 +38,12 @@ type Client struct {
 	ServerWS string // full URL, e.g. "wss://bitba.ng/ws/device/<uid>"
 	Verbose  bool
 
+	// LatestVersions is the newest released version of each BitBang
+	// client project, keyed by product, as reported on the registered
+	// reply. nil when the server tracks nothing or predates the field.
+	// Read after Connect returns.
+	LatestVersions map[string]string
+
 	// OwnICEServers is a pre-parsed operator-supplied ICE server config
 	// (--ice-servers). Empty means "let the server decide"; a slice is
 	// already nilable, so every caller that ignores this field is fine.
@@ -50,6 +56,11 @@ type Client struct {
 	// without it, connectors can only reach the listener via the full
 	// 22-character UID URL.
 	WantCode bool
+
+	// codeIssued carries a renewed pairing code from the read loop back
+	// to whoever asked. Buffered by one so an answer nobody is waiting
+	// for does not block the loop.
+	codeIssued chan string
 
 	// PairingCode is the 6-digit code issued by the server when WantCode
 	// was true. Empty when WantCode was false, when the server doesn't
@@ -105,6 +116,7 @@ func NewClient(server string, id *identity.Identity) *Client {
 		Server:      server,
 		ServerWS:    ws,
 		OnPreempted: defaultOnPreempted,
+		codeIssued:  make(chan string, 1),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -128,11 +140,27 @@ func defaultOnPreempted() {
 // Bitbang flags; the signaling server never sees any of it because
 // browsers don't transmit fragments. Grammar and flag list live in
 // CONVENTIONS.md.
-func (c *Client) URL(debug bool) string {
-	if debug {
-		return c.CodeURL(c.ID.Code, "debug")
+func (c *Client) URL(flags ...string) string {
+	return c.CodeURL(c.ID.Code, flags...)
+}
+
+// URLFlags is the flag list a listener's URLs carry, given how it was
+// started. One place rather than each call site assembling its own, since
+// the device URL and every link URL have to agree -- a link to an ephemeral
+// listener is exactly as dead as its device URL once the process exits.
+func URLFlags(debug, ephemeral bool) []string {
+	var flags []string
+	if ephemeral {
+		// The identity is generated per run and thrown away, so anything a
+		// connector saved would point at a UID that never comes back --
+		// a stored credential for something unreachable. `bitbang share`
+		// has always marked its URLs this way for the same reason.
+		flags = append(flags, "ephemeral")
 	}
-	return c.CodeURL(c.ID.Code)
+	if debug {
+		flags = append(flags, "debug")
+	}
+	return flags
 }
 
 // CodeURL composes a device URL carrying an explicit access code and
@@ -251,7 +279,93 @@ func (c *Client) connectOnce(handler func(msg Message)) error {
 			}
 		}
 
+		// code_issued answers RenewCode. Intercepted here rather than
+		// handed to the caller: it updates PairingCode, which is
+		// signaling-layer state, and a caller that has never seen the
+		// type would only have to ignore it.
+		if mtype, _ := msg["type"].(string); mtype == "code_issued" {
+			code, _ := msg["code"].(string)
+			c.connMu.Lock()
+			c.PairingCode = code
+			c.connMu.Unlock()
+			select {
+			case c.codeIssued <- code:
+			default: // nobody waiting; the field is updated either way
+			}
+			continue
+		}
+
 		handler(msg)
+	}
+}
+
+// applyRegistered reads what the server told us on a successful
+// registration. Split out of register so it can be tested without a
+// socket -- the version table in particular arrives as an untyped JSON
+// map, and a silently-failed assertion there would just mean nobody is
+// ever told about an update.
+func (c *Client) applyRegistered(msg Message) {
+	// Reset first. A server that loses its pairing table (process
+	// restart) re-issues a fresh code, and any stale code we were
+	// holding would mislead the operator.
+	c.PairingCode = ""
+	if code, ok := msg["code"].(string); ok && code != "" {
+		c.PairingCode = code
+	}
+
+	// The latest-release table, identical for every device, so receiving
+	// it says nothing about this one. Absent from servers that track
+	// nothing, and from any server older than the field.
+	c.LatestVersions = nil
+	if raw, ok := msg["versions"].(map[string]interface{}); ok {
+		vs := make(map[string]string, len(raw))
+		for k, v := range raw {
+			if str, ok := v.(string); ok {
+				vs[k] = str
+			}
+		}
+		if len(vs) > 0 {
+			c.LatestVersions = vs
+		}
+	}
+}
+
+// RenewPairingCode asks the server for a pairing code, for when the one
+// issued at register time has lapsed. Returns the code, or an error.
+//
+// A server that predates this ignores the message and answers nothing,
+// which is why there is a deadline rather than an open wait: silence is
+// the expected reply from an older server, not a fault.
+func (c *Client) RenewPairingCode(wait time.Duration) (string, error) {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+	if conn == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	// Drain a stale answer so a slow earlier reply cannot be mistaken for
+	// this one.
+	select {
+	case <-c.codeIssued:
+	default:
+	}
+
+	c.writeMu.Lock()
+	err := conn.WriteJSON(map[string]string{"type": "renew_code"})
+	c.writeMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+
+	select {
+	case code := <-c.codeIssued:
+		if code == "" {
+			return "", fmt.Errorf("the server issued no code")
+		}
+		return code, nil
+	case <-time.After(wait):
+		return "", fmt.Errorf("no answer; this signaling server may not support renewal")
 	}
 }
 
@@ -312,22 +426,22 @@ func (c *Client) register(conn *websocket.Conn) error {
 
 	switch msg["type"] {
 	case "registered":
-		// Capture the pairing code if the server returned one. Reset to
-		// empty on each reconnect first — a server that loses its pairing
-		// table (process restart) re-issues a fresh code, and any stale
-		// code we were holding would mislead the operator.
-		c.PairingCode = ""
-		if code, ok := msg["code"].(string); ok && code != "" {
-			c.PairingCode = code
-		}
+		c.applyRegistered(msg)
 		return nil
 
 	case "error":
 		errMsg, _ := msg["message"].(string)
 		if errMsg == "protocol_too_old" {
-			fmt.Println("\nPlease upgrade bitbangproxy:")
-			fmt.Println("  Download latest from https://github.com/richlegrand/bitbangproxy/releases")
-			log.Fatal("Protocol version too old")
+			// Only reachable once a server raises MinProtocolVersion past
+			// what this build speaks, so it is dormant until the protocol
+			// moves -- and then it is the entire explanation a stranded
+			// user gets. Reconnecting cannot help, so say what to do and
+			// stop rather than retrying against a server that will keep
+			// refusing.
+			fmt.Fprintf(os.Stderr,
+				"\nThis version of bitbang is too old for %s.\n"+
+					"  curl -fsSL https://%s/install | sh\n", c.Server, c.Server)
+			os.Exit(1)
 		}
 		return fmt.Errorf("server error: %v", errMsg)
 

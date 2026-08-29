@@ -4,15 +4,17 @@
 // works against either.
 //
 // The package exposes two things:
-//   1. An http.Handler with the browser-facing API (browse/download/upload).
-//   2. A Filesystem implementation that the file-type SWSP stream handler
-//      uses for `bitbang cp` (Step 4).
+//  1. An http.Handler with the browser-facing API (browse/download/upload).
+//  2. A Filesystem implementation that the file-type SWSP stream handler
+//     uses for `bitbang cp` (Step 4).
 //
 // Both share the same underlying filesystem primitives so behavior is
 // consistent across the two access paths.
 package fileshare
 
 import (
+	"github.com/richlegrand/bitbang/internal/capbar"
+
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -50,6 +52,10 @@ type FileShare struct {
 	FileName string
 	// UploadEnabled allows POST /api/upload to write files. Off by default.
 	UploadEnabled bool
+
+	// capBar is the capability strip for the browse page, set when the
+	// link this listener answers grants more than one thing.
+	capBar []capbar.Item
 }
 
 // New creates a FileShare for the given filesystem path. Auto-detects send
@@ -75,6 +81,11 @@ func New(p string) (*FileShare, error) {
 
 // HTTPHandler returns an http.Handler with the browser-facing routes. Wire-
 // compatible with the Python fileshare's app.py routes.
+// CapBar sets the capability strip spliced into the browse page. Empty
+// leaves the page as it was -- a link granting only files has nowhere
+// else to go.
+func (f *FileShare) CapBar(items []capbar.Item) { f.capBar = items }
+
 func (f *FileShare) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/list", f.listFiles)
@@ -118,7 +129,7 @@ func (f *FileShare) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	_, _ = io.WriteString(w, capbar.Inject(string(data), f.capBar, capbar.Caret))
 }
 
 // Entry is one item in a directory listing. JSON shape matches Python's

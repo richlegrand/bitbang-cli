@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +18,7 @@ import (
 	ptylib "github.com/aymanbagabas/go-pty"
 	"golang.org/x/term"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
@@ -58,6 +61,13 @@ type shellAdmission struct {
 	// evict ends this shell, telling its connector why first. Assigned
 	// after the process spawns, so it is read under the list's lock.
 	evict func()
+
+	// protected marks a shell held on the device owner's own credential.
+	// Nobody else may displace it: a link handed to someone else must not
+	// be able to end the operator's session on their own machine, which
+	// with the default limit of one would be every time they connected.
+	// The owner can still displace their own.
+	protected bool
 }
 
 // admit registers a shell and reports which one it displaced, if any.
@@ -71,16 +81,38 @@ type shellAdmission struct {
 // overlap briefly while the old one is terminating; blocking a new
 // admission until it exits would be worse, since OnSYN runs on the
 // session's dispatch path.
-func (a *shellAdmissions) admit(max int) (adm *shellAdmission, displaced *shellAdmission) {
+//
+// A protected caller (the owner) displaces the oldest shell whatever it
+// is, including another of their own. An unprotected caller displaces
+// only the oldest unprotected one, and is refused -- adm nil -- when
+// every live shell is the owner's.
+func (a *shellAdmissions) admit(max int, protected bool) (adm *shellAdmission, displaced *shellAdmission) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	adm = &shellAdmission{}
 	if max > 0 && len(a.live) >= max {
-		displaced = a.live[0]
-		a.live = a.live[1:]
+		i := a.oldestDisplaceable(protected)
+		if i < 0 {
+			// Every slot is the owner's and this caller is not them.
+			return nil, nil
+		}
+		displaced = a.live[i]
+		a.live = append(a.live[:i], a.live[i+1:]...)
 	}
+	adm = &shellAdmission{protected: protected}
 	a.live = append(a.live, adm)
 	return adm, displaced
+}
+
+// oldestDisplaceable returns the index of the shell to give up, or -1
+// when there is none this caller may take. The list is in admission
+// order, so the first match is the oldest.
+func (a *shellAdmissions) oldestDisplaceable(protected bool) int {
+	for i, live := range a.live {
+		if protected || !live.protected {
+			return i
+		}
+	}
+	return -1
 }
 
 // release drops an admission when its stream ends. Safe to call for one
@@ -117,7 +149,7 @@ func (a *shellAdmissions) evictFunc(adm *shellAdmission) func() {
 }
 
 const (
-	maxShellBuffered        uint64 = 8 << 20
+	maxShellBuffered        uint64 = bytestream.MaxBufferedAmount
 	shellOutputDrainTimeout        = 5 * time.Second
 	shellOutputCloseGrace          = time.Second
 )
@@ -307,19 +339,30 @@ const (
 //	FIN:  {exit_code, signal?}  on normal exit
 //	      {error:"..."}         on early failure (spawn, etc.)
 type ShellHandler struct {
-	// DefaultArgv is what gets exec'd when the client doesn't supply an
-	// argv (e.g. the listener was started with `bitbang shell --cmd
-	// /bin/bash`). Empty means "use $SHELL, or /bin/sh if unset."
-	DefaultArgv []string
-
 	// ForcedArgv, when non-empty, locks every connection to this exact
-	// command. It also ignores client-supplied argv, environment, and cwd.
+	// command: a connector that supplies one is refused rather than
+	// quietly given something else, and its environment and cwd are
+	// ignored too. Empty means the connector chooses, falling back to
+	// $SHELL and then /bin/sh.
+	//
+	// There is deliberately no "default command" alongside it. A command
+	// the operator named is the command that runs -- treating it as a
+	// suggestion the far end may replace is not a narrower listener, it
+	// is a shell with extra steps.
 	ForcedArgv []string
 
 	// ForcedEnv is the environment used verbatim when ForcedArgv is
 	// set. Nil means "inherit the listener's own environment". Ignored
 	// when ForcedArgv is empty.
 	ForcedEnv []string
+
+	// OwnerCredential marks connections authorized by the device's own
+	// code rather than by a link handed to someone else. It only affects
+	// displacement: an owner shell cannot be displaced by anyone else,
+	// while the owner may still displace their own. Without it, handing
+	// out a shell link would let the recipient end the operator's
+	// session -- with the default limit of one, on every connection.
+	OwnerCredential bool
 
 	// ViewOnly drops stdin, signals, and stdin EOF at the transport layer.
 	// Resize stays enabled so each viewer's own PTY matches their terminal;
@@ -424,11 +467,12 @@ func (s *shellSession) takePTY() ptylib.Pty {
 	return terminal
 }
 
-// NewShell returns a ShellHandler with the given default argv. Pass nil
-// or empty to default to $SHELL.
-func NewShell(defaultArgv []string, verbose bool) *ShellHandler {
+// NewShell returns a ShellHandler pinned to argv, or unpinned when argv is
+// empty. Set ForcedEnv afterwards to control the environment of a pinned
+// command.
+func NewShell(argv []string, verbose bool) *ShellHandler {
 	return &ShellHandler{
-		DefaultArgv:        defaultArgv,
+		ForcedArgv:         argv,
 		Verbose:            verbose,
 		streams:            make(map[uint32]*shellSession),
 		outputDrainTimeout: shellOutputDrainTimeout,
@@ -525,7 +569,15 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		}
 		release = rel
 	} else if h.MaxConcurrent > 0 {
-		adm, displaced := liveShells.admit(h.MaxConcurrent)
+		adm, displaced := liveShells.admit(h.MaxConcurrent, h.OwnerCredential)
+		if adm == nil {
+			// Every slot is held on the owner's own credential and this
+			// connection is not. Refusing is the point: a link handed to
+			// someone else must not end the operator's session.
+			log.Printf("Shell refused: max-sessions=%d, all held by the device owner", h.MaxConcurrent)
+			h.sendShellError(s, "the device owner is using the shell; try again later")
+			return nil
+		}
 		if displaced != nil {
 			log.Printf("Shell displaced an older session: at max-sessions=%d", h.MaxConcurrent)
 			if evict := liveShells.evictFunc(displaced); evict != nil {
@@ -542,15 +594,27 @@ func (h *ShellHandler) OnSYN(s Stream, payload []byte, final bool) error {
 		}
 	}()
 
-	// Resolve argv: restricted-mode ours, otherwise client's, otherwise
-	// default, otherwise $SHELL, otherwise /bin/sh.
+	// Resolve argv: the pinned command, else the client's, else $SHELL,
+	// else /bin/sh.
 	restricted := len(h.ForcedArgv) > 0
+
+	// A pinned listener used to run its own command and say nothing, so a
+	// connector that asked for one got different output with no explanation.
+	// Refusing rather than warning: a warning goes to stderr while the wrong
+	// output goes to stdout, so anything scripted would still read the wrong
+	// thing and believe it. Naming the command reveals nothing -- connecting
+	// without one runs it.
+	if restricted && len(open.Argv) > 0 {
+		log.Printf("Shell refused a command: this listener is pinned to %v", h.ForcedArgv)
+		h.sendShellError(s, fmt.Sprintf(
+			"this listener runs a fixed command and does not accept one (it runs: %s)",
+			strings.Join(h.ForcedArgv, " ")))
+		return nil
+	}
+
 	argv := h.ForcedArgv
 	if len(argv) == 0 {
 		argv = open.Argv
-	}
-	if len(argv) == 0 {
-		argv = h.DefaultArgv
 	}
 	if len(argv) == 0 {
 		argv = defaultShellArgv()

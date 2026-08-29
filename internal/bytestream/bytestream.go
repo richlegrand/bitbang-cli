@@ -12,8 +12,21 @@ import (
 const (
 	// FrameSize keeps a framed chunk below the SCTP message-size ceiling.
 	FrameSize = 32 << 10
-	// MaxBufferedAmount bounds queued framed data before applying backpressure.
-	MaxBufferedAmount uint64 = 8 << 20
+	// MaxBufferedAmount bounds queued framed data before applying
+	// backpressure, for every sender on the data channel.
+	//
+	// It is not just a memory bound. BufferedAmount counts bytes queued plus
+	// bytes in flight but not yet acked, so this doubles as a send window:
+	// throughput cannot exceed MaxBufferedAmount/RTT, and anything queued
+	// beyond the bandwidth-delay product is pure added latency. At 8MB a
+	// browser download pushed an interactive request from 2ms to 125ms on a
+	// LAN and to 680ms at 80ms RTT. 1MB is at or under the BDP of an ordinary
+	// path, so the standing queue goes away without capping the window: at
+	// 40ms RTT it measured the same throughput as 8MB with a fifth of the
+	// latency, and it matches the per-stream window SWSP v4 already enforces
+	// (protocol.InitialStreamWindow). Sizing it from the measured rate and
+	// RTT instead would drop the cap on fast, distant links.
+	MaxBufferedAmount uint64 = 1 << 20
 )
 
 // FrameWriter is the transport surface Pump needs. It is deliberately free of

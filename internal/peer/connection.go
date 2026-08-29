@@ -15,6 +15,8 @@
 package peer
 
 import (
+	"io"
+
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -97,6 +99,27 @@ type Connection struct {
 	// they hold, without early exit, so timing doesn't reveal which role
 	// a guess missed.
 	Authorize func(code string) (access protocol.Access, ok bool)
+
+	// OnPairDone, if set, runs once the pairing has resolved either way
+	// -- approved, rejected, or abandoned. It exists so a caller holding
+	// a resource for the duration (the console, during the SAS and grant
+	// questions) can let go on the paths that never reach the grant.
+	OnPairDone func()
+
+	// GrantPairCredential, if set, chooses the access code a completed
+	// pairing hands over. Called once the SAS has matched and before the
+	// credentials frame is sent, so the operator can be asked what to
+	// grant at the moment they have just established who is asking.
+	//
+	// Returning ok=false declines the pairing after the fact -- the
+	// operator changed their mind, or minting failed.
+	//
+	// Unset means the identity's own code, which is what pairing did
+	// before links existed and is still right for a listener with no link
+	// table (bitbang share). A listener that has one should set this:
+	// handing out id.Code gives away the master credential, which cannot
+	// be revoked without rotating the identity and appears in no listing.
+	GrantPairCredential func() (code string, ok bool)
 
 	// dcInbox carries inbound data-channel frames to the pairing handshake
 	// goroutine. Non-nil only in pair mode; the regular flow routes inbound
@@ -579,6 +602,9 @@ func (c *Connection) markVerifyFailed() {
 // channel* (plus a bare pair_approved over signaling). On any failure it sends
 // pair_rejected over signaling.
 //
+// promptOut is where the pairing announcements go -- the same stream as
+// the prompt, so the instruction and the question appear together.
+//
 // prompt is the PromptFunc used to read each SAS attempt; pass
 // pairing.DefaultTTYPrompt for interactive listeners. The SAS itself is
 // never written to the terminal — there is nothing to blindly approve.
@@ -589,7 +615,7 @@ func (c *Connection) markVerifyFailed() {
 //
 // pair_request carries phase-1 STUN ice_servers (stamped by the signaling
 // server, mirroring a regular request); icehelper.FromMessage picks them up.
-func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, prompt pairing.PromptFunc, verbose bool) (*Connection, error) {
+func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identity.Identity, prompt pairing.PromptFunc, promptOut io.Writer, verbose bool) (*Connection, error) {
 	clientID, _ := msg["client_id"].(string)
 	if clientID == "" {
 		return nil, fmt.Errorf("missing client_id")
@@ -616,7 +642,7 @@ func HandlePairRequest(msg signaling.Message, sig *signaling.Client, id *identit
 			// Run the handshake off the OnOpen goroutine so dc.OnMessage can
 			// keep delivering the connector's commit/reveal frames into
 			// dcInbox while the handshake (and the blocking SAS prompt) runs.
-			go handlePairRequestOnOpen(conn, prompt, id)
+			go handlePairRequestOnOpen(conn, prompt, promptOut, id)
 		},
 	})
 }
@@ -653,7 +679,10 @@ func (c *Connection) recvDC(timeout time.Duration) ([]byte, bool) {
 //
 // Closes the PC in all outcomes — the connector reconnects via the standard
 // direct flow with the delivered access code.
-func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *identity.Identity) {
+func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, promptOut io.Writer, id *identity.Identity) {
+	if conn.OnPairDone != nil {
+		defer conn.OnPairDone()
+	}
 	localFp := extractFingerprint(conn.PC.LocalDescription().SDP)
 	remoteFp := extractFingerprint(conn.PC.RemoteDescription().SDP)
 	if localFp == "" || remoteFp == "" {
@@ -714,7 +743,7 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 	sas := pairing.ComputeSAS(rc, rd, localFp, remoteFp)
 
 	// 3. Blind operator entry.
-	reason, ok := pairing.PromptForSAS(sas, prompt)
+	reason, ok := pairing.PromptForSAS(sas, prompt, promptOut)
 	if !ok {
 		log.Printf("Pair rejected for %s: %s", conn.ClientID, reason)
 		conn.sendPairRejected(reason)
@@ -724,8 +753,20 @@ func handlePairRequestOnOpen(conn *Connection, prompt pairing.PromptFunc, id *id
 
 	// 4. Deliver credentials over the verified data channel, plus a bare
 	//    approval over signaling.
+	code := id.Code
+	if conn.GrantPairCredential != nil {
+		granted, ok := conn.GrantPairCredential()
+		if !ok {
+			log.Printf("Pair declined for %s after verification", conn.ClientID)
+			conn.sendPairRejected(pairing.ErrUserDeclined.Error())
+			conn.Close()
+			return
+		}
+		code = granted
+	}
+
 	log.Printf("Pair approved for %s", conn.ClientID)
-	if err := conn.DC.Send(pairing.BuildPairCredentials(id.UID, id.PublicB64, id.Code)); err != nil {
+	if err := conn.DC.Send(pairing.BuildPairCredentials(id.UID, id.PublicB64, code)); err != nil {
 		log.Printf("Pair %s: send credentials: %v", conn.ClientID, err)
 	}
 	conn.sendPairApproved()

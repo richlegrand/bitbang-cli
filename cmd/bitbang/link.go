@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
 )
@@ -51,13 +52,13 @@ func printLinkUsage() {
 	fmt.Println("  bitbang link rm <label>                Delete a link")
 	fmt.Println("  bitbang link qr <label>                Print a link's QR code")
 	fmt.Println()
-	fmt.Println("  --program NAME   Which listener's table (default \"bitbang\", the")
-	fmt.Println("                   identity `serve` and `serve shell` use). A files-")
-	fmt.Println("                   or proxy-only listener has its own; `link ls` with")
-	fmt.Println("                   no table lists the names it can see.")
+	fmt.Println("  -program NAME    Which listener's table (default \"bitbang\", the")
+	fmt.Println("                   identity `serve` and `serve shell` use). A files-,")
+	fmt.Println("                   forward- or proxy-only listener has its own; `link")
+	fmt.Println("                   ls` with no table lists the names it can see.")
 	fmt.Println()
 	fmt.Println("A link is created by adding an entry with no code and reloading the")
-	fmt.Println("listener (Enter at its console, or SIGHUP), which mints one.")
+	fmt.Println("listener, which mints one.")
 }
 
 func linkFlags(name string, args []string) (string, []string) {
@@ -91,7 +92,7 @@ func loadForEdit(program string) ([]links.Terms, time.Time) {
 }
 
 func runLinkLs(args []string) {
-	program, rest := linkFlags("ls", args)
+	program, server, rest := linkFlagsFull("ls", args)
 	if len(rest) > 0 {
 		fmt.Fprintf(os.Stderr, "bitbang link ls: unexpected argument %q\n", rest[0])
 		os.Exit(2)
@@ -111,23 +112,59 @@ func runLinkLs(args []string) {
 		return
 	}
 
-	now := time.Now()
-	labelW := 0
+	// The URL is the thing you actually send someone, so print it rather
+	// than the bare code -- ls is the command you reach for when handing a
+	// link over, and it was the one view of the table that could not give
+	// you one. Falls back to the code when there is no identity yet to
+	// build a URL from.
+	uid := ""
+	if id, err := identity.Load(program, false); err == nil {
+		uid = id.UID
+	}
+
+	fmt.Print(renderLinkListing(entries, server, uid, time.Now()))
+}
+
+// renderLinkListing lays out the table. Separate from the printing so the
+// column arithmetic can be tested: a grant carrying a target or a path is
+// far wider than a bare capability word, and the widths are what keep the
+// listing readable when a table holds both.
+func renderLinkListing(entries []links.Terms, server, uid string, now time.Time) string {
+	labelW, grantW := 0, 0
 	for _, e := range entries {
 		if n := len(e.Label); n > labelW {
 			labelW = n
 		}
+		if n := len(grantOf(e)); n > grantW {
+			grantW = n
+		}
 	}
+	var b strings.Builder
 	for _, e := range entries {
-		scope := "(everything served)"
-		if e.Scope != nil {
-			scope = strings.Join(e.Scope, " ")
-		}
-		code := e.Code
-		if code == "" {
-			code = "(not minted yet)"
-		}
-		fmt.Printf("  %-*s  %-22s  %-14s  %s\n", labelW, e.Label, scope, expiryNote(e, now), code)
+		fmt.Fprintf(&b, "  %-*s  %-*s  %-14s  %s\n",
+			labelW, e.Label, grantW, grantOf(e), expiryNote(e, now), linkURL(server, uid, e))
+	}
+	return b.String()
+}
+
+// grantOf renders the grant as written in the file. Unlike the listener's
+// own listing this cannot narrow it to what is actually served, because
+// nothing here knows which mode the listener is running.
+func grantOf(e links.Terms) string {
+	if e.Grant == "" {
+		return "(everything served)"
+	}
+	return e.Grant
+}
+
+func linkURL(server, uid string, e links.Terms) string {
+	switch {
+	case e.Code == "":
+		return "(no code until renewed)"
+	case uid == "":
+		return e.Code
+	default:
+		return "https://" + server + "/" + uid + "#" + e.Code
 	}
 }
 
@@ -173,14 +210,14 @@ func runLinkEdit(args []string) {
 
 	// Validate before leaving, so a mistake surfaces here rather than as
 	// a listener that refuses to start. Build as well as Load: a
-	// duplicate label, or an entry that collides with the implicit `me`
+	// duplicate label, or an entry that collides with the implicit `owner`
 	// row, is only visible once the table is assembled.
 	if err := validateTable(path); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		fmt.Fprintln(os.Stderr, "The listener will refuse to start until this is fixed.")
 		os.Exit(1)
 	}
-	fmt.Println("Saved. Reload the listener (Enter at its console, or SIGHUP) to apply.")
+	fmt.Println("Saved. A running listener picks it up at its console `reload`, or on restart.")
 }
 
 func runLinkRm(args []string) {
@@ -190,11 +227,11 @@ func runLinkRm(args []string) {
 		os.Exit(2)
 	}
 	label := rest[0]
-	if label == links.MeLabel {
+	if label == links.OwnerLabel {
 		fmt.Fprintf(os.Stderr,
 			"%q is the identity's own code, not a table entry: removing it would revoke your\n"+
 				"own access to a listener you are running, and it would come back on the next\n"+
-				"reload anyway.\n", links.MeLabel)
+				"reload anyway.\n", links.OwnerLabel)
 		os.Exit(2)
 	}
 
@@ -239,7 +276,7 @@ func runLinkQR(args []string) {
 	}
 
 	code := ""
-	if label == links.MeLabel {
+	if label == links.OwnerLabel {
 		code = id.Code
 	} else {
 		entries, _, err := links.Load(linkPath(program))
@@ -293,6 +330,6 @@ func validateTable(path string) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = links.Build(entries, links.ScopeNames(), "placeholder")
+	_, _, err = links.Build(entries, grant.Everything(), "placeholder")
 	return err
 }

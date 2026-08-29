@@ -28,7 +28,7 @@ var deferredFields = map[string]string{
 }
 
 // Parse decodes and validates the file's entries. It does not synthesize
-// the implicit `me` row and does not mint codes; both belong to the
+// the implicit `owner` row and does not mint codes; both belong to the
 // caller, which knows the identity and what is served.
 //
 // Unknown fields are refused. Beyond catching the deferred terms above,
@@ -63,22 +63,19 @@ func Parse(data []byte) ([]Terms, error) {
 }
 
 // Validate applies the value-level rules the JSON decoder cannot see.
-// Duplicate labels are checked by the caller, after the implicit `me`
-// row is synthesized, so a hand-written entry labeled `me` collides.
+// Duplicate labels are checked by the caller, after the implicit `owner`
+// row is synthesized, so a hand-written entry labeled `owner` collides.
 func Validate(entries []Terms) error {
 	for i, e := range entries {
 		n := i + 1
 		if strings.TrimSpace(e.Label) == "" {
 			return fmt.Errorf("entry %d: every link needs a label", n)
 		}
-		if e.Scope != nil && len(e.Scope) == 0 {
-			return fmt.Errorf("link %q: empty scope grants nothing; omit the field to grant everything served", e.Label)
-		}
-		for _, name := range e.Scope {
-			if !knownScopes[name] {
-				return fmt.Errorf("link %q: unknown scope %q (known: %s)",
-					e.Label, name, strings.Join(ScopeNames(), ", "))
-			}
+		// The grammar validates itself, and its errors are the ones the
+		// command line gives -- so a typo in the file reads the same as a
+		// typo at the prompt.
+		if _, err := e.Spec(); err != nil {
+			return err
 		}
 	}
 	return nil

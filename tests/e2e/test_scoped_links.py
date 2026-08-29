@@ -29,10 +29,10 @@ def scoped(listener, test_server, target_app, tmp_path_factory):
     with open(os.path.join(shared, 'notes.txt'), 'w') as f:
         f.write('secret plans\n')
 
-    l = listener('serve', '-server', test_server, '-files', shared, home=home)
-    urls = l.write_links([{'label': 'contractor', 'scope': ['files']}])
-    assert 'contractor' in urls, f'link never appeared in the listing:\n{l.log()}'
-    assert 'me' in urls
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home,
+                 links=[{'label': 'contractor', 'grant': 'files'}])
+    urls = l.await_links(['contractor'])
+    assert 'owner' in urls
     return l, urls
 
 
@@ -76,7 +76,7 @@ def test_unscoped_link_can_reach_a_lan_host(scoped, browser_context, target_app)
     happily if the proxy were broken for everyone."""
     _, urls = scoped
     page = browser_context.new_page()
-    page.goto(f"{urls['me']}/{target_app}/", wait_until='networkidle')
+    page.goto(f"{urls['owner']}/{target_app}/", wait_until='networkidle')
     frame = page.frame_locator('#device-frame')
     heading = frame.locator('#heading')
     heading.wait_for(timeout=20000)
@@ -84,9 +84,14 @@ def test_unscoped_link_can_reach_a_lan_host(scoped, browser_context, target_app)
     page.close()
 
 
-def test_revoking_a_link_closes_the_browser_session(scoped, browser_context):
+def test_revoking_a_link_closes_the_browser_session(pty_listener, test_server,
+                                                    browser_context, tmp_path_factory):
     """Deleting an entry closes the sessions using it, rather than only
     barring the next connection -- and the browser says why.
+
+    Driven through the console's `rm`, which is how a link is revoked now
+    that there is no reload signal. That also makes this the end-to-end
+    test of a console command reaching a live browser session.
 
     The saying-why half is easy to get wrong invisibly. The device iframe
     is position:fixed, full viewport and opaque, so a message printed into
@@ -95,18 +100,173 @@ def test_revoking_a_link_closes_the_browser_session(scoped, browser_context):
     "Reconnecting..." on screen for a session that ended on purpose. So
     assert what the user actually ends up looking at.
     """
-    l, urls = scoped
+    shared = str(tmp_path_factory.mktemp('revoke-share'))
+    with open(os.path.join(shared, 'notes.txt'), 'w') as f:
+        f.write('secret plans\n')
+
+    l = pty_listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server,
+                     links=[{'label': 'contractor', 'grant': 'files'}])
+
     page = browser_context.new_page()
-    page.goto(urls['contractor'], wait_until='networkidle')
+    page.goto(l.link_url('contractor'), wait_until='networkidle')
     page.frame_locator('#device-frame').locator('body').wait_for(timeout=20000)
 
-    l.write_links([])  # revoke every link but the implicit one
-    l.wait_for(r'Closing .*link "contractor" was deleted', timeout=90)
+    l.open_console()
+    l.command('rm contractor', 'removed "contractor"')
 
     ui = page.locator('#connection-ui')
     expect(ui).to_contain_text('this link was revoked', timeout=30000)
     expect(page.locator('#bb-reload-btn')).to_be_visible()
-    # The iframe has to be out of the way, or the message above is being
-    # asserted on an element nobody can see.
-    expect(page.locator('#device-frame')).to_be_hidden()
+
+
+# A forward-only link authorizes fine and has nothing to render: TCP
+# forwarding is driven by `connect -L`. It used to answer a bare 404,
+# which reads as a broken link rather than as "this one is for the CLI".
+def test_forward_only_link_explains_itself(listener, test_server,
+                                           browser_context, tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('fwd-home'))
+    l = listener('serve', '-server', test_server, home=home,
+                 links=[{'label': 'fwdonly', 'grant': 'forward'}])
+    urls = l.await_links(['fwdonly'])
+
+    page = browser_context.new_page()
+    page.goto(urls['fwdonly'], wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('body').wait_for(timeout=20000)
+    text = frame.locator('body').inner_text()
+
+    assert '404' not in text, f'still a bare 404:\n{text[:200]}'
+    assert 'forward' in text, f'does not say what the link grants:\n{text[:200]}'
+    assert '-L' in text, f'does not show the CLI it is for:\n{text[:200]}'
+
+    # The install hint names the server this listener is on, not a
+    # compiled-in one: a self-hoster's endpoint ships the binary they
+    # built, and sending their users to ours installs someone else's.
+    assert test_server in text, f'install hint does not name {test_server}:\n{text}'
+    assert 'bitba.ng/install' not in text or test_server in text
+    # And it is a command, not a link: /install serves a shell script,
+    # so a person who clicks it gets a wall of bash.
+    assert 'curl' in text, f'links a person at a shell script:\n{text}'
+    assert frame.locator('a').count() == 0, 'has a clickable link to the install script'
+
+
+# A link granting two capabilities has to offer a way between them. The
+# strip used to live inside the shell launcher, and the launcher is only
+# mounted when shell is granted -- so a files+proxy holder landed on
+# files with no way to reach the proxy they had been given.
+def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
+                                                       browser_context,
+                                                       tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('capbar-home'))
+    shared = str(tmp_path_factory.mktemp('capbar-share'))
+    with open(os.path.join(shared, 'notes.txt'), 'w') as f:
+        f.write('hi\n')
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home, links=[
+        {'label': 'filesproxy', 'grant': 'files proxy'},
+        {'label': 'filesonly', 'grant': 'files'},
+    ])
+    urls = l.await_links(['filesproxy', 'filesonly'])
+
+    page = browser_context.new_page()
+    page.goto(urls['filesproxy'], wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('#bb-cap-bar').wait_for(timeout=20000)
+
+    items = frame.locator('#bb-cap-bar nav a')
+    labels = [items.nth(i).inner_text() for i in range(items.count())]
+    assert labels == ['Files', 'Proxy'], labels
+    # Shell is not granted, so it must not be offered.
+    assert 'Shell' not in labels
+
+    # The strip is a fixed overlay; the page has to make room or it sits
+    # on top of the content.
+    assert frame.locator('body').get_attribute('class') == 'with-cap-bar'
+    bar = frame.locator('#bb-cap-bar').bounding_box()
+    assert bar['height'] == 22, f'strip is {bar["height"]}px; every offset assumes 22'
+    # Nothing shifts down for the caret: it is a corner control, and the
+    # page's own margin clears it. What must hold is that the first row
+    # is not underneath it -- horizontally or vertically.
+    first = frame.locator('.container > *').first.bounding_box()
+    clash = (bar['x'] + bar['width'] > first['x']) and (bar['y'] + bar['height'] > first['y'])
+    assert not clash, f'caret ends at ({bar["x"]+bar["width"]},{bar["y"]+bar["height"]}), first row at ({first["x"]},{first["y"]})'
+    assert first['y'] < 22, f'content pushed down to {first["y"]} for a corner control'
+
+
+    # A light page gets the caret alone -- no band across it, and nothing
+    # painted behind it. A full-width black strip here looked like a
+    # rendering fault.
+    page_width = frame.locator('body').bounding_box()['width']
+    assert bar['width'] < page_width / 4, \
+        f'caret is {bar["width"]} of {page_width}: that is a band, not a caret'
+    bg = frame.locator('#bb-cap-bar').evaluate("e => getComputedStyle(e).backgroundColor")
+    assert bg in ('rgba(0, 0, 0, 0)', 'transparent'), bg
+
+
+# One capability has nowhere to go, so no strip and no wasted 22px.
+def test_single_cap_link_has_no_cap_bar(listener, test_server, browser_context,
+                                        tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('nobar-home'))
+    shared = str(tmp_path_factory.mktemp('nobar-share'))
+    with open(os.path.join(shared, 'notes.txt'), 'w') as f:
+        f.write('hi\n')
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home,
+                 links=[{'label': 'filesonly', 'grant': 'files'}])
+    urls = l.await_links(['filesonly'])
+
+    page = browser_context.new_page()
+    page.goto(urls['filesonly'], wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator("text=notes.txt").wait_for(timeout=20000)
+    assert frame.locator('#bb-cap-bar').count() == 0
+    assert frame.locator('body').get_attribute('class') in (None, '')
+
+
+# The proxy landing page clears the caret sideways too. The label, its
+# field and the hint move as a block, so they stay aligned -- indenting
+# the label alone put it out of line with its own input.
+def test_proxy_page_clears_the_caret_without_dropping(listener, test_server,
+                                                      browser_context,
+                                                      tmp_path_factory):
+    home = str(tmp_path_factory.mktemp('proxycaret-home'))
+    shared = str(tmp_path_factory.mktemp('proxycaret-share'))
+    l = listener('serve', 'shell', 'proxy', 'forward', 'files', shared, '-server', test_server, home=home,
+                 links=[{'label': 'filesproxy', 'grant': 'files proxy'}])
+    urls = l.await_links(['filesproxy'])
+
+    page = browser_context.new_page()
+    page.goto(urls['filesproxy'].rstrip('/') + '/proxy/', wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('label[for="target"]').wait_for(timeout=20000)
+
+    bar = frame.locator('#bb-cap-bar').bounding_box()
+    label = frame.locator('label[for="target"]').bounding_box()
+    field = frame.locator('#target').bounding_box()
+
+    assert label['x'] >= bar['x'] + bar['width'], 'label runs under the caret'
+    assert label['y'] < bar['y'] + bar['height'], \
+        f'label dropped to {label["y"]} below a corner control'
+    assert abs(label['x'] - field['x']) <= 2, \
+        f'label at {label["x"]} is out of line with its field at {field["x"]}'
+
+
+# `serve forward` is a listener that is only a wire: the shell handler is
+# never registered, so there is nothing for a browser to show and nothing to
+# escalate to. The URL still has to explain itself rather than 404.
+def test_serve_forward_listener_has_no_browser_page(listener, test_server,
+                                                    tmp_path_factory, browser_context):
+    home = str(tmp_path_factory.mktemp('fwdmode-home'))
+    l = listener('serve', 'forward', '127.0.0.1:9', '-server', test_server, home=home)
+
+    assert 'forward (127.0.0.1:9' in l.log(), \
+        f'the sharing block does not name the allowed target:\n{l.log()}'
+    assert 'shell' not in l.log().split('Sharing:')[1].split('\n\n')[0], \
+        f'a forward-only listener advertised a shell:\n{l.log()}'
+
+    page = browser_context.new_page()
+    page.goto(l.url, wait_until='networkidle')
+    frame = page.frame_locator('#device-frame')
+    frame.locator('body').wait_for(timeout=20000)
+    text = frame.locator('body').inner_text()
+    assert '404' not in text, f'still a bare 404:\n{text[:200]}'
+    assert '-L' in text, f'does not show the CLI it is for:\n{text[:200]}'
     page.close()

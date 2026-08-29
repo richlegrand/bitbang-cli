@@ -16,7 +16,6 @@ import os
 import pytest
 import queue
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -84,22 +83,17 @@ class Listener:
     def links_path(self):
         return os.path.join(self.home, '.bitbang', 'bitbang', 'links.json')
 
-    def write_links(self, entries):
-        """Replace the link table, reload, and return {label: url} once every
-        entry has appeared in the listener's listing.
+    def await_links(self, labels):
+        """Block until every label appears in the listing, then return
+        {label: url}.
 
-        Waiting on the labels rather than on "some new output" matters: the
-        listener prints its pairing code asynchronously a moment after Ready,
-        so any-new-line is satisfied before the reload has even run.
+        Waiting on the labels rather than on "some new output" matters:
+        the listener prints its pairing code asynchronously a moment
+        after Ready, so any-new-line is satisfied before the table has
+        been printed.
         """
-        os.makedirs(os.path.dirname(self.links_path), exist_ok=True)
-        with open(self.links_path, 'w') as f:
-            json.dump(entries, f)
-        self.proc.send_signal(signal.SIGHUP)
-
-        wanted = {e['label'] for e in entries}
+        wanted = set(labels)
         if not wanted:
-            time.sleep(1)  # nothing to wait for; the caller watches the log
             return self.urls_by_label()
         deadline = time.time() + 20
         while time.time() < deadline:
@@ -108,20 +102,29 @@ class Listener:
                 return urls
             time.sleep(0.2)
         pytest.fail(
-            f'links {sorted(wanted)} never appeared after reload. '
+            f'links {sorted(wanted)} never appeared in the listing. '
             f'Output:\n{self.log()}'
         )
 
     def urls_by_label(self):
         """Parse the listing into {label: url}. The listing is the listener's
         own view of the table, so reading it back is also a check that the
-        table loaded."""
+        table loaded.
+
+        Two lines per entry: `N) label ...` on one, the URL alone on the
+        next. An entry whose code has been retired has "(no code until
+        renewed)" there instead and is left out, since there is no URL to
+        return."""
         self._drain()
-        found = {}
+        found, pending = {}, None
         for line in self._captured:
-            m = re.match(r'\s{2}(\S+)\s+.*?(https://\S+)\s*$', line)
-            if m:
-                found[m.group(1)] = m.group(2)
+            url = re.match(r'\s+(https://\S+)\s*$', line)
+            if url and pending:
+                found[pending] = url.group(1)
+                pending = None
+                continue
+            head = re.match(r'\s{2}\d+\)\s+(\S+)\s+\S', line)
+            pending = head.group(1) if head else None
         return found
 
 
@@ -187,6 +190,124 @@ def _stop(listener):
         listener.proc.kill()
 
 
+def _provision_links(home, entries):
+    """Write a link table into a home before its listener starts.
+
+    Provisioned rather than pushed: a running listener has no reload
+    signal, by design. Changing links while one is up is the console's
+    job, which is what the revocation test drives.
+    """
+    path = os.path.join(home, '.bitbang', 'bitbang', 'links.json')
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(entries, f)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        'markers', 'slow: takes tens of seconds by design, e.g. waiting out a timeout')
+
+
+class PtyListener:
+    """A listener running under a pty, so it has a console to prompt on.
+
+    The plain `listener` fixture uses pipes, which is right for tests that
+    only need a URL -- but the console opens /dev/tty and refuses to exist
+    without one, so anything exercising it needs a real terminal.
+    """
+
+    def __init__(self, child, home, pairing_code, device_url):
+        self.child = child
+        self.home = home
+        self.pairing_code = pairing_code
+        self.device_url = device_url
+
+    def open_console(self):
+        """Press Enter and wait for the console to come up."""
+        self.child.sendline('')
+        self.child.expect('console --', timeout=20)
+
+    def command(self, line, expect, timeout=20):
+        """Run one console command and wait for something in its output.
+
+        Waits for the terminal to echo the line back before matching, so
+        a pattern cannot be satisfied by output that was already in the
+        buffer when the command was sent.
+        """
+        self.child.sendline(line)
+        if line:
+            self.child.expect_exact(line, timeout=timeout)
+        self.child.expect(expect, timeout=timeout)
+        return self.child.match
+
+    def links(self):
+        path = os.path.join(self.home, '.bitbang', 'bitbang', 'links.json')
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return json.load(f)
+
+    def link_url(self, label):
+        """The shareable URL for a provisioned link.
+
+        Built from the code in links.json plus the device URL the banner
+        printed, rather than scraped from the listing -- the listing is
+        column-aligned and its URL column moves with the longest label.
+        """
+        for e in self.links():
+            if e.get('label') == label and e.get('code'):
+                base = self.device_url.split('#')[0]
+                return f"{base}#{e['code']}"
+        raise AssertionError(f'no link called {label!r} in {self.links()}')
+
+
+@pytest.fixture
+def pty_listener(tmp_path_factory):
+    """Factory for listeners with a terminal attached.
+
+    Function-scoped: console tests mutate the link table, and a shared
+    listener would make them order-dependent.
+    """
+    pexpect = pytest.importorskip('pexpect')
+    started = []
+
+    def start(*args, links=None):
+        home = str(tmp_path_factory.mktemp('pty-home'))
+        os.makedirs(os.path.join(home, 'share'), exist_ok=True)
+        if links is not None:
+            _provision_links(home, links)
+        child = pexpect.spawn(
+            bitbang_binary(), list(args),
+            env=dict(os.environ, HOME=home, TERM='dumb'),
+            encoding='utf-8', timeout=60, dimensions=(50, 110),
+        )
+        # The URL is printed before the pairing code, so it has to be
+        # matched first or it is already consumed. The listener also
+        # suppresses its "Ready" marker on a terminal, which is why the
+        # banner is the registration signal here rather than that.
+        child.expect(r'https://\S+/[A-Za-z0-9_-]{22}#[A-Za-z0-9_-]+',
+                     timeout=PROXY_STARTUP_TIMEOUT + 15)
+        device_url = child.after.strip()
+        child.expect('Pairing code:', timeout=30)
+        child.expect(r'(\d{6})', timeout=10)
+        code = child.match.group(1)
+        child.expect(pexpect.TIMEOUT, timeout=3)  # let the banner settle
+        l = PtyListener(child, home, code, device_url)
+        started.append(l)
+        return l
+
+    yield start
+    for l in started:
+        l.child.terminate(force=True)
+
+
+@pytest.fixture(scope='session')
+def bitbang_bin():
+    """Path to the binary under test. A fixture rather than an import so
+    tests do not have to reach into conftest as a module."""
+    return bitbang_binary()
+
+
 @pytest.fixture(scope='session')
 def test_server():
     """The signaling server under test. A fixture rather than an import so
@@ -204,9 +325,11 @@ def listener(tmp_path_factory):
     """
     started = []
 
-    def start(*args, home=None):
+    def start(*args, home=None, links=None):
         if home is None:
             home = str(tmp_path_factory.mktemp('home'))
+        if links is not None:
+            _provision_links(home, links)
         l = _start_listener(list(args), home)
         started.append(l)
         return l
@@ -246,14 +369,35 @@ def target_app():
 def proxy_url(target_app, listener):
     """Start a fixed-target proxy listener and return its URL. This is the
     mode the OctoPrint plugin runs, and what most tests here exercise."""
-    return listener('serve', 'proxy', '-server', TEST_SERVER,
-                    '-target', target_app, '-ephemeral').url
+    return listener('serve', 'proxy', target_app, '-server', TEST_SERVER,
+                    '-ephemeral').url
 
 
 @pytest.fixture(scope='session')
 def browser_context(playwright, proxy_url):
     """Create a persistent browser context for the test session."""
     browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context()
+    yield context
+    context.close()
+    browser.close()
+
+
+@pytest.fixture(scope='session')
+def firefox_context(playwright):
+    """A second engine, for the things that differ between them.
+
+    Worth the extra browser because the differences are not cosmetic: Firefox
+    has no `Request.body`, so every request body took a different path through
+    sw.js, and that path was silently broken while Chromium was fine.
+
+    Skips rather than fails when Firefox is not installed -- `playwright
+    install firefox` is not implied by having the suite.
+    """
+    try:
+        browser = playwright.firefox.launch(headless=True)
+    except Exception as e:
+        pytest.skip(f'firefox not available ({e}); run: playwright install firefox')
     context = browser.new_context()
     yield context
     context.close()

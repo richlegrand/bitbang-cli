@@ -1,79 +1,44 @@
 package main
 
 import (
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/richlegrand/bitbang/internal/links"
 )
 
+// One device, one identity. Every mode lands on the same UID, and what a
+// given URL reaches is decided by the code presented, not by which
+// identity it addresses.
 func TestDeriveProgram(t *testing.T) {
-	// Shell-bearing configs collapse to the master "bitbang" identity.
-	all := serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy)}
-	if got := deriveProgram(all); got != "bitbang" {
-		t.Errorf("all-caps serve: got %q, want \"bitbang\"", got)
+	cases := []struct {
+		name string
+		cfg  serveConfig
+	}{
+		{"all caps", serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy)}},
+		{"shell only", serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward)}},
+		{"files only", serveConfig{caps: capsOf(links.ScopeFiles)}},
+		{"proxy only", serveConfig{caps: capsOf(links.ScopeProxy)}},
+		// The instance used to fork the identity. It no longer does: two
+		// paths, or two targets, are the same device.
+		{"files with a path", serveConfig{caps: capsOf(links.ScopeFiles), filesPath: "/srv/share"}},
+		{"files with another path", serveConfig{caps: capsOf(links.ScopeFiles), filesPath: "/srv/other"}},
+		{"proxy with a target", serveConfig{caps: capsOf(links.ScopeProxy), target: "localhost:8096"}},
+		{"proxy with another target", serveConfig{caps: capsOf(links.ScopeProxy), target: "localhost:3000"}},
 	}
-	if got := deriveProgram(serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward)}); got != "bitbang" {
-		t.Errorf("shell-only: got %q, want \"bitbang\"", got)
-	}
-
-	// Generic single caps get their own stable identity.
-	if got := deriveProgram(serveConfig{caps: capsOf(links.ScopeProxy)}); got != "proxy" {
-		t.Errorf("generic proxy: got %q, want \"proxy\"", got)
-	}
-	if got := deriveProgram(serveConfig{caps: capsOf(links.ScopeFiles)}); got != "files" {
-		t.Errorf("generic files: got %q, want \"files\"", got)
-	}
-
-	// An explicit --program always wins.
-	if got := deriveProgram(serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward), program: "custom"}); got != "custom" {
-		t.Errorf("explicit program override: got %q, want \"custom\"", got)
-	}
-
-	// Fixed proxy target → per-target identity, prefixed and readable.
-	p1 := deriveProgram(serveConfig{caps: capsOf(links.ScopeProxy), target: "localhost:8096"})
-	p2 := deriveProgram(serveConfig{caps: capsOf(links.ScopeProxy), target: "localhost:3000"})
-	if !strings.HasPrefix(p1, "proxy-localhost-8096-") {
-		t.Errorf("proxy target slug not readable: %q", p1)
-	}
-	if p1 == p2 {
-		t.Errorf("different targets must yield different identities: %q == %q", p1, p2)
-	}
-
-	// Trivially-equivalent targets normalize to the SAME identity.
-	if a, b := deriveProgram(serveConfig{caps: capsOf(links.ScopeProxy), target: "LocalHost:8096/"}),
-		deriveProgram(serveConfig{caps: capsOf(links.ScopeProxy), target: "localhost:8096"}); a != b {
-		t.Errorf("equivalent targets must share identity: %q != %q", a, b)
-	}
-
-	// Equivalent file paths (relative vs absolute) share one identity.
-	abs, _ := filepath.Abs(".")
-	if a, b := deriveProgram(serveConfig{caps: capsOf(links.ScopeFiles), filesPath: "."}),
-		deriveProgram(serveConfig{caps: capsOf(links.ScopeFiles), filesPath: abs}); a != b {
-		t.Errorf("equivalent paths must share identity: %q != %q", a, b)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := deriveProgram(c.cfg); got != defaultProgram {
+				t.Errorf("got %q, want %q", got, defaultProgram)
+			}
+		})
 	}
 }
 
-func TestSlug(t *testing.T) {
-	// Stable.
-	if slug("localhost:8096") != slug("localhost:8096") {
-		t.Error("slug not stable")
-	}
-	// Filesystem/Windows-safe: only [A-Za-z0-9._-].
-	for _, in := range []string{"localhost:8096", "/dev/ttyUSB0", "a b\tc", "weird/../path"} {
-		s := slug(in)
-		for _, r := range s {
-			ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-				(r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
-			if !ok {
-				t.Errorf("slug(%q)=%q contains unsafe rune %q", in, s, r)
-			}
-		}
-	}
-	// The hash suffix prevents sanitization from aliasing distinct inputs:
-	// "a:b" and "a-b" sanitize identically but must not collide.
-	if slug("a:b") == slug("a-b") {
-		t.Error("slug aliased two distinct inputs that sanitize the same")
+// The explicit flag is the only way to get a second identity now, so it
+// has to keep winning.
+func TestDeriveProgramExplicitOverride(t *testing.T) {
+	cfg := serveConfig{caps: capsOf(links.ScopeProxy), target: "localhost:8096", program: "octoprint"}
+	if got := deriveProgram(cfg); got != "octoprint" {
+		t.Errorf("got %q, want the pinned name", got)
 	}
 }

@@ -71,10 +71,33 @@ func TestCodeURLCarriesGivenCode(t *testing.T) {
 // so the grammar can only ever be defined in one place.
 func TestURLUsesCodeURL(t *testing.T) {
 	c := testClient(t)
-	if got, want := c.URL(false), c.CodeURL(c.ID.Code); got != want {
-		t.Errorf("URL(false) = %q, want %q", got, want)
+	if got, want := c.URL(), c.CodeURL(c.ID.Code); got != want {
+		t.Errorf("URL() = %q, want %q", got, want)
 	}
-	if got, want := c.URL(true), c.CodeURL(c.ID.Code, "debug"); got != want {
-		t.Errorf("URL(true) = %q, want %q", got, want)
+	if got, want := c.URL("debug"), c.CodeURL(c.ID.Code, "debug"); got != want {
+		t.Errorf(`URL("debug") = %q, want %q`, got, want)
+	}
+}
+
+// A listener's URLs say how it was started. An ephemeral identity is
+// generated per run and discarded, so a connector that saved one would hold
+// a credential for a UID that never comes back -- the flag is what stops it.
+func TestURLFlags(t *testing.T) {
+	for _, tc := range []struct {
+		debug, ephemeral bool
+		want             string
+	}{
+		{false, false, ""},
+		{false, true, "ephemeral"},
+		{true, false, "debug"},
+		// Ephemeral first, so the list reads the same whichever way the
+		// listener was started.
+		{true, true, "ephemeral,debug"},
+	} {
+		got := strings.Join(URLFlags(tc.debug, tc.ephemeral), ",")
+		if got != tc.want {
+			t.Errorf("URLFlags(debug=%v, ephemeral=%v) = %q, want %q",
+				tc.debug, tc.ephemeral, got, tc.want)
+		}
 	}
 }

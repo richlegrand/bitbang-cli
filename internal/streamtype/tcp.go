@@ -3,11 +3,13 @@ package streamtype
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
 	"sync"
 
+	"github.com/richlegrand/bitbang/internal/allowlist"
 	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/localdns"
 	"github.com/richlegrand/bitbang/internal/protocol"
@@ -30,6 +32,11 @@ type TCPHandler struct {
 	// DialContext is injectable for focused tests. Production uses the same
 	// mDNS-aware resolver as the HTTP and WebSocket proxy paths.
 	DialContext func(context.Context, string, string) (net.Conn, error)
+
+	// Allow restricts which targets this listener will dial. Empty means
+	// every host:port it can reach, which is what a listener started
+	// that named no targets after `forward` offers.
+	Allow allowlist.List
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -54,10 +61,11 @@ type tcpStream struct {
 }
 
 // NewTCP returns a per-WebRTC-session TCP handler.
-func NewTCP(verbose bool) *TCPHandler {
+func NewTCP(verbose bool, allow allowlist.List) *TCPHandler {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TCPHandler{
 		Verbose:       verbose,
+		Allow:         allow,
 		MaxConcurrent: DefaultTCPMaxConcurrent,
 		DialContext:   localdns.Default.DialContext,
 		ctx:           ctx,
@@ -77,6 +85,18 @@ func (h *TCPHandler) OnSYN(s Stream, payload []byte, final bool) error {
 	}
 	if err := tcpforward.ValidateTarget(open.Host, open.Port); err != nil {
 		h.sendError(s, err.Error())
+		return nil
+	}
+	// Enforced here rather than at the connector, which we do not control.
+	if !h.Allow.Permits(open.Host, open.Port) {
+		log.Printf("TCP refused %s:%d: not in the allowed forwards (%s)",
+			open.Host, open.Port, h.Allow)
+		// "your link", not "this listener": the allowlist here is the
+		// listener's narrowed by the link, so a target the listener does
+		// reach can still be refused, and blaming the listener for that
+		// sends someone looking in the wrong place.
+		h.sendError(s, fmt.Sprintf("%s:%d is not one of the allowed forwards for your link (%s)",
+			open.Host, open.Port, h.Allow))
 		return nil
 	}
 

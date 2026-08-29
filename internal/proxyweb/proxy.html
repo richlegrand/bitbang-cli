@@ -11,6 +11,13 @@
             color: #333;
             padding: 24px;
         }
+        /* Clear the 32x22 caret sideways, not downwards: the form moves
+           right as a block -- label, field and hint together, so they
+           stay aligned -- and comes up rather than sitting below the
+           control. Indenting the label alone left it out of line with
+           its own input. */
+        body.with-cap-bar { padding-top: 8px; padding-left: 40px; }
+
         label {
             display: block;
             font-size: 13px;
@@ -41,10 +48,13 @@
         }
         button:hover { background: #f4f4f4; }
         .hint { margin-top: 10px; font-size: 12px; color: #999; }
+        input:disabled { background: #f6f6f6; color: #999; }
+        button:disabled { background: #f6f6f6; color: #aaa; cursor: default; }
         .err { margin-top: 10px; font-size: 13px; color: #c00; display: none; }
     </style>
 </head>
 <body>
+<!-- CAP_BAR -->
     <label for="target">Target URL</label>
     <div class="form-row">
         <input type="text" id="target" placeholder="localhost:3000" autofocus
@@ -72,6 +82,13 @@
                 errEl.style.display = 'block';
                 return;
             }
+            bbOpen(target);
+        }
+
+        // Shared by the form and the chooser: bootstrap.js (the top frame)
+        // owns the access code and the sandbox forbids navigating the top
+        // frame from here, so ask it to move. Same message the cap bar sends.
+        function bbOpen(target) {
             parent.postMessage({type:'bb-open-cap', path:'/' + target + '/', newTab:false}, '*');
         }
     </script>

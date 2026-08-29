@@ -7,11 +7,20 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Nothing here writes to the repo, so don't inherit a token that can.
+permissions:
+  contents: read
+
 jobs:
   unit:
     strategy:
+      # One platform failing must not cancel the others. A Unix-only test
+      # expectation took Windows down and cancelled macOS with it, which
+      # hid whether macOS was fine -- and macOS is the leg with the least
+      # history behind it.
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
 
@@ -59,7 +68,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The expiry test waits out a real 60s poll, so the suite is minutes,
+    # not seconds. Headroom for a slow runner rather than a flaky red.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -73,13 +84,19 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
       - name: Build proxy
         run: go build -o bitbangproxy ./cmd/bitbang/
 
       - name: Install Python dependencies
         run: |
-          pip install flask flask-sock pytest pytest-timeout pytest-playwright playwright
-          playwright install --with-deps chromium
+          pip install flask flask-sock pytest pytest-timeout pytest-playwright playwright pexpect
+          # Firefox as well as Chromium: it has no Request.body, so request
+          # bodies take a different path through sw.js -- one that was broken
+          # while every Chromium test passed. See tests/e2e/test_firefox_bodies.py.
+          playwright install --with-deps chromium firefox
 
       - name: Run E2E tests
         env:

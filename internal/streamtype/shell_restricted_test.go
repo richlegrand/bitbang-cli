@@ -56,6 +56,22 @@ func (c *shellCapture) WriteFIN(p []byte) error {
 func (c *shellCapture) SendRaw(_ uint16, p []byte) error { return c.WriteDAT(p) }
 func (c *shellCapture) BufferedAmount() uint64           { return 0 }
 
+// shellError returns the error the handler sent in its SYN, or "" if it did
+// not send one. Refusals arrive that way rather than as output.
+func (c *shellCapture) shellError() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, p := range c.syn {
+		var hdr struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(p, &hdr) == nil && hdr.Error != "" {
+			return hdr.Error
+		}
+	}
+	return ""
+}
+
 // stdout returns everything the handler pumped with the stdout tag.
 func (c *shellCapture) stdout() string {
 	c.mu.Lock()
@@ -96,10 +112,15 @@ func skipIfWindows(t *testing.T) {
 	}
 }
 
-// TestForcedArgvIgnoresClientArgv is the core of the `bitbang share`
-// boundary: a peer pinned to a command must not be able to run
-// anything else, no matter what it asks for.
-func TestForcedArgvIgnoresClientArgv(t *testing.T) {
+// TestForcedArgvRefusesClientArgv is the core of the `bitbang share`
+// boundary: a peer pinned to a command must not be able to run anything
+// else, no matter what it asks for.
+//
+// It used to run the pinned command and say nothing, which kept the boundary
+// but left the connector reading output from something it never asked for.
+// Refusing keeps the boundary and stops lying about it -- a warning would not
+// do, since the wrong output would still be on stdout for a script to believe.
+func TestForcedArgvRefusesClientArgv(t *testing.T) {
 	skipIfWindows(t)
 	h := NewShell(nil, false)
 	h.ForcedArgv = []string{"/bin/echo", "forced"}
@@ -112,14 +133,35 @@ func TestForcedArgvIgnoresClientArgv(t *testing.T) {
 	if err := h.OnSYN(s, syn, false); err != nil {
 		t.Fatalf("OnSYN: %v", err)
 	}
-	s.waitFinished(t)
 
-	out := s.stdout()
-	if !strings.Contains(out, "forced") {
-		t.Errorf("output %q does not contain the forced command's output", out)
+	if out := s.stdout(); out != "" {
+		t.Errorf("a refused request produced output: %q", out)
 	}
-	if strings.Contains(out, "ATTACKER") {
-		t.Errorf("client-supplied argv was executed: %q", out)
+	refusal := s.shellError()
+	if !strings.Contains(refusal, "does not accept one") {
+		t.Errorf("refusal = %q, want it to say a command is not accepted", refusal)
+	}
+	// Naming the pinned command reveals nothing: connecting without one runs it.
+	if !strings.Contains(refusal, "/bin/echo forced") {
+		t.Errorf("refusal = %q, want it to name the pinned command", refusal)
+	}
+}
+
+// The supported way to use a pinned listener -- no command supplied -- has to
+// keep working, since that is every `bitbang share` viewer.
+func TestForcedArgvRunsWhenNoCommandIsAsked(t *testing.T) {
+	skipIfWindows(t)
+	h := NewShell(nil, false)
+	h.ForcedArgv = []string{"/bin/echo", "forced"}
+
+	s := newShellCapture()
+	syn, _ := json.Marshal(shellOpen{Type: "shell"})
+	if err := h.OnSYN(s, syn, false); err != nil {
+		t.Fatalf("OnSYN: %v", err)
+	}
+	s.waitFinished(t)
+	if out := s.stdout(); !strings.Contains(out, "forced") {
+		t.Errorf("output %q does not contain the pinned command's output", out)
 	}
 }
 
@@ -171,12 +213,16 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
-// TestUnrestrictedStillHonorsClientArgv guards the default path: the
-// hardening must not change `serve shell` behavior for peers that are
-// supposed to choose their own command.
-func TestUnrestrictedStillHonorsClientArgv(t *testing.T) {
+// TestUnpinnedHonorsClientArgv guards the open path: a listener that named
+// no command still lets the connector choose one, which is what plain
+// `bitbang serve shell` is for.
+//
+// Naming a command is the only thing that closes this path, and it closes
+// it completely -- there is no in-between where the listener names one and
+// the connector may still replace it.
+func TestUnpinnedHonorsClientArgv(t *testing.T) {
 	skipIfWindows(t)
-	h := NewShell([]string{"/bin/echo", "default"}, false)
+	h := NewShell(nil, false)
 
 	s := newShellCapture()
 	syn, _ := json.Marshal(shellOpen{Type: "shell", Argv: []string{"/bin/echo", "client"}})

@@ -18,6 +18,15 @@
             color: #333;
         }
 
+        /* The caret is a 32x22 control in the top-left corner. Nothing
+           moves down for it: above 832px the centred container already
+           leaves more than 32px of margin, and below that the container
+           is indented instead. Width is cheaper here than height --
+           a listing is read down the page. */
+        @media (max-width: 832px) {
+            body.with-cap-bar .container { padding-left: 40px; }
+        }
+
         .container {
             max-width: 800px;
             margin: 0 auto;
@@ -274,6 +283,7 @@
     </style>
 </head>
 <body>
+<!-- CAP_BAR -->
     <div class="container">
         <div id="breadcrumb" class="breadcrumb"></div>
 

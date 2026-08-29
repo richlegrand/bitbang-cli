@@ -2,17 +2,20 @@ package links
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/richlegrand/bitbang/internal/grant"
 )
 
 // offered is what a full `bitbang serve` supports.
-var offered = []string{ScopeFiles, ScopeShell, ScopeForward, ScopeProxy}
+var offered = grant.Everything()
 
-func mustBuild(t *testing.T, entries []Terms, srv []string) *Table {
+func mustBuild(t *testing.T, entries []Terms, srv grant.Spec) *Table {
 	t.Helper()
 	tb, _, err := Build(entries, srv, "IDENTITYCODE")
 	if err != nil {
@@ -44,7 +47,7 @@ func TestParse_UnknownFieldRejected(t *testing.T) {
 
 func TestParse_Good(t *testing.T) {
 	entries, err := Parse([]byte(`[
-	  {"label":"contractor","scope":["files"],"expires":"2030-01-01T00:00:00Z"},
+	  {"label":"contractor","grant":"files","expires":"2030-01-01T00:00:00Z"},
 	  {"label":"kiosk"}
 	]`))
 	if err != nil {
@@ -53,7 +56,7 @@ func TestParse_Good(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("got %d entries, want 2", len(entries))
 	}
-	if entries[1].Scope != nil {
+	if entries[1].Grant != "" {
 		t.Error("absent scope should stay nil (means everything offered)")
 	}
 }
@@ -64,8 +67,7 @@ func TestValidate(t *testing.T) {
 		entry   Terms
 		wantErr string
 	}{
-		{"empty scope", Terms{Label: "x", Scope: []string{}}, "grants nothing"},
-		{"unknown scope", Terms{Label: "x", Scope: []string{"shel"}}, "unknown scope"},
+		{"unknown word", Terms{Label: "x", Grant: "shel"}, "not something to serve"},
 		{"no label", Terms{Label: "  "}, "needs a label"},
 	}
 	for _, c := range cases {
@@ -76,29 +78,42 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
-	if err := Validate([]Terms{{Label: "ok", Scope: []string{"proxy", "files"}}}); err != nil {
+	if err := Validate([]Terms{{Label: "ok", Grant: "proxy files"}}); err != nil {
 		t.Errorf("valid entry rejected: %v", err)
 	}
 }
 
 // -- Scope --
 
-func TestGrants_AbsentScopeIsEverythingOffered(t *testing.T) {
-	got := Terms{Label: "me"}.Grants([]string{ScopeFiles, ScopeShell})
+func TestGrants_AbsentGrantIsEverythingOffered(t *testing.T) {
+	eff, err := Terms{Label: "owner"}.Effective(mustSpec(t, "files shell"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := eff.Words()
 	if strings.Join(got, ",") != "files,shell" {
 		t.Errorf("got %v, want everything offered", got)
 	}
 }
 
-func TestGrants_ScopeNotOfferedIsDroppedNotGranted(t *testing.T) {
-	got := Terms{Label: "s", Scope: []string{ScopeShell}}.Grants([]string{ScopeFiles})
+// A link asking for a capability the listener does not serve keeps whatever
+// overlaps rather than failing: a links.json written for a fuller listener
+// still works, and Build warns at load about the part that does not. What is
+// refused is a *target* outside the listener's, since silently narrowing one
+// of those would hand out something the operator never wrote.
+func TestGrants_UnservedCapabilityIsDroppedNotFatal(t *testing.T) {
+	eff, err := Terms{Label: "s", Grant: "shell"}.Effective(mustSpec(t, "files"))
+	if err != nil {
+		t.Fatalf("an unserved capability should drop, not fail: %v", err)
+	}
+	got := eff.Words()
 	if len(got) != 0 {
 		t.Errorf("got %v; a shell-scoped link on a files-only listener must conjure nothing", got)
 	}
 }
 
 func TestBuild_WarnsWhenScopeNotServed(t *testing.T) {
-	_, warnings, err := Build([]Terms{{Label: "s", Scope: []string{"shell"}}}, []string{"file"}, "C")
+	_, warnings, err := Build([]Terms{{Label: "s", Grant: "shell"}}, mustSpec(t, "files"), "C")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -107,26 +122,30 @@ func TestBuild_WarnsWhenScopeNotServed(t *testing.T) {
 	}
 }
 
-// -- The implicit `me` row --
+// -- The implicit `owner` row --
 
-func TestBuild_SynthesizesMe(t *testing.T) {
+func TestBuild_SynthesizesOwner(t *testing.T) {
 	tb := mustBuild(t, nil, offered)
-	me, ok := tb.ByLabel(MeLabel)
+	owner, ok := tb.ByLabel(OwnerLabel)
 	if !ok {
-		t.Fatal("no me row; the poll would close the operator's own session")
+		t.Fatal("no owner row; the poll would close the operator's own session")
 	}
-	if me.Expires != nil || me.Scope != nil {
-		t.Error("me must never expire and must grant everything offered")
+	if owner.Expires != nil || owner.Grant != "" {
+		t.Error("owner must never expire and must grant everything offered")
 	}
-	if got := me.Grants(offered); len(got) != len(offered) {
-		t.Errorf("me grants %v, want everything offered", got)
+	eff, err := owner.Effective(offered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eff.Words()) != len(offered.Words()) {
+		t.Errorf("owner grants %v, want everything offered", eff.Words())
 	}
 }
 
-func TestBuild_HandWrittenMeCollides(t *testing.T) {
-	_, _, err := Build([]Terms{{Label: MeLabel}}, offered, "C")
+func TestBuild_HandWrittenOwnerCollides(t *testing.T) {
+	_, _, err := Build([]Terms{{Label: OwnerLabel}}, offered, "C")
 	if err == nil {
-		t.Fatal("a hand-written `me` entry must collide with the synthesized row")
+		t.Fatal("a hand-written `owner` entry must collide with the synthesized row")
 	}
 }
 
@@ -145,7 +164,11 @@ func TestAuthorize_DefaultCodeGrantsEverything(t *testing.T) {
 	if !ok {
 		t.Fatal("the identity's own code must stay valid")
 	}
-	if len(terms.Grants(offered)) != len(offered) {
+	eff, err := terms.Effective(offered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eff.Words()) != len(offered.Words()) {
 		t.Error("the identity's own code must grant everything offered")
 	}
 }
@@ -187,22 +210,32 @@ func TestCheck_BoundaryIsExclusive(t *testing.T) {
 
 func TestGrants_NarrowingIsDetected(t *testing.T) {
 	wide := Terms{Label: "c"}
-	narrow := Terms{Label: "c", Scope: []string{ScopeFiles}}
+	narrow := Terms{Label: "c", Grant: "files"}
 	if SameGrants(wide, narrow, offered) {
 		t.Error("a link narrowed from everything to files must not look unchanged")
 	}
-	if !SameGrants(narrow, Terms{Label: "c", Scope: []string{ScopeFiles}}, offered) {
-		t.Error("identical scopes compared unequal")
+	if !SameGrants(narrow, Terms{Label: "c", Grant: "files"}, offered) {
+		t.Error("identical grants compared unequal")
+	}
+	// Narrowing targets counts too -- a scope-list comparison missed this,
+	// and the session kept the wider reach until it ended.
+	wideT := Terms{Label: "t", Grant: "forward a:22,b:80"}
+	narrowT := Terms{Label: "t", Grant: "forward a:22"}
+	if SameGrants(wideT, narrowT, mustSpec(t, "forward a:22,b:80")) {
+		t.Error("narrowing forward targets must not look unchanged")
 	}
 }
 
 func TestGrantSet_FilesReachesNothingElse(t *testing.T) {
-	set := Terms{Label: "c", Scope: []string{ScopeFiles}}.GrantSet(offered)
-	if !set[ScopeFiles] {
+	eff, err := Terms{Label: "c", Grant: "files"}.Effective(offered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eff.Has(ScopeFiles) {
 		t.Error("files not granted")
 	}
 	for _, name := range []string{ScopeShell, ScopeForward, ScopeProxy} {
-		if set[name] {
+		if eff.Has(name) {
 			t.Errorf("a files-scoped link must not reach %s", name)
 		}
 	}
@@ -251,7 +284,7 @@ func TestSave_RefusesWhenFileChanged(t *testing.T) {
 
 func TestSave_RoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "links.json")
-	want := []Terms{{Label: "a", Code: "AAAA", Scope: []string{"files"}}}
+	want := []Terms{{Label: "a", Code: "AAAA", Grant: "files"}}
 	if err := Save(path, want, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +292,7 @@ func TestSave_RoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Code != "AAAA" || got[0].Scope[0] != "files" {
+	if len(got) != 1 || got[0].Code != "AAAA" || got[0].Grant != "files" {
 		t.Errorf("round trip changed the entry: %+v", got)
 	}
 }
@@ -267,7 +300,7 @@ func TestSave_RoundTrips(t *testing.T) {
 func TestMint_FillsOnlyMissingCodes(t *testing.T) {
 	n := 0
 	gen := func() (string, error) { n++; return "MINTED", nil }
-	out, minted, err := Mint([]Terms{{Label: "has", Code: "KEEP"}, {Label: "needs"}}, gen)
+	out, minted, err := Mint([]Terms{{Label: "has", Code: "KEEP"}, {Label: "needs"}}, time.Now(), gen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,5 +309,162 @@ func TestMint_FillsOnlyMissingCodes(t *testing.T) {
 	}
 	if out[1].Code != "MINTED" || len(minted) != 1 || minted[0] != "needs" {
 		t.Errorf("mint did not fill the empty code: %+v %v", out, minted)
+	}
+}
+
+// An expired code must die rather than sleep: left in place, extending
+// the entry brings back the same fragment, so renewing a link for one
+// person silently readmits everyone who was ever sent it.
+func TestRetireExpired_ClearsTheCodeSoRenewalMintsAFreshOne(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	entries := []Terms{
+		{Label: "lapsed", Code: "OLDCODE", Expires: &past},
+		{Label: "live", Code: "LIVECODE", Expires: &future},
+		{Label: "forever", Code: "FOREVER"},
+	}
+
+	out, retired := RetireExpired(entries, time.Now())
+	if len(retired) != 1 || retired[0] != "lapsed" {
+		t.Fatalf("retired = %v, want just the lapsed one", retired)
+	}
+	if out[0].Code != "" {
+		t.Errorf("lapsed entry kept its code %q", out[0].Code)
+	}
+	if out[1].Code != "LIVECODE" || out[2].Code != "FOREVER" {
+		t.Error("retiring touched an entry that had not expired")
+	}
+
+	// Still expired, so minting must leave it alone -- otherwise every
+	// reload hands a dead link a fresh code and rewrites the file.
+	out, minted, err := Mint(out, time.Now(), func() (string, error) { return "NEW", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minted) != 0 {
+		t.Errorf("minted %v for an entry that is still expired", minted)
+	}
+
+	// Renewed: now it is live and codeless, so it gets a code, and a new
+	// one -- the URL already handed out stays dead.
+	out[0].Expires = &future
+	out, minted, err = Mint(out, time.Now(), func() (string, error) { return "NEW", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minted) != 1 || out[0].Code != "NEW" {
+		t.Fatalf("renewal did not mint a fresh code: minted=%v code=%q", minted, out[0].Code)
+	}
+	if out[0].Code == "OLDCODE" {
+		t.Error("renewal revived the original code")
+	}
+}
+
+// Two rows sharing a code is copy-paste, not bad luck, and left alone it
+// grants a live holder the other row's scope while surviving link rm.
+func TestDedupeCodes_ClearsEverySharingRow(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	entries := []Terms{
+		{Label: "ana", Code: "SHARED", Grant: "files", Expires: &past},
+		{Label: "ben", Code: "SHARED", Grant: "shell"},
+		{Label: "cleo", Code: "OWN", Grant: "files"},
+	}
+	out, conflicts := DedupeCodes(entries, "IDENTITY")
+
+	if out[0].Code != "" || out[1].Code != "" {
+		t.Errorf("a sharing row kept the code: %q %q", out[0].Code, out[1].Code)
+	}
+	if out[2].Code != "OWN" {
+		t.Error("an unrelated row lost its code")
+	}
+	if len(conflicts) != 1 || len(conflicts[0].Labels) != 2 {
+		t.Fatalf("conflicts = %+v, want one naming both rows", conflicts)
+	}
+	if conflicts[0].Labels[0] != "ana" || conflicts[0].Labels[1] != "ben" {
+		t.Errorf("labels = %v, want both, sorted", conflicts[0].Labels)
+	}
+	if conflicts[0].Reserved {
+		t.Error("reported as an identity-code conflict")
+	}
+}
+
+// The identity is the one incumbent that is known, so it keeps its code
+// and the row yields.
+func TestDedupeCodes_IdentityCodeIsReserved(t *testing.T) {
+	out, conflicts := DedupeCodes([]Terms{{Label: "sneaky", Code: "IDENTITY"}}, "IDENTITY")
+	if out[0].Code != "" {
+		t.Error("a row using the device's own code kept it")
+	}
+	if len(conflicts) != 1 || !conflicts[0].Reserved {
+		t.Fatalf("conflicts = %+v, want one marked reserved", conflicts)
+	}
+}
+
+func TestDedupeCodes_LeavesADistinctTableAlone(t *testing.T) {
+	entries := []Terms{{Label: "a", Code: "A"}, {Label: "b", Code: "B"}, {Label: "c"}}
+	out, conflicts := DedupeCodes(entries, "IDENTITY")
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %+v on a clean table", conflicts)
+	}
+	if out[0].Code != "A" || out[1].Code != "B" || out[2].Code != "" {
+		t.Errorf("codes changed: %+v", out)
+	}
+}
+
+// Dedup then retire then mint: the shared code must not survive on any
+// row, and each row must come away with its own.
+func TestDedupeThenRetireThenMint(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	entries := []Terms{
+		{Label: "ana", Code: "SHARED", Expires: &past},
+		{Label: "ben", Code: "SHARED"},
+	}
+	n := 0
+	gen := func() (string, error) { n++; return fmt.Sprintf("NEW%d", n), nil }
+
+	out, _ := DedupeCodes(entries, "IDENTITY")
+	out, _ = RetireExpired(out, time.Now())
+	out, _, err := Mint(out, time.Now(), gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[0].Code != "" {
+		t.Errorf("expired ana ended up with code %q; she should have none", out[0].Code)
+	}
+	if out[1].Code == "SHARED" || out[1].Code == "" {
+		t.Errorf("ben's code = %q, want a freshly minted one", out[1].Code)
+	}
+}
+
+// mustSpec parses a listener grant for a test, in the same words `serve`
+// takes.
+func mustSpec(t *testing.T, s string) grant.Spec {
+	t.Helper()
+	spec, err := grant.ParseString(s)
+	if err != nil {
+		t.Fatalf("ParseString(%q): %v", s, err)
+	}
+	return spec
+}
+
+// A grant reaching past the listener resolves to nothing when someone
+// connects. The operator has to hear about it while they are looking at
+// the console, not when a guest reports a dead link.
+func TestGrants_OutOfReachTargetWarnsAtLoad(t *testing.T) {
+	offered := mustSpec(t, "forward 127.0.0.1:22")
+	_, warnings, err := Build([]Terms{{Label: "dev", Grant: "forward 10.0.0.9:22"}}, offered, "code")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "10.0.0.9:22") {
+		t.Errorf("warnings = %v, want one naming the unreachable target", warnings)
+	}
+	// A warning, not a refusal: the rest of the table still loads.
+	_, warnings, err = Build([]Terms{
+		{Label: "dev", Grant: "forward 10.0.0.9:22"},
+		{Label: "ok", Grant: "forward 127.0.0.1:22"},
+	}, offered, "code")
+	if err != nil || len(warnings) != 1 {
+		t.Errorf("Build = %v, warnings %v; one bad entry must not sink the table", err, warnings)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/allowlist"
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/localdns"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
@@ -43,6 +45,13 @@ type HTTPHandler struct {
 	// local tests) — in which case we strip XFF rather than forge one.
 	BrowserIP string
 	Verbose   bool
+
+	// Allow restricts which targets this listener will proxy to. Empty
+	// means anything it can reach, which is what a listener started
+	// that named no targets after `proxy` offers. Only dynamic-target mode can reach
+	// more than one target, but the check covers both so there is one
+	// answer to "where can this listener connect".
+	Allow allowlist.List
 
 	// Per-session state, set in OnConnect.
 	connTarget    string
@@ -110,6 +119,14 @@ func (h *HTTPHandler) OnConnect(path string) error {
 		}
 	}
 
+	// Refuse a target outside the allowlist before probing it: a probe is
+	// itself a connection to the target, so checking afterward would already
+	// have made it.
+	if h.connTarget != "" && !h.Allow.PermitsTarget(h.connTarget) {
+		return fmt.Errorf("%s is not one of this listener's allowed proxy targets (%s)",
+			h.connTarget, h.Allow)
+	}
+
 	// Resolve cross-host redirects and settle on a scheme for the session.
 	//
 	// Plaintext is probed FIRST because it is the common case: an HTTPS-only
@@ -175,10 +192,19 @@ func (h *HTTPHandler) OnConnect(path string) error {
 			case localdns.ProbeTLS(context.Background(), h.connTarget, probeTimeout):
 				h.connScheme = "https"
 			case probeErr != nil:
-				// No HTTP response and no TLS handshake: nothing is there.
-				// Previously this was swallowed and surfaced later as a 502
-				// on every request with no hint as to why.
-				return fmt.Errorf("%s is unreachable (no HTTP or HTTPS response)", h.connTarget)
+				// No HTTP response and no TLS handshake. Two very different
+				// causes, and the old message called both "unreachable":
+				// nothing listening at all, or something listening that
+				// isn't a web server. sshd is the case that prompted this --
+				// it answers the connection with its banner, which is not
+				// HTTP, so we declared port 22 unreachable while sshd was
+				// sitting right there.
+				if localdns.ProbeTCP(context.Background(), h.connTarget, probeTimeout) {
+					return fmt.Errorf("%s is listening but is not an HTTP or HTTPS server; "+
+						"the proxy only carries web services. For raw TCP, forward the port "+
+						"instead: bitbang connect <url> -L LOCAL_PORT:%s", h.connTarget, h.connTarget)
+				}
+				return fmt.Errorf("%s is unreachable (nothing is listening)", h.connTarget)
 			}
 			// Otherwise: reachable over plaintext, just an error status at
 			// "/" -- stay on http.
@@ -237,6 +263,11 @@ func (h *HTTPHandler) skipVerify() bool {
 // The comparison is against Target rather than connTarget so a chain of
 // redirects cannot walk away from the pin one hop at a time.
 func (h *HTTPHandler) allowRebind(host string) bool {
+	// A redirect moves connTarget, so following one is another way to reach
+	// a target the requester never named. Gate it on the same list.
+	if !h.Allow.PermitsTarget(host) {
+		return false
+	}
 	if h.Target == "" {
 		return true
 	}
@@ -550,7 +581,7 @@ func (h *HTTPHandler) proxyRequestContext(ctx context.Context, s Stream, req pro
 		return
 	}
 
-	const maxBuffered = 8 << 20
+	const maxBuffered = bytestream.MaxBufferedAmount
 	buf := make([]byte, protocol.MaxChunkSize)
 	totalBytes := 0
 	startTime := time.Now()

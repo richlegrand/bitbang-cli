@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/richlegrand/bitbang/internal/bytestream"
 	"github.com/richlegrand/bitbang/internal/protocol"
 )
 
@@ -179,7 +180,7 @@ func (s *Session) Shell(opts ShellOptions) (*ShellResult, error) {
 // session end via its own FIN/close.
 func pumpStdin(st *Stream, r io.Reader) {
 	buf := make([]byte, protocol.MaxChunkSize-1) // 1 byte for the tag
-	const maxBuffered uint64 = 8 << 20
+	const maxBuffered uint64 = bytestream.MaxBufferedAmount
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {

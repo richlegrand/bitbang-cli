@@ -31,6 +31,8 @@ type connectOptions struct {
 	server   string
 	name     string
 	relay    bool
+	norelay  bool
+	nosave   bool
 	gateway  bool
 	forwards forwardFlags
 	target   string
@@ -111,6 +113,8 @@ func parseConnectOptions(args []string, output io.Writer) (connectOptions, error
 	fs.StringVar(&opts.server, "server", "bitba.ng", "Signaling server (pair-code mode only; URL form carries its own server)")
 	fs.StringVar(&opts.name, "name", "", "Name to remember this device under (new devices only; auto-assigned if omitted)")
 	fs.BoolVar(&opts.relay, "relay", false, "Request a TURN relay up front instead of only on fallback (ICE still prefers direct if it succeeds)")
+	fs.BoolVar(&opts.norelay, "norelay", false, "Refuse STUN/TURN entirely: host candidates only, so the connection fails rather than relaying")
+	fs.BoolVar(&opts.nosave, "nosave", false, "Leave nothing in the device table -- for a machine that is not yours")
 	fs.Var(&opts.forwards, "L", "Forward LOCAL_PORT:REMOTE_HOST:REMOTE_PORT without opening a shell (repeatable; bracket IPv6 hosts)")
 	fs.BoolVar(&opts.gateway, "g", false, "Bind forwarded ports on 0.0.0.0 instead of 127.0.0.1")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
@@ -118,6 +122,12 @@ func parseConnectOptions(args []string, output io.Writer) (connectOptions, error
 	}
 	if opts.gateway && len(opts.forwards) == 0 {
 		return connectOptions{}, fmt.Errorf("-g requires at least one -L forward")
+	}
+	if opts.relay && opts.norelay {
+		return connectOptions{}, fmt.Errorf("-relay and -norelay ask for opposite things")
+	}
+	if opts.nosave && opts.name != "" {
+		return connectOptions{}, fmt.Errorf("-name names a saved device, so it cannot be used with -nosave")
 	}
 	posArgs := fs.Args()
 	if len(posArgs) < 1 {
@@ -234,7 +244,14 @@ func runConnect(args []string) {
 		// Pairing succeeded (runPairConnect exits on failure). Persist now,
 		// before the reconnect dial — the pairing itself was the expensive,
 		// one-shot step, so a reconnect hiccup shouldn't discard the result.
-		recordAndReport(rs, opts.name)
+		if opts.nosave {
+			// Worth saying out loud: pairing is the one flow where not
+			// saving has a cost later, since reconnecting means asking
+			// the other end for a new code.
+			fmt.Fprintln(os.Stderr, "Not saving (-nosave): reconnecting will need a new pairing code.")
+		} else {
+			recordAndReport(rs, opts.name)
+		}
 		saved = true
 	default:
 		var ok bool
@@ -245,7 +262,7 @@ func runConnect(args []string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", rs.Server)
-	sess := dialConnect(rs, opts.verbose, opts.timeout, opts.pin, opts.relay, len(opts.forwards) > 0)
+	sess := dialConnect(rs, opts.verbose, opts.timeout, opts.pin, opts.relay, opts.norelay, len(opts.forwards) > 0)
 	var forwarder *client.LocalForwarder
 	if len(opts.forwards) > 0 {
 		forwarder, err = sess.StartLocalForwarding([]tcpforward.Forward(opts.forwards), opts.gateway)
@@ -267,11 +284,17 @@ func runConnect(args []string) {
 	// (bitbang share) carry credentials that die with the share; never
 	// saved.
 	if !saved {
-		if rs.Ephemeral {
+		switch {
+		case opts.nosave:
+			// The access code is a working credential, and the table is
+			// where it would have been written. On a machine that is not
+			// yours, that is the whole point of the flag.
+			fmt.Fprintln(os.Stderr, "Not saving (-nosave): no device entry written.")
+		case rs.Ephemeral:
 			if opts.name != "" {
 				fmt.Fprintln(os.Stderr, "Not saving: this is an ephemeral share URL (-name ignored).")
 			}
-		} else {
+		default:
 			recordAndReport(rs, opts.name)
 		}
 	}
@@ -489,7 +512,7 @@ func recordAndReport(rs remoteSpec, name string) {
 
 // dialConnect handles the boilerplate: build DialOptions, run the handshake,
 // and sanity-check that the listener advertises the requested stream type.
-func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay, tcp bool) *client.Session {
+func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string, relay, norelay, tcp bool) *client.Session {
 	capability := "shell"
 	if tcp {
 		capability = "tcp"
@@ -501,6 +524,7 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 		Caps:        []string{capability},
 		DialTimeout: timeout,
 		ForceRelay:  relay,
+		NoRelay:     norelay,
 		Verbose:     verbose,
 		PINPrompt:   makePINPrompt(suppliedPIN),
 	}
@@ -510,6 +534,12 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 	}
 	if !hasCap(sess.ServerCaps, capability) {
 		sess.Close()
+		// `tcp` is the wire name; `forward` is what the operator typed, so
+		// say the thing they can act on rather than the protocol token.
+		if tcp {
+			fail("connect: this listener does not forward TCP. It needs `bitbang serve forward` or `bitbang serve` (it offers: %v)",
+				sess.ServerCaps)
+		}
 		fail("connect: listener does not advertise the `%s` capability (caps: %v)", capability, sess.ServerCaps)
 	}
 	return sess

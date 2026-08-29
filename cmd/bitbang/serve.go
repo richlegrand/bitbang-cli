@@ -13,6 +13,7 @@ import (
 
 	"github.com/richlegrand/bitbang/internal/auth"
 	"github.com/richlegrand/bitbang/internal/fileshare"
+	"github.com/richlegrand/bitbang/internal/grant"
 	"github.com/richlegrand/bitbang/internal/icehelper"
 	"github.com/richlegrand/bitbang/internal/identity"
 	"github.com/richlegrand/bitbang/internal/links"
@@ -55,17 +56,22 @@ type serveConfig struct {
 	// OctoPrint plugin) point us at its existing identity so we share its URL.
 	program string
 
-	// Fixed proxy target (host:port). When set (proxy-only mode), every
-	// request goes straight to this target — the plain device URL serves the
-	// app directly, no path-based target selection / landing page.
+	// Fixed proxy target (host:port). Set when exactly one proxy target was
+	// named; with nothing else served, every request goes straight to it and
+	// the plain device URL is the app, with no landing page.
 	target string
 
-	// forwardClientIP stamps the real browser IP as X-Forwarded-For on
+	// proxyClientIP stamps the real browser IP as X-Forwarded-For on
 	// proxied requests (fixed-target mode only). Off by default: the
 	// OctoPrint plugin enables it ONLY when OctoPrint is configured to make
 	// localhost-based trust decisions (autologinLocal etc.), so the common
 	// case doesn't trip OctoPrint's "external access" warning needlessly.
-	forwardClientIP bool
+	proxyClientIP bool
+
+	// offered is the listener's grant, parsed: the ceiling every link is
+	// narrowed against, and where the target lists live. The fields around
+	// it are conveniences derived from it, never a second source of truth.
+	offered grant.Spec
 
 	// caps is what this mode offers, named in the scope vocabulary links
 	// uses. It is the only place the cap set is written down: what to
@@ -74,9 +80,16 @@ type serveConfig struct {
 	caps capSet
 
 	// Shell-cap configuration (only meaningful when caps includes shell).
-	shellCmd         string
+	// shellArgv is the command a shell runs, from the words after `shell`.
+	// Empty means the platform shell.
+	shellArgv        []string
 	shellMaxSessions int
-	shellMirror      bool
+
+	// disableShellMirror turns off echoing shell output to the listener's
+	// console. Spelled as the negative so it works bare: a boolean that
+	// defaults to true can only be turned off as `-flag=false`, and the
+	// equals sign is the kind of thing people get wrong once and never find.
+	disableShellMirror bool
 
 	// Files-cap configuration (only meaningful when caps includes files).
 	filesPath   string
@@ -87,22 +100,36 @@ type serveConfig struct {
 	iceServers     []webrtc.ICEServer
 }
 
-// runServe — `bitbang serve` — exposes shell + files + proxy. The
-// launcher tab serves shell at `/`; the hamburger menu lets users open
-// Files or Proxy in new browser tabs. Files-only / Shell-only /
-// Proxy-only modes are dedicated subcommands; this mode is the "I want
-// everything I can get from a single listener" entry point.
+// runServe — `bitbang serve [WORD [ARG]]...` — starts a listener serving the
+// capabilities named. See serve_words.go for the grammar; bare `serve` means
+// all four.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward, links.ScopeFiles, links.ScopeProxy)}
+	var cfg serveConfig
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)
-	fs.StringVar(&cfg.filesPath, "files", "", "Files path (default: current working directory)")
-	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
+	registerFilesFlags(fs, &cfg)
+	registerFixedProxyFlags(fs, &cfg)
 
 	fs.Parse(reorderArgs(fs, args))
 
-	if cfg.filesPath == "" {
+	spec, err := grant.Parse(fs.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bitbang serve: %v\n", err)
+		os.Exit(2)
+	}
+	if err := applySpec(&cfg, spec); err != nil {
+		fmt.Fprintf(os.Stderr, "bitbang serve: %v\n", err)
+		os.Exit(2)
+	}
+
+	// Every capability flag is registered on the one command, so a flag that
+	// does not apply is caught here rather than by not existing.
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	rejectFlagsWithoutCapability(set, cfg)
+
+	if cfg.caps.has(links.ScopeFiles) && cfg.filesPath == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
@@ -110,79 +137,6 @@ func runServe(args []string) {
 		}
 		cfg.filesPath = cwd
 	}
-
-	startListener(cfg)
-}
-
-// runServeShell — `bitbang serve shell` — exposes shell and raw TCP to CLI
-// connectors. No hamburger; the entire browser tab is the shell.
-func runServeShell(args []string) {
-	fs := flag.NewFlagSet("serve shell", flag.ExitOnError)
-	// forward rides with shell: `serve shell` offers port forwarding too,
-	// and saying so here beats deriving it from where NewTCP is called.
-	cfg := serveConfig{caps: capsOf(links.ScopeShell, links.ScopeForward)}
-	registerSharedFlags(fs, &cfg)
-	registerShellFlags(fs, &cfg)
-	fs.Parse(reorderArgs(fs, args))
-	startListener(cfg)
-}
-
-// runServeFiles — `bitbang serve files [PATH]` — exposes files only.
-// PATH is positional (defaults to cwd). No hamburger; the tab is the
-// file browser.
-func runServeFiles(args []string) {
-	fs := flag.NewFlagSet("serve files", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeFiles)}
-	registerSharedFlags(fs, &cfg)
-	fs.BoolVar(&cfg.filesUpload, "upload", false, "Allow uploads to the shared directory")
-
-	fs.Parse(reorderArgs(fs, args))
-
-	// Positional PATH lives in fs.Args() after Parse — at most one.
-	switch fs.NArg() {
-	case 0:
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot determine current directory: %v\n", err)
-			os.Exit(1)
-		}
-		cfg.filesPath = cwd
-	case 1:
-		cfg.filesPath = fs.Arg(0)
-	default:
-		fmt.Fprintln(os.Stderr, "bitbang serve files: at most one PATH argument")
-		os.Exit(2)
-	}
-
-	startListener(cfg)
-}
-
-// runServeProxy — `bitbang serve proxy [TARGET]` — exposes an HTTP
-// reverse proxy. Without TARGET, runs in dynamic-target mode (landing
-// page asks for the host). With TARGET, pins to a single host:port and
-// the bare device URL serves that target directly.
-//
-// TARGET can be supplied either positionally (`serve proxy host:port`)
-// or via the shared `-target` flag. If both are given, the positional
-// wins — the user typed it more explicitly.
-func runServeProxy(args []string) {
-	fs := flag.NewFlagSet("serve proxy", flag.ExitOnError)
-	cfg := serveConfig{caps: capsOf(links.ScopeProxy)}
-	registerSharedFlags(fs, &cfg)
-	fs.Parse(reorderArgs(fs, args))
-
-	// Optional positional TARGET. Mirrors `serve files [PATH]`.
-	switch fs.NArg() {
-	case 0:
-		// No positional; cfg.target may already be set via -target flag,
-		// or empty (dynamic-target mode).
-	case 1:
-		cfg.target = fs.Arg(0)
-	default:
-		fmt.Fprintln(os.Stderr, "bitbang serve proxy: at most one TARGET argument")
-		os.Exit(2)
-	}
-
 	startListener(cfg)
 }
 
@@ -197,17 +151,54 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.BoolVar(&cfg.nocode, "nocode", false, "Disable code-exchange pairing (operator typed SAS); URL still works")
 	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
 	fs.StringVar(&cfg.program, "program", "", "Identity program-name override; default is derived from the mode/target (key at ~/.bitbang/<program>/identity.pem)")
-	fs.StringVar(&cfg.target, "target", "", "Fixed proxy target host:port (proxy-only mode); empty = dynamic from URL")
-	fs.BoolVar(&cfg.forwardClientIP, "forward-client-ip", false, "Stamp the real browser IP as X-Forwarded-For (fixed-target mode); enable only when the backend trusts localhost for auth")
 	fs.StringVar(&cfg.iceServersPath, "ice-servers", "", "Path to the custom JSON ICE server configuration file")
+	hideFlags(fs, "video-fd")
+}
+
+// registerFixedProxyFlags wires the flags that only mean something in
+// fixed-target mode, which `bitbang serve` cannot enter: pinning the whole URL
+// to one app is incompatible with routing /shell/ and /files/. Registered on
+// `serve proxy` alone, so `serve -proxy-client-ip` is an error rather than a
+// setting that does nothing.
+func registerFixedProxyFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.BoolVar(&cfg.proxyClientIP, "proxy-client-ip", false, "Stamp the real browser IP as X-Forwarded-For; enable only when the backend trusts localhost for auth")
+}
+
+// registerFilesFlags wires the files-specific flags. The path is not among
+// them: it is what is served, so it is the argument to the `files` word.
+func registerFilesFlags(fs *flag.FlagSet, cfg *serveConfig) {
+	fs.BoolVar(&cfg.filesUpload, "files-upload", false, "Allow uploads to the shared directory")
+}
+
+// hideFlags keeps internal plumbing out of -h without unregistering it.
+// -video-fd is an inherited socketpair FD passed by an embedding process;
+// nobody types it.
+func hideFlags(fs *flag.FlagSet, names ...string) {
+	hidden := make(map[string]bool, len(names))
+	for _, n := range names {
+		hidden[n] = true
+	}
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fs.VisitAll(func(f *flag.Flag) {
+			if hidden[f.Name] {
+				return
+			}
+			fmt.Fprintf(fs.Output(), "  -%s", f.Name)
+			name, usage := flag.UnquoteUsage(f)
+			if name != "" {
+				fmt.Fprintf(fs.Output(), " %s", name)
+			}
+			fmt.Fprintf(fs.Output(), "\n    \t%s\n", usage)
+		})
+	}
 }
 
 // registerShellFlags wires the shell-specific flags. Used by both
 // `serve` (all-mode) and `serve shell` since both expose a shell.
 func registerShellFlags(fs *flag.FlagSet, cfg *serveConfig) {
-	fs.StringVar(&cfg.shellCmd, "shell-cmd", "", "Shell command to spawn (default: "+defaultShellLabel()+")")
-	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", 1, "Max concurrent shell sessions (0 = unlimited)")
-	fs.BoolVar(&cfg.shellMirror, "shell-mirror", true, "Mirror shell output to listener console")
+	fs.IntVar(&cfg.shellMaxSessions, "shell-max-sessions", defaultShellMaxSessions, "Max concurrent shell sessions (0 = unlimited)")
+	fs.BoolVar(&cfg.disableShellMirror, "disable-shell-mirror", false, "Stop echoing shell output to the listener's console")
 }
 
 // startListener is the shared listener loop. Given a populated
@@ -272,6 +263,39 @@ func smallQR(url string) string {
 	return b.String()
 }
 
+// exposureNotice is what the operator is told about reach the URL carries
+// but the sharing block does not make obvious.
+//
+// Two configurations qualify. A shell is the older one. Unrestricted
+// forwarding is the newer, and it only became possible when `forward`
+// stopped riding along with `shell`: alongside a shell it granted nothing
+// a shell could not already reach, so it needed no notice of its own. On
+// its own it is every host this machine can route to, and nothing else the
+// listener prints says that out loud.
+//
+// A PIN suppresses both -- it is the second factor the notices point at, so
+// having taken the advice should not keep the warning.
+//
+// The bool reports a warning, which the caller sends to stderr.
+func exposureNotice(cfg serveConfig, pinned bool, bold, reset string) (string, bool) {
+	if pinned {
+		return "PIN protection enabled.\n", false
+	}
+	warn := func(what, bound string) (string, bool) {
+		return fmt.Sprintf("%sWarning: anyone with this URL %s.%s\n  %s\n",
+			bold, what, reset, bound), true
+	}
+	switch {
+	case cfg.caps.has(links.ScopeShell):
+		return warn("gets a shell on this machine",
+			"Use --pin <PIN> for a second factor, or pick a non-shell mode.")
+	case cfg.caps.has(links.ScopeForward) && len(cfg.offered.ForwardTargets) == 0:
+		return warn("can open a TCP connection to any host this machine can reach",
+			"Name targets after `forward` to bound it, or use --pin <PIN>.")
+	}
+	return "", false
+}
+
 func startListener(cfg serveConfig) {
 	// Build the file share if files enabled.
 	var share *fileshare.FileShare
@@ -285,10 +309,7 @@ func startListener(cfg serveConfig) {
 		share = s
 	}
 
-	var shellArgv []string
-	if cfg.shellCmd != "" {
-		shellArgv = []string{cfg.shellCmd}
-	}
+	shellArgv := cfg.shellArgv
 
 	if cfg.iceServersPath != "" {
 		path, err := resolveFSPath(cfg.iceServersPath)
@@ -367,34 +388,52 @@ func startListener(cfg serveConfig) {
 		fmt.Fprintln(os.Stderr, "Another instance with the same UID has taken over. Exiting.")
 		os.Exit(2)
 	}
-	url := signalingClient.URL(cfg.verbose)
+	urlFlags := signaling.URLFlags(cfg.verbose, cfg.ephemeral)
+	url := signalingClient.URL(urlFlags...)
 
 	// The link table lives beside the identity, so it is per program:
 	// `serve files -files /srv` and `serve all` derive different program
 	// names and therefore have separate tables. An ephemeral identity has
 	// no directory to keep one in, so it runs on the implicit row alone.
-	linkState, err := newLinkState(program, offeredScopes(cfg), id.Code,
-		cfg.ephemeral, signalingClient.CodeURL)
+	linkState, err := newLinkState(program, cfg.offered, id.Code,
+		cfg.ephemeral, func(code string, extra ...string) string {
+			// Fresh slice per call: appending to urlFlags directly would
+			// write into its backing array whenever it has spare capacity,
+			// so one link's flags could reach another's URL.
+			flags := append(append([]string{}, urlFlags...), extra...)
+			return signalingClient.CodeURL(code, flags...)
+		})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Link table error: %v\n", err)
 		os.Exit(1)
 	}
 
-	out := newConsole(url)
+	// Both terminal streams go through holds so the console can pause
+	// them: log lines (the std logger writes to stderr) and the shell
+	// mirror (stdout). Without this a mirroring session scrolls a prompt
+	// away before it can be read.
+	logHold := newHoldWriter(os.Stderr)
+	mirrorHold := newHoldWriter(os.Stdout)
+	log.SetOutput(logHold)
+	con := newConsole(logHold, mirrorHold)
+
+	out := newDisplay(url)
 	out.ready()
 	printSharingBlock(os.Stdout, cfg, share)
 
-	// PIN status / shell-without-PIN warning.
-	if pinAuth.Required() {
-		fmt.Println("PIN protection enabled.")
-	} else if cfg.caps.has(links.ScopeShell) {
-		fmt.Fprintf(os.Stderr, "%sWarning: anyone with this URL gets a shell and unrestricted TCP access from this machine.%s\n", out.bold, out.reset)
-		fmt.Fprintln(os.Stderr, "  Use --pin <PIN> for a second factor, or pick a non-shell mode.")
+	if notice, warning := exposureNotice(cfg, pinAuth.Required(), out.bold, out.reset); notice != "" {
+		// Warnings on stderr, the PIN line on stdout, as before: a script
+		// capturing the URL should not have to filter warnings out of it.
+		w := os.Stdout
+		if warning {
+			w = os.Stderr
+		}
+		fmt.Fprint(w, notice)
 	}
 
 	if listing := linkState.listing(out.bold, out.reset); listing != "" {
 		fmt.Print(listing)
-		fmt.Print(reloadHint())
+		fmt.Print(consoleHint())
 	}
 
 	l := &listener{
@@ -407,9 +446,17 @@ func startListener(cfg serveConfig) {
 		links:     linkState,
 		video:     videoClient,
 		peers:     peerset.New[*servePeer](),
+		console:   con,
+		mirror:    mirrorHold,
 	}
 
-	l.watch(out.bold, out.reset)
+	l.watch()
+	// Enter reprints the table before prompting. Scrolled-away URLs are
+	// the usual reason to come back to a listener, and a hint to type
+	// `help` is not what anyone came for.
+	con.Watch("console -- try help, or exit to resume output",
+		func() { _ = cmdList(l, con, nil) },
+		func(line string) error { return l.runCommand(con, line) })
 
 	firstReady := true
 	signalingClient.OnReady = func() {
@@ -419,6 +466,11 @@ func startListener(cfg serveConfig) {
 			// before Connect). Print just the pair code now that we've
 			// learned it from the registered reply.
 			out.pairCode(signalingClient.PairingCode)
+			// Same reply carries the latest-release table. Once only:
+			// a reconnect loop must not turn this into a nag.
+			if notice := updateNotice(signalingClient.LatestVersions, version); notice != "" {
+				out.updateAvailable(notice, cfg.server)
+			}
 			return
 		}
 		// Reconnect: re-print URL+QR (operator may have scrolled past it

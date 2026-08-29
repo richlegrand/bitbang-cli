@@ -112,3 +112,29 @@ func TestLoadCreatesAndReloads(t *testing.T) {
 			first.UID, second.UID, first.Code, second.Code)
 	}
 }
+
+// An identity written under an older naming scheme is not inherited. The
+// device mints its own and the old file is left where it is; adopting one
+// would mean guessing which of several a machine holds is the one meant.
+func TestLoadIgnoresOtherProgramsIdentities(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp) // windows
+
+	// Something that used to be migrated from.
+	old, err := Load("bitbang-shell", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, err := Load("bitbang", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.UID == old.UID {
+		t.Error("inherited the older identity's UID")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".bitbang", "bitbang-shell", "identity.pem")); err != nil {
+		t.Errorf("the older identity was disturbed: %v", err)
+	}
+}

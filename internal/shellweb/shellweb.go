@@ -12,19 +12,19 @@
 // unreachable — the user gets a visible error in the iframe rather
 // than a silent hang.
 //
-// Launcher mode: when constructed with CapBarItem entries, shellweb
-// injects a 32px top strip with a hamburger dropdown into index.html.
-// Anchor clicks in the dropdown postMessage `{type: 'bb-open-cap',
-// path: '<path>'}` up to bootstrap.js, which composes the full URL
-// (including the secret access code from the fragment) and opens a
-// new browser tab. Bootstrap.js never has to know about caps, labels,
-// or dropdown rendering — the device controls all of it.
+// Launcher mode: when constructed with capbar.Item entries, the shared
+// strip (internal/capbar) is spliced into index.html at its CAP_BAR
+// marker. Anchor clicks in the dropdown postMessage `{type:
+// 'bb-open-cap', path: '<path>'}` up to bootstrap.js, which composes
+// the full URL (including the secret access code from the fragment)
+// and opens a new browser tab. Bootstrap.js never has to know about
+// caps, labels, or dropdown rendering -- the device controls all of it.
 package shellweb
 
 import (
+	"github.com/richlegrand/bitbang/internal/capbar"
+
 	"embed"
-	"fmt"
-	"html"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -33,19 +33,11 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// CapBarItem is one entry in the launcher's hamburger dropdown.
-// Label is the human-readable text; Path is the listener-side URL the
-// new tab should land on (e.g. "/files/").
-type CapBarItem struct {
-	Label string
-	Path  string
-}
-
 // ShellWeb serves the shell-cap browser UI. Construct with New() for
 // plain shell, or New(WithCapBar(items)) to inject a hamburger strip
 // at the top of the page (for the launcher tab in serve-all mode).
 type ShellWeb struct {
-	capBar   []CapBarItem
+	capBar   []capbar.Item
 	viewOnly bool
 }
 
@@ -67,7 +59,7 @@ func WithViewOnly() Option {
 // dropdown entries. The strip has no current-cap label next to the
 // hamburger — the visible iframe content (a terminal) makes it
 // obvious which cap you're on, and naming it explicitly is just noise.
-func WithCapBar(items []CapBarItem) Option {
+func WithCapBar(items []capbar.Item) Option {
 	return func(s *ShellWeb) {
 		s.capBar = items
 	}
@@ -122,86 +114,10 @@ func (s *ShellWeb) serveIndex(w http.ResponseWriter, r *http.Request) {
 		out = strings.Replace(out, `<script src="shell.js"></script>`,
 			"<script>window.BB_VIEW_ONLY = true;</script>\n<script src=\"shell.js\"></script>", 1)
 	}
-	if len(s.capBar) > 0 {
-		out = strings.Replace(out, "<!-- CAP_BAR -->", renderCapBar(s.capBar), 1)
-		// Mark the body so its #terminal shrinks to leave room for the strip.
-		out = strings.Replace(out, "<body>", `<body class="with-cap-bar">`, 1)
-	} else {
-		out = strings.Replace(out, "<!-- CAP_BAR -->\n", "", 1)
-	}
+	// The terminal is absolutely sized, so index.html carries its own
+	// `body.with-cap-bar #terminal` rule on top of the shared padding.
+	out = capbar.Inject(out, s.capBar, capbar.Bar)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(out))
-}
-
-// renderCapBar emits the 32px launcher strip: just a hamburger button
-// with a dropdown of openable caps. No current-cap label — the iframe
-// content speaks for itself. Each dropdown anchor postMessages
-// bb-open-cap to the parent (bootstrap.js) which knows the secret
-// access code and composes the new-tab URL. The iframe itself never
-// sees the code.
-//
-// Everything inline (CSS + JS + markup) so the strip is one
-// self-contained chunk — bootstrap.js doesn't need to coordinate
-// styling or hook event handlers.
-func renderCapBar(items []CapBarItem) string {
-	var dropdown strings.Builder
-	for _, it := range items {
-		fmt.Fprintf(&dropdown,
-			`<a href="#" data-path="%s">%s</a>`,
-			html.EscapeString(it.Path), html.EscapeString(it.Label))
-	}
-	return fmt.Sprintf(`<style>
-#bb-cap-bar {
-  position: fixed; top: 0; left: 0; right: 0; height: 22px;
-  background: #000;
-  display: flex; align-items: center; padding: 0 8px 0 2px;
-  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: #ccc; z-index: 100;
-}
-#bb-cap-bar button {
-  background: transparent; border: none; padding: 2px 6px;
-  cursor: pointer; display: flex; align-items: center;
-}
-#bb-cap-bar button:hover { background: #222; border-radius: 3px; }
-#bb-cap-bar svg { display: block; }
-#bb-cap-bar nav {
-  position: absolute; top: 22px; left: 0;
-  min-width: 160px; background: #000;
-  border: 1px solid #333;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-}
-#bb-cap-bar nav[hidden] { display: none; }
-#bb-cap-bar nav a {
-  display: block; padding: 4px 14px;
-  font-size: 14px; color: #ccc; text-decoration: none;
-}
-#bb-cap-bar nav a:hover { background: #222; }
-body.with-cap-bar #terminal { margin-top: 22px; }
-</style>
-<div id="bb-cap-bar">
-  <button id="bb-ham" aria-label="Capabilities menu">
-    <svg width="10" height="6" viewBox="0 0 10 6" xmlns="http://www.w3.org/2000/svg">
-      <path d="M0 0 L10 0 L5 6 Z" fill="#ccc"/>
-    </svg>
-  </button>
-  <nav id="bb-menu" hidden>%s</nav>
-</div>
-<script>
-(function(){
-  var ham = document.getElementById('bb-ham');
-  var menu = document.getElementById('bb-menu');
-  ham.addEventListener('click', function(e){ e.stopPropagation(); menu.hidden = !menu.hidden; });
-  document.addEventListener('click', function(e){
-    if (!menu.contains(e.target) && e.target !== ham) menu.hidden = true;
-  });
-  menu.querySelectorAll('a').forEach(function(a){
-    a.addEventListener('click', function(e){
-      e.preventDefault();
-      parent.postMessage({type:'bb-open-cap', path: a.dataset.path}, '*');
-      menu.hidden = true;
-    });
-  });
-})();
-</script>`, dropdown.String())
 }
