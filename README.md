@@ -380,6 +380,13 @@ xattr -d com.apple.quarantine ./bitbang-darwin-arm64
 or right-click the file in Finder and choose Open, which offers a one-time
 override. Alternatively, build from source, which never quarantines.
 
+**Windows and SmartScreen.** The same thing happens on Windows, for the same
+reason. A browser download attaches Mark-of-the-Web, so the first run shows
+*"Windows protected your PC"* -- choose **More info**, then **Run anyway**. The
+release binaries are not code-signed, so this is expected rather than a sign
+anything is wrong. Fetching the `.exe` with `curl` or PowerShell's
+`Invoke-WebRequest` does not attach it, and neither does building from source.
+
 ### Install options
 
 Pin a version, change the location, or read the script before running it:
