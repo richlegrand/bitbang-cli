@@ -17,14 +17,16 @@ type display struct {
 	url   string
 	isTTY bool
 	width int
+	// noqr drops the QR block, leaving the banner and the URL.
+	noqr bool
 	// bold and reset are empty on a pipe, so log scrapers and tests are not
 	// confused by escape sequences.
 	bold  string
 	reset string
 }
 
-func newDisplay(url string) display {
-	b := display{url: url, isTTY: term.IsTerminal(int(os.Stdout.Fd()))}
+func newDisplay(url string, noqr bool) display {
+	b := display{url: url, noqr: noqr, isTTY: term.IsTerminal(int(os.Stdout.Fd()))}
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
 		b.width = w
 	}
@@ -43,7 +45,17 @@ func newDisplay(url string) display {
 // screen recording. On a narrow or non-TTY output it falls back to the
 // banner stacked above the QR so pipes, logs, and tests stay readable.
 func (b display) ready() {
-	qr := smallQR(b.url)
+	fmt.Print(b.readyBlock())
+}
+
+// readyBlock is ready()'s text, built rather than printed so the layout
+// can be asserted without capturing stdout.
+func (b display) readyBlock() string {
+	var out strings.Builder
+	qr := ""
+	if !b.noqr {
+		qr = smallQR(b.url)
+	}
 	bannerLines := strings.Split(strings.TrimRight(banner, "\n"), "\n")
 	bannerLines = append(bannerLines, "bitbang-cli v"+version)
 	var qrLines []string
@@ -72,19 +84,20 @@ func (b display) ready() {
 		}
 		for i, ql := range qrLines {
 			if bi := i - off; bi >= 0 && bi < len(bannerLines) {
-				fmt.Println(ql + gap + bannerLines[bi])
+				fmt.Fprintln(&out, ql+gap+bannerLines[bi])
 			} else {
-				fmt.Println(ql)
+				fmt.Fprintln(&out, ql)
 			}
 		}
 	} else {
 		for _, l := range bannerLines {
-			fmt.Println(l)
+			fmt.Fprintln(&out, l)
 		}
-		fmt.Println()
-		fmt.Print(qr)
+		fmt.Fprintln(&out)
+		fmt.Fprint(&out, qr)
 	}
-	fmt.Printf("URL: %s%s%s\n", b.bold, b.url, b.reset)
+	fmt.Fprintf(&out, "URL: %s%s%s\n", b.bold, b.url, b.reset)
+	return out.String()
 }
 
 // printPairCode renders the issued pairing code on its own line —

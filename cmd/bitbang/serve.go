@@ -46,6 +46,12 @@ type serveConfig struct {
 	// should pass --nocode to suppress code issuance entirely.
 	nocode bool
 
+	// noqr drops the QR code from the startup block. A listener run as a
+	// daemon writes that block to a log on every start and every
+	// reconnect, where eighteen lines of block characters are noise
+	// rather than something to point a phone at.
+	noqr bool
+
 	// Inherited socketpair FD for an external video helper (-1 = disabled).
 	// When set, each session negotiates a secondary video PeerConnection with
 	// the browser, relayed to the helper process over this FD.
@@ -149,6 +155,7 @@ func registerSharedFlags(fs *flag.FlagSet, cfg *serveConfig) {
 	fs.BoolVar(&cfg.ephemeral, "ephemeral", false, "Use a temporary identity")
 	fs.BoolVar(&cfg.verbose, "v", false, "Verbose logging")
 	fs.BoolVar(&cfg.nocode, "nocode", false, "Disable code-exchange pairing (operator typed SAS); URL still works")
+	fs.BoolVar(&cfg.noqr, "noqr", false, "Print the URL without the QR code")
 	fs.IntVar(&cfg.videoFD, "video-fd", -1, "Inherited socketpair FD to a video helper process (-1 = disabled)")
 	fs.StringVar(&cfg.program, "program", "", "Identity program-name override; default is derived from the mode/target (key at ~/.bitbang/<program>/identity.pem)")
 	fs.StringVar(&cfg.iceServersPath, "ice-servers", "", "Path to the custom JSON ICE server configuration file")
@@ -417,7 +424,7 @@ func startListener(cfg serveConfig) {
 	log.SetOutput(logHold)
 	con := newConsole(logHold, mirrorHold)
 
-	out := newDisplay(url)
+	out := newDisplay(url, cfg.noqr)
 	out.ready()
 	printSharingBlock(os.Stdout, cfg, share)
 
