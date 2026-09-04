@@ -299,7 +299,7 @@
             <div id="empty" class="empty-state" style="display: none;">
                 <div class="empty-state-icon">&#128194;</div>
                 <div>This folder is empty</div>
-                <div style="margin-top: 0.5rem; color: #888; font-size: 0.875rem;">Drop files here to upload</div>
+                <div id="empty-upload-hint" style="margin-top: 0.5rem; color: #888; font-size: 0.875rem; display: none;">Drop files here to upload</div>
             </div>
         </div>
 
@@ -326,6 +326,10 @@
     <script>
         let currentPath = '';
         let rootName = 'Files';
+        // Off until api/info says otherwise. The first render happens
+        // before that answer arrives, so the safe default is the one
+        // that shows nothing.
+        let uploadEnabled = false;
 
         const fileIcons = {
             // Documents
@@ -460,6 +464,8 @@
                 if (res.ok) {
                     const data = await res.json();
                     rootName = data.root || 'Files';
+                    uploadEnabled = data.upload_enabled === true;
+                    applyUploadEnabled();
                     updateBreadcrumb(currentPath);
                 }
             } catch (e) {
@@ -574,10 +580,12 @@
             }
 
             html += '</div>';
-            html += '<div class="upload-area">';
-            html += '<span class="upload-hint">To upload, drag and drop, or click➔</span>';
-            html += '<button class="upload-btn" onclick="document.getElementById(\'file-input\').click()">Upload</button>';
-            html += '</div>';
+            if (uploadEnabled) {
+                html += '<div class="upload-area">';
+                html += '<span class="upload-hint">To upload, drag and drop, or click➔</span>';
+                html += '<button class="upload-btn" onclick="document.getElementById(\'file-input\').click()">Upload</button>';
+                html += '</div>';
+            }
 
             bc.innerHTML = html;
         }
@@ -621,7 +629,22 @@
         };
 
         // Upload functionality
+        // Shows the hint only where uploads are actually accepted. The
+        // POST is refused by the listener either way (api/upload 404s
+        // without -files-upload); this is about not offering it.
+        function applyUploadEnabled() {
+            const hint = document.getElementById('empty-upload-hint');
+            if (hint) {
+                hint.style.display = uploadEnabled ? '' : 'none';
+            }
+            // Also the signal that the answer has arrived: before this
+            // runs the attribute is absent, which is what lets a test
+            // tell "uploads are off" apart from "info has not landed".
+            document.body.dataset.uploadEnabled = uploadEnabled ? '1' : '0';
+        }
+
         async function uploadFiles(files) {
+            if (!uploadEnabled) return;
             if (files.length === 0) return;
 
             const overlay = document.getElementById('progress-overlay');
@@ -712,6 +735,7 @@
         let dragCounter = 0;
 
         dropZone.addEventListener('dragenter', function(e) {
+            if (!uploadEnabled) return;
             e.preventDefault();
             dragCounter++;
             dropZone.classList.add('drag-over');
@@ -730,6 +754,7 @@
         });
 
         dropZone.addEventListener('drop', function(e) {
+            if (!uploadEnabled) return;
             e.preventDefault();
             dragCounter = 0;
             dropZone.classList.remove('drag-over');
