@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -25,6 +26,30 @@ func updateNotice(versions map[string]string, current string) string {
 		return ""
 	}
 	return fmt.Sprintf("A newer bitbang is available: %s (this is %s)", latest, current)
+}
+
+// updateBlock renders the notice together with the command that installs
+// it. The server named is the one this process talked to, not a
+// compiled-in host: a self-hoster's install endpoint ships the binary
+// they built.
+func updateBlock(notice, server string) string {
+	return fmt.Sprintf("%s\n  curl -fsSL https://%s/install | sh\n", notice, server)
+}
+
+// reportUpdate writes the notice to w when the table holds something
+// newer, and writes nothing at all otherwise. Informational, not a
+// warning: nothing is wrong with the running version, and BitBang does
+// not update itself.
+//
+// Connectors pass stderr. `bitbang cp <url>:/file -` streams the file to
+// stdout, so anything printed there would land in the middle of the
+// user's data.
+func reportUpdate(w io.Writer, versions map[string]string, server string) {
+	notice := updateNotice(versions, version)
+	if notice == "" {
+		return
+	}
+	fmt.Fprint(w, updateBlock(notice, server))
 }
 
 // isNewer reports whether latest is a strictly greater release than

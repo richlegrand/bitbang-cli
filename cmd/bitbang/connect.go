@@ -532,6 +532,8 @@ func dialConnect(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN 
 	if err != nil {
 		fail("connect: %v", err)
 	}
+	// Before the terminal goes raw and the listener owns the screen.
+	reportUpdate(os.Stderr, sess.LatestVersions, r.Server)
 	if !hasCap(sess.ServerCaps, capability) {
 		sess.Close()
 		// `tcp` is the wire name; `forward` is what the operator typed, so

@@ -70,8 +70,26 @@ type Signaling struct {
 	OnPairRejected func(reason string)
 
 	conn   *websocket.Conn
-	mu     sync.Mutex // guards writes to conn
+	mu     sync.Mutex // guards writes to conn, closed, and versions
 	closed bool
+
+	// versions is the latest-release table from the server's `hello`,
+	// read back through LatestVersions. Written by the read goroutine.
+	versions map[string]string
+}
+
+// LatestVersions returns the newest released version of each BitBang
+// client project, keyed by product, as the signaling server reported it
+// when this socket opened. nil when the server tracks nothing or predates
+// the `hello` message.
+//
+// The server sends it before anything else on the connection, so a caller
+// that has seen an offer (URL flow) or a pair outcome (pair flow) has it
+// too.
+func (s *Signaling) LatestVersions() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.versions
 }
 
 // New constructs a Signaling client for the URL-flow connector — the path
@@ -230,6 +248,15 @@ func (s *Signaling) readLoop() {
 		}
 		t, _ := msg["type"].(string)
 		switch t {
+		// hello opens every connector socket and carries the
+		// latest-release table. It is stored rather than dispatched:
+		// nothing in the handshake waits on it, and a connector that
+		// never asks is one the server learned nothing from.
+		case "hello":
+			s.mu.Lock()
+			s.versions = signaling.Versions(msg)
+			s.mu.Unlock()
+
 		case "offer":
 			if s.OnOffer != nil {
 				s.OnOffer(msg)

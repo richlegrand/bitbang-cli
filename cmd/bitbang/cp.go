@@ -180,6 +180,7 @@ func dial(r remoteSpec, verbose bool, timeout time.Duration, suppliedPIN string,
 	if err != nil {
 		fail("cp: %v", err)
 	}
+	reportUpdate(os.Stderr, sess.LatestVersions, r.Server)
 	// The listener must advertise the `file` cap for cp to work. If it
 	// doesn't, exit before issuing a SYN the listener would just 500.
 	if !hasCap(sess.ServerCaps, "file") {

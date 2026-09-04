@@ -316,18 +316,7 @@ func (c *Client) applyRegistered(msg Message) {
 	// The latest-release table, identical for every device, so receiving
 	// it says nothing about this one. Absent from servers that track
 	// nothing, and from any server older than the field.
-	c.LatestVersions = nil
-	if raw, ok := msg["versions"].(map[string]interface{}); ok {
-		vs := make(map[string]string, len(raw))
-		for k, v := range raw {
-			if str, ok := v.(string); ok {
-				vs[k] = str
-			}
-		}
-		if len(vs) > 0 {
-			c.LatestVersions = vs
-		}
-	}
+	c.LatestVersions = Versions(msg)
 }
 
 // RenewPairingCode asks the server for a pairing code, for when the one

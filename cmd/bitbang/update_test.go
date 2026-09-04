@@ -74,3 +74,30 @@ func TestUpdateNotice(t *testing.T) {
 		}
 	})
 }
+
+func TestReportUpdate(t *testing.T) {
+	t.Run("names the server it talked to", func(t *testing.T) {
+		var out strings.Builder
+		reportUpdate(&out, map[string]string{"cli": "99.0.0"}, "signal.example.com")
+		got := out.String()
+		if !strings.Contains(got, "99.0.0") {
+			t.Errorf("output %q omits the release", got)
+		}
+		// A self-hoster's install endpoint ships the binary they built,
+		// so the notice must not point at bitba.ng.
+		if !strings.Contains(got, "https://signal.example.com/install") {
+			t.Errorf("output %q does not point at the server we registered with", got)
+		}
+	})
+
+	// Nothing at all, not a blank line: `bitbang cp <url>:/file -` writes
+	// the file to stdout and the caller may be watching stderr.
+	t.Run("writes nothing when there is nothing to say", func(t *testing.T) {
+		var out strings.Builder
+		reportUpdate(&out, map[string]string{"cli": "0.0.1"}, "bitba.ng")
+		reportUpdate(&out, nil, "bitba.ng")
+		if got := out.String(); got != "" {
+			t.Errorf("got %q, want no output", got)
+		}
+	})
+}

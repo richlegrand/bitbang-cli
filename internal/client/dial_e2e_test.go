@@ -36,6 +36,11 @@ func TestDial_DirectConnect_Success(t *testing.T) {
 	if sess == nil {
 		t.Fatal("Dial returned nil session")
 	}
+	// The hello the server sent when the socket opened reaches the
+	// caller, which is the only way a connector learns about a release.
+	if got := sess.LatestVersions["cli"]; got != "9.9.9" {
+		t.Errorf("LatestVersions[cli] = %q, want the table from hello", got)
+	}
 	sess.Close()
 }
 

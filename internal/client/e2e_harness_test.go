@@ -199,6 +199,12 @@ func (f *fakeSignaling) handleClient(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.clientConn = c
 	f.mu.Unlock()
+	// The real server opens every connector socket with the
+	// latest-release table, ahead of anything the connector sends.
+	f.writeClient(map[string]interface{}{
+		"type":     "hello",
+		"versions": map[string]interface{}{"cli": "9.9.9"},
+	})
 	for {
 		var msg map[string]interface{}
 		if err := c.ReadJSON(&msg); err != nil {

@@ -55,6 +55,12 @@ type Session struct {
 	// input, but the listener enforces the role regardless.
 	ServerAccess protocol.Access
 
+	// LatestVersions comes from the signaling server rather than the
+	// listener -- it is the same table every connector is handed when its
+	// socket opens, carried here because Dial owns the socket and closes
+	// it before returning. nil when the server tracks nothing.
+	LatestVersions map[string]string
+
 	nextStreamID uint32
 	mu           sync.Mutex
 	streams      map[uint32]*stream

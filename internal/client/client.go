@@ -212,11 +212,15 @@ waitLoop:
 
 	// Signaling is done with us. Stop the candidate drain and close the
 	// WS; from here on traffic flows over WebRTC.
+	versions := sig.LatestVersions()
 	close(candDone)
 	sig.Close()
 
 	sess := newSession(peer)
 	sess.Verbose = opts.Verbose
+	// Carried off the socket before it closed above; the caller decides
+	// whether it has anything to say about it.
+	sess.LatestVersions = versions
 
 	// Run the control-stream handshake. handshake consumes raw DC
 	// messages until it sees `ready`; on success we switch the DC reader
