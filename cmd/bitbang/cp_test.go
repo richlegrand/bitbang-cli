@@ -73,3 +73,39 @@ func TestParseRemoteSpec(t *testing.T) {
 		})
 	}
 }
+
+// A saved device name works as a cp target, so `cp nas:/photos .` reaches
+// the same host `connect nas` does. Anything not in the table keeps the
+// old reading -- a bare UID against the default server.
+func TestParseRemoteSpec_SavedName(t *testing.T) {
+	withTempHome(t)
+	if _, _, err := recordDevice("test.bitba.ng", "UID123", "CODE456", "nas"); err != nil {
+		t.Fatalf("recordDevice: %v", err)
+	}
+
+	got, ok := parseRemoteSpec("nas:/photos/a.jpg")
+	if !ok {
+		t.Fatal("a saved name is not being read as a remote spec")
+	}
+	if got.Server != "test.bitba.ng" || got.UID != "UID123" || got.Code != "CODE456" {
+		t.Errorf("got %+v, want the saved entry's server/uid/code", got)
+	}
+	if got.Path != "/photos/a.jpg" {
+		t.Errorf("path = %q, want /photos/a.jpg", got.Path)
+	}
+
+	// Case-insensitive, same as connect's lookup.
+	if up, ok := parseRemoteSpec("NAS:/x"); !ok || up.UID != "UID123" {
+		t.Errorf("NAS:/x = %+v (ok=%v), want the same entry", up, ok)
+	}
+
+	// An unknown name is still a UID on the default server, which is what
+	// it meant before saved names were accepted here.
+	unknown, ok := parseRemoteSpec("nosuchdevice:/x")
+	if !ok {
+		t.Fatal("an unknown name stopped parsing as a remote spec")
+	}
+	if unknown.Server != "bitba.ng" || unknown.UID != "nosuchdevice" {
+		t.Errorf("got %+v, want the bare-UID reading", unknown)
+	}
+}

@@ -25,6 +25,7 @@ import (
 //	https://bitba.ng/<UID>#<CODE>:/remote  (remote path, full URL)
 //	bitba.ng/<UID>#<CODE>:/remote          (remote path, scheme-less)
 //	<UID>#<CODE>:/remote                   (remote path, defaults to bitba.ng)
+//	<name>:/remote                         (remote path, saved device name)
 //
 // Exactly one of src and dst must be remote. The `#CODE` portion of the
 // URL is the access code (URL fragment); without it bidirectional verify
@@ -41,7 +42,7 @@ func runCp(args []string) {
 
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "Usage: bitbang cp <src> <dst>")
-		fmt.Fprintln(os.Stderr, "  src and dst can be a local path, '-' (stdin/stdout), or <URL>:/remote")
+		fmt.Fprintln(os.Stderr, "  src and dst can be a local path, '-' (stdin/stdout), <URL>:/remote, or <saved-name>:/remote")
 		os.Exit(2)
 	}
 	srcArg, dstArg := fs.Arg(0), fs.Arg(1)
@@ -53,7 +54,7 @@ func runCp(args []string) {
 	case srcRemote && dstRemote:
 		fail("cp: both sides cannot be remote (file-to-file routing across two listeners is not supported)")
 	case !srcRemote && !dstRemote:
-		fail("cp: at least one of src/dst must be a remote spec (URL:/path)")
+		fail("cp: at least one of src/dst must be a remote spec (URL:/path, or a saved device name as NAME:/path)")
 	case srcRemote:
 		runCpGet(src, dstArg, *verbose, *timeout, *pin, *relay)
 	case dstRemote:
@@ -239,6 +240,22 @@ func parseRemoteSpec(arg string) (remoteSpec, bool) {
 	cutPath := schemeOffset + rel
 	urlPart = arg[:cutPath]
 	rest = arg[cutPath+1:] // includes the "/"
+
+	// A bare word shaped like a saved device name resolves against the
+	// table first, so `cp nas:/photos .` works wherever `connect nas`
+	// does. Same precedence connect uses. A name-shaped word that is not
+	// in the table falls through and is read as a UID, which is what it
+	// was before any of this.
+	if looksLikeDeviceName(urlPart) {
+		if ent, ok := lookupDeviceByName(urlPart); ok {
+			return remoteSpec{
+				Server: ent.Server,
+				UID:    ent.UID,
+				Code:   ent.AccessCode,
+				Path:   rest,
+			}, true
+		}
+	}
 
 	// Now parse urlPart. Accept three shapes (without scheme, with
 	// scheme, bare UID#CODE) by normalizing to a URL.
