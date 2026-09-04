@@ -30,7 +30,7 @@ import (
 	"os"
 )
 
-const version = "0.5.0"
+const version = "0.5.1"
 
 const banner = `   ___         ___
   / __\_ _    / __\
