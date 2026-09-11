@@ -27,12 +27,12 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
-	"github.com/richlegrand/bitbang/internal/icehelper"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/pairing"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/signaling"
-	"github.com/richlegrand/bitbang/internal/turnlog"
+	"github.com/richlegrand/bitbang-cli/internal/icehelper"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/pairing"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/turnlog"
 )
 
 // relayAcceptanceMinWait is how long the device's (ICE-controlling) pion agent

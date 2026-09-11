@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 func TestExpiryNote(t *testing.T) {

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // linkPoll is how often live sessions are re-checked against the link

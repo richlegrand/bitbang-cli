@@ -1,7 +1,7 @@
 package streamtype
 
 import (
-	"github.com/richlegrand/bitbang/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
 	"net"
 	"net/http"
 	"net/http/httptest"

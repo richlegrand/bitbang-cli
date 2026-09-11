@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // HTTPLocalHandler implements StreamHandler for type="http" by dispatching

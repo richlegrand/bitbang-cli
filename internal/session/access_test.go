@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // readySession drives a session through the stream-0 connect handshake

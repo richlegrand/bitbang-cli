@@ -7,8 +7,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // FileInfo is the metadata the listener returns at the head of a `get`.

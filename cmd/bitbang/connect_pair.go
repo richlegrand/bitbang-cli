@@ -6,10 +6,10 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/client"
-	"github.com/richlegrand/bitbang/internal/icehelper"
-	"github.com/richlegrand/bitbang/internal/pairing"
-	"github.com/richlegrand/bitbang/internal/sdp"
+	"github.com/richlegrand/bitbang-cli/internal/client"
+	"github.com/richlegrand/bitbang-cli/internal/icehelper"
+	"github.com/richlegrand/bitbang-cli/internal/pairing"
+	"github.com/richlegrand/bitbang-cli/internal/sdp"
 )
 
 // pairCodePattern matches a 6-digit decimal code. runConnect uses it to

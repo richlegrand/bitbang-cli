@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 var (

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
 )
 
 // TestDial_WrongAccessCode_FailsFast is a regression test for a hang:

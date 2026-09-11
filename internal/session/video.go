@@ -3,7 +3,7 @@ package session
 import (
 	"encoding/json"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // VideoBridge negotiates a secondary "video" PeerConnection with the browser,

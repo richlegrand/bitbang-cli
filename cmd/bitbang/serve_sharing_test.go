@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // The Sharing block is the listener's answer to "what did I just expose",

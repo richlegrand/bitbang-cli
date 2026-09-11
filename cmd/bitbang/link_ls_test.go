@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // `link ls` renders a link's grant as written in the file, arguments and

@@ -4,13 +4,13 @@ import (
 	"log"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/framequeue"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/peer"
-	"github.com/richlegrand/bitbang/internal/peerset"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/streamtype"
-	"github.com/richlegrand/bitbang/internal/videohelper"
+	"github.com/richlegrand/bitbang-cli/internal/framequeue"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/peer"
+	"github.com/richlegrand/bitbang-cli/internal/peerset"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/videohelper"
 )
 
 // servePeer is one connector's lifecycle on a `serve` listener.

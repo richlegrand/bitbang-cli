@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/richlegrand/bitbang/internal/capbar"
+	"github.com/richlegrand/bitbang-cli/internal/capbar"
 
 	"fmt"
 	"html"
@@ -9,12 +9,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/shellweb"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/shellweb"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // sessionHandlers is the stream-handler set for one peer, plus the two

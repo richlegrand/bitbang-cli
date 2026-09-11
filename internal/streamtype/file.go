@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // Filesystem is the minimal surface a FileHandler needs to satisfy SWSP

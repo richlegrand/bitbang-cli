@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 type tcpTestStream struct {

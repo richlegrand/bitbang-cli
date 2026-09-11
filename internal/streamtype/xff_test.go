@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // captureStream is a no-op Stream — proxyRequest writes the response back

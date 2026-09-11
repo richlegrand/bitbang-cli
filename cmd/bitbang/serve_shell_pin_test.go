@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // A command named after `shell` is the command that runs. There is no flag

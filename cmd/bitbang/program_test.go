@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // One device, one identity. Every mode lands on the same UID, and what a

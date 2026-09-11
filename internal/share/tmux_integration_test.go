@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // requireTmux skips local runs without a supported tmux. Linux CI installs

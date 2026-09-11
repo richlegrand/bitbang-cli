@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // grantForPairing asks what a completed pairing should hand over, mints a

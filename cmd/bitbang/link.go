@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // dispatchLink routes `bitbang link <cmd>`, the editor-side of the link

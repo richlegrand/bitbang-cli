@@ -10,8 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/sdp"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/sdp"
 )
 
 // extractFingerprint is a local alias for sdp.ExtractFingerprint kept so

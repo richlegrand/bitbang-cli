@@ -18,8 +18,8 @@ import (
 	ptylib "github.com/aymanbagabas/go-pty"
 	"golang.org/x/term"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // Mirror-line decoration. Every emitted shell mirror line is prefixed

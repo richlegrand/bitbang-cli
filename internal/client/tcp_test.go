@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/tcpforward"
+	"github.com/richlegrand/bitbang-cli/internal/tcpforward"
 )
 
 func TestStartLocalForwardingDuplicateBindIsAtomic(t *testing.T) {

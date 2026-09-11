@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // testCtx builds the context the capability table works from: a listener

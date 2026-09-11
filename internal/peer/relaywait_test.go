@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
 )
 
 // TestRelayWaitFor pins the device-side direct-bias policy and, importantly,

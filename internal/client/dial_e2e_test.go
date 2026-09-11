@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/peer"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/peer"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
 )
 
 // TestDial_DirectConnect_Success is the happy-path e2e: a real connector and

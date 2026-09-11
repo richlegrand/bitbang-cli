@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
 )
 
 // tcpError drives one SYN and returns the error the handler sent back, or

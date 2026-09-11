@@ -12,15 +12,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/peer"
-	"github.com/richlegrand/bitbang/internal/peerset"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/shellweb"
-	"github.com/richlegrand/bitbang/internal/signaling"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/peer"
+	"github.com/richlegrand/bitbang-cli/internal/peerset"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/shellweb"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 const (

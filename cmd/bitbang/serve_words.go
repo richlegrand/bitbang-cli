@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
-	"github.com/richlegrand/bitbang/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
 )
 
 // The `serve` grammar lives in internal/grant, because a link's grant is

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 	"golang.org/x/term"
 )
 

@@ -18,10 +18,10 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/richlegrand/bitbang/internal/client"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/signaling"
-	"github.com/richlegrand/bitbang/internal/tcpforward"
+	"github.com/richlegrand/bitbang-cli/internal/client"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/tcpforward"
 )
 
 type connectOptions struct {

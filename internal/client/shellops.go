@@ -7,8 +7,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // Shell DAT tag bytes — must match the listener side

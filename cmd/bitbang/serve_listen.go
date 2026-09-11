@@ -8,17 +8,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/pairing"
-	"github.com/richlegrand/bitbang/internal/peer"
-	"github.com/richlegrand/bitbang/internal/peerset"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/signaling"
-	"github.com/richlegrand/bitbang/internal/videohelper"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/pairing"
+	"github.com/richlegrand/bitbang-cli/internal/peer"
+	"github.com/richlegrand/bitbang-cli/internal/peerset"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/videohelper"
 )
 
 // listener accepts peers for one `serve` process: everything the signaling

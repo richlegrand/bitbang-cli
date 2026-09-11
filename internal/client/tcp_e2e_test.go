@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/streamtype"
-	"github.com/richlegrand/bitbang/internal/tcpforward"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/tcpforward"
 )
 
 type rejectingTCPHandler struct {

@@ -1,4 +1,4 @@
-module github.com/richlegrand/bitbang
+module github.com/richlegrand/bitbang-cli
 
 go 1.25.0
 

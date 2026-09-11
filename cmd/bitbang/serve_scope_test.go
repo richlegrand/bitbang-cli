@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // Today a files-only listener cannot become a shell because it has no

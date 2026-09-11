@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
 )
 
 // Table is the resolved link table: the entries from links.json plus the

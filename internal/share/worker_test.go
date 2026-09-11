@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 func TestNewWorkerValidatesLimits(t *testing.T) {

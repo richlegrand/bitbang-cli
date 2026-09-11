@@ -4,11 +4,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/framequeue"
-	"github.com/richlegrand/bitbang/internal/peer"
-	"github.com/richlegrand/bitbang/internal/peerset"
-	"github.com/richlegrand/bitbang/internal/session"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/framequeue"
+	"github.com/richlegrand/bitbang-cli/internal/peer"
+	"github.com/richlegrand/bitbang-cli/internal/peerset"
+	"github.com/richlegrand/bitbang-cli/internal/session"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // sharePeer owns one connection's role reservation, session, and tmux client.

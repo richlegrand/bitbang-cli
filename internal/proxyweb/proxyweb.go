@@ -16,7 +16,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/richlegrand/bitbang/internal/capbar"
+	"github.com/richlegrand/bitbang-cli/internal/capbar"
 
 	"embed"
 	"net/http"

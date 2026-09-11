@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // The URL is the whole credential, so what it reaches has to be said out

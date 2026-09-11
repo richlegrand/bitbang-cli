@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/localdns"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/localdns"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // HTTPHandler implements StreamHandler for type="http". It dispatches each

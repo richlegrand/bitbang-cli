@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/icehelper"
+	"github.com/richlegrand/bitbang-cli/internal/icehelper"
 )
 
 // DialOptions configures a Dial call.

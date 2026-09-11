@@ -11,15 +11,15 @@ import (
 	"github.com/pion/webrtc/v4"
 	qrcode "github.com/skip2/go-qrcode"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/icehelper"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/peerset"
-	"github.com/richlegrand/bitbang/internal/signaling"
-	"github.com/richlegrand/bitbang/internal/videohelper"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/icehelper"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/peerset"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/videohelper"
 )
 
 // defaultServer is the signaling host every command defaults to.

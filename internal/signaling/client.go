@@ -21,8 +21,8 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // Message is a generic signaling message.

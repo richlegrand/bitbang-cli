@@ -13,7 +13,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
 )
 
 // Terms is one link's grant. The field set is deliberately also the

@@ -22,7 +22,7 @@
 package shellweb
 
 import (
-	"github.com/richlegrand/bitbang/internal/capbar"
+	"github.com/richlegrand/bitbang-cli/internal/capbar"
 
 	"embed"
 	"io/fs"

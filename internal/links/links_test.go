@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
 )
 
 // offered is what a full `bitbang serve` supports.

@@ -12,9 +12,9 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/richlegrand/bitbang/internal/icehelper"
-	"github.com/richlegrand/bitbang/internal/sdp"
-	"github.com/richlegrand/bitbang/internal/turnlog"
+	"github.com/richlegrand/bitbang-cli/internal/icehelper"
+	"github.com/richlegrand/bitbang-cli/internal/sdp"
+	"github.com/richlegrand/bitbang-cli/internal/turnlog"
 )
 
 // Mode is the verification posture this Peer takes for the offer it

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
 )
 
 // applySpec is the only grammar logic left in cmd: it folds a parsed grant

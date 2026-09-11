@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
 )
 
 // The scope vocabulary. These names are permanent in a way flags are not:

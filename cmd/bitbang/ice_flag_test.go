@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/icehelper"
-	"github.com/richlegrand/bitbang/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/icehelper"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
 )
 
 // resolveFSPath is what --ice-servers runs on the operator's path. It

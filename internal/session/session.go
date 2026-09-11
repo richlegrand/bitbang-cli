@@ -15,9 +15,9 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/richlegrand/bitbang/internal/auth"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/auth"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // Session owns a single peer's data channel and routes SWSP frames to the

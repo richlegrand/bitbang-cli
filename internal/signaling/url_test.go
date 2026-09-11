@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
 )
 
 func testClient(t *testing.T) *Client {

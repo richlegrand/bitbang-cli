@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/localdns"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/tcpforward"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/localdns"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/tcpforward"
 )
 
 // DefaultTCPMaxConcurrent bounds active TCP connections per WebRTC session.

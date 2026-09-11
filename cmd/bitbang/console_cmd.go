@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // commands is what the console accepts, in the order help lists them.

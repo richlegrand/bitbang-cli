@@ -8,9 +8,9 @@ import (
 	"net"
 	"sync"
 
-	"github.com/richlegrand/bitbang/internal/bytestream"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/tcpforward"
+	"github.com/richlegrand/bitbang-cli/internal/bytestream"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/tcpforward"
 )
 
 // LocalForwarder owns atomically-bound local listeners and all accepted

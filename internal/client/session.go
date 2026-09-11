@@ -12,7 +12,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // stderr is the package-wide log sink for connection progress + debug

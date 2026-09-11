@@ -18,7 +18,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/richlegrand/bitbang/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
 )
 
 // Message is the wire-level JSON envelope used by the signaling server.

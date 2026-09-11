@@ -1,21 +1,21 @@
 package main
 
 import (
-	"github.com/richlegrand/bitbang/internal/capbar"
+	"github.com/richlegrand/bitbang-cli/internal/capbar"
 	"strings"
 
 	"fmt"
 	"io"
 	"net/http"
 
-	"github.com/richlegrand/bitbang/internal/allowlist"
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/identity"
-	"github.com/richlegrand/bitbang/internal/links"
-	"github.com/richlegrand/bitbang/internal/proxyweb"
-	"github.com/richlegrand/bitbang/internal/shellweb"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/allowlist"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/identity"
+	"github.com/richlegrand/bitbang-cli/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/proxyweb"
+	"github.com/richlegrand/bitbang-cli/internal/shellweb"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // capSet is what a listener offers, named in the scope vocabulary.

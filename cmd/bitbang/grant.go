@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/grant"
-	"github.com/richlegrand/bitbang/internal/links"
+	"github.com/richlegrand/bitbang-cli/internal/grant"
+	"github.com/richlegrand/bitbang-cli/internal/links"
 )
 
 // asker reads one line from the operator, showing a default that Enter

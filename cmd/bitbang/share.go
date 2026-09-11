@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/richlegrand/bitbang/internal/share"
+	"github.com/richlegrand/bitbang-cli/internal/share"
 )
 
 // workerSubcommand is the hidden `bitbang share __worker` entry the

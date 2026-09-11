@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richlegrand/bitbang/internal/fileshare"
-	"github.com/richlegrand/bitbang/internal/protocol"
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/fileshare"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // fileSession wires a file-stream listener over shareDir and returns a connected

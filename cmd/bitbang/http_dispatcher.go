@@ -3,7 +3,7 @@ package main
 import (
 	"strings"
 
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // httpDispatcher picks between two type="http" stream handlers based on

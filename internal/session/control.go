@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/protocol"
+	"github.com/richlegrand/bitbang-cli/internal/protocol"
 )
 
 // pinFailDelay is the artificial pause before responding to a wrong

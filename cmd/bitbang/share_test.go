@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richlegrand/bitbang/internal/share"
+	"github.com/richlegrand/bitbang-cli/internal/share"
 )
 
 func TestParseTTL(t *testing.T) {

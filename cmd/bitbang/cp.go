@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/richlegrand/bitbang/internal/client"
-	"github.com/richlegrand/bitbang/internal/signaling"
+	"github.com/richlegrand/bitbang-cli/internal/client"
+	"github.com/richlegrand/bitbang-cli/internal/signaling"
 )
 
 // runCp implements `bitbang cp <src> <dst>`.

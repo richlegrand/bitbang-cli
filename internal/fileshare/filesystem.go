@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/richlegrand/bitbang/internal/streamtype"
+	"github.com/richlegrand/bitbang-cli/internal/streamtype"
 )
 
 // FileShare implements streamtype.Filesystem so the file-type SWSP stream
