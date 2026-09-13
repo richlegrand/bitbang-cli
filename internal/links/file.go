@@ -25,6 +25,13 @@ var deferredFields = map[string]string{
 	"pin":  `per-link "pin" is not supported in this release (--pin protects the whole listener)`,
 	"uses": `per-link "uses" is not supported in this release`,
 	"ttl":  `per-link "ttl" is not supported in this release (use "expires" with an absolute time)`,
+
+	// 0.5.0-rc1 wrote "scope" as a list; 0.5.0 renamed it to "grant" and
+	// made it a sentence. A table written by the rc otherwise stops the
+	// listener starting, with the decoder's own words and nothing about
+	// what to do -- and the people holding one are exactly those who
+	// tested the pre-release.
+	"scope": `"scope" was renamed to "grant" after 0.5.0-rc1, and takes the words serve takes rather than a list: "scope": ["files"] becomes "grant": "files"`,
 }
 
 // Parse decodes and validates the file's entries. It does not synthesize

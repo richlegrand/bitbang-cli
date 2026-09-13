@@ -468,3 +468,26 @@ func TestGrants_OutOfReachTargetWarnsAtLoad(t *testing.T) {
 		t.Errorf("Build = %v, warnings %v; one bad entry must not sink the table", err, warnings)
 	}
 }
+
+// A table written by 0.5.0-rc1 uses "scope" where 0.5.0 onward uses
+// "grant". Without a word for it the listener refuses to start quoting the
+// JSON decoder, which says what is wrong and nothing about what to do --
+// and everyone holding such a table is someone who tested the pre-release.
+func TestParseNamesTheRenamedScopeField(t *testing.T) {
+	rc1 := []byte(`[
+  {"label": "link-aug23", "code": "-3UKlp4lXmA", "scope": ["files"],
+   "expires": "2026-08-24T00:56:05Z"}
+]`)
+	_, err := Parse(rc1)
+	if err == nil {
+		t.Fatal("a pre-0.5.0 table parsed, so it would be silently reinterpreted")
+	}
+	for _, want := range []string{"scope", "grant"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q, so the reader cannot act on it", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "unknown field") {
+		t.Errorf("error %q is still the decoder's wording", err)
+	}
+}
