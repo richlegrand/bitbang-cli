@@ -1,6 +1,7 @@
 package streamtype
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -224,6 +225,10 @@ func (h *HTTPHandler) OnConnect(path string) error {
 // would stall the whole session setup.
 const probeTimeout = 3 * time.Second
 
+// sniffBodyBytes bounds how much of a body of unknown length is read up front
+// in the hope of sending an exact Content-Length instead of chunked encoding.
+const sniffBodyBytes = 64 << 10
+
 // scheme returns the resolved session scheme, defaulting to http for
 // sessions that never ran the probe (fixed-target tests, landing page).
 func (h *HTTPHandler) scheme() string {
@@ -432,12 +437,33 @@ func (h *HTTPHandler) proxyRequestContext(ctx context.Context, s Stream, req pro
 
 	// Stream request bytes directly into the upstream transport. Flow-control
 	// credit is returned only when this reader advances, so a slow target cannot
-	// turn an upload into an unbounded in-memory buffer. Browsers supply the
-	// length for ordinary form/file bodies; preserving it avoids chunked
-	// encoding for embedded servers that require Content-Length.
+	// turn an upload into an unbounded in-memory buffer.
 	var reqBody io.Reader
+	contentLength := int64(req.ContentLength)
 	if body != nil {
 		reqBody = body
+		if contentLength <= 0 {
+			// Nobody told us how long the body is. A service worker can't read
+			// Content-Length (the browser adds it after the fetch handler
+			// runs), so this is the ordinary case for a POST from a page
+			// rather than an edge case. With no length Go sends
+			// Transfer-Encoding: chunked, and plenty of targets ignore a
+			// chunked body: Python's http.server reads nothing from one, and
+			// embedded servers tend to be worse.
+			//
+			// So peek first. A form or JSON body ends well inside the sniff
+			// buffer, and then the length is exact. Anything bigger keeps
+			// streaming, with its flow control, and still goes chunked.
+			head := make([]byte, sniffBodyBytes)
+			n, err := io.ReadFull(body, head)
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				reqBody, contentLength = bytes.NewReader(head[:n]), int64(n)
+			} else {
+				// Still streaming, or a read error that will come back on the
+				// next read. Either way, put the bytes read back in front.
+				reqBody = io.MultiReader(bytes.NewReader(head[:n]), body)
+			}
+		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, url, reqBody)
@@ -468,8 +494,8 @@ func (h *HTTPHandler) proxyRequestContext(ctx context.Context, s Stream, req pro
 			httpReq.Header.Set("Content-Type", req.ContentType)
 		}
 	}
-	if body != nil && req.ContentLength > 0 {
-		httpReq.ContentLength = int64(req.ContentLength)
+	if body != nil && contentLength >= 0 {
+		httpReq.ContentLength = contentLength
 	}
 	httpReq.Host = target
 	httpReq.Header.Set("X-Forwarded-Host", h.Server)
