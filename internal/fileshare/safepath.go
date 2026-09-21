@@ -62,8 +62,21 @@ func SafePath(baseDir, relPath string) string {
 }
 
 // withinBase reports whether path is base itself or strictly inside it.
+//
+// The separator is appended so that /srv/photos does not match /srv/photos-old,
+// which is the whole point of the check -- but a base that is already a
+// filesystem root ends in one. "/" becomes "//" and "D:\" becomes "D:\\" --
+// prefixes nothing matches -- so every file under a root share resolved to ""
+// and read as not found. A share of D:\ that listed its files and then 404'd
+// every one of them is issue #38.
 func withinBase(path, base string) bool {
-	return path == base || strings.HasPrefix(path, base+string(os.PathSeparator))
+	if path == base {
+		return true
+	}
+	if strings.HasSuffix(base, string(os.PathSeparator)) {
+		return strings.HasPrefix(path, base)
+	}
+	return strings.HasPrefix(path, base+string(os.PathSeparator))
 }
 
 // ShouldShow returns false for entries that should be hidden from the
