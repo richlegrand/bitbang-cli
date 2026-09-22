@@ -42,8 +42,14 @@ func newDisplay(url string, noqr bool) display {
 // printReady renders the banner, QR code, and URL. On a wide TTY the
 // banner sits to the right of the QR (vertically centered) so the whole
 // startup block stays short enough to fit on one screen — handy for a
-// screen recording. On a narrow or non-TTY output it falls back to the
-// banner stacked above the QR so pipes, logs, and tests stay readable.
+// screen recording. On a narrow TTY it falls back to the banner stacked
+// above the QR.
+//
+// Off a terminal there is no banner at all, only the version line and the
+// URL. The logo is for a person looking at a screen, and this block is
+// reprinted on every reconnect -- so a listener running under systemd or in
+// a container was putting six lines of art into its journal each time,
+// which is what #34 was about.
 func (b display) ready() {
 	fmt.Print(b.readyBlock())
 }
@@ -56,7 +62,10 @@ func (b display) readyBlock() string {
 	if !b.noqr {
 		qr = smallQR(b.url)
 	}
-	bannerLines := strings.Split(strings.TrimRight(banner, "\n"), "\n")
+	var bannerLines []string
+	if b.isTTY {
+		bannerLines = strings.Split(strings.TrimRight(banner, "\n"), "\n")
+	}
 	bannerLines = append(bannerLines, "bitbang-cli v"+version)
 	var qrLines []string
 	if qr != "" {
@@ -93,8 +102,13 @@ func (b display) readyBlock() string {
 		for _, l := range bannerLines {
 			fmt.Fprintln(&out, l)
 		}
-		fmt.Fprintln(&out)
-		fmt.Fprint(&out, qr)
+		// The blank line separates the banner from the QR. With neither
+		// above nor below it -- a daemon with -noqr -- it is a stray line
+		// in a log, so only print it when it is separating something.
+		if qr != "" {
+			fmt.Fprintln(&out)
+			fmt.Fprint(&out, qr)
+		}
 	}
 	fmt.Fprintf(&out, "URL: %s%s%s\n", b.bold, b.url, b.reset)
 	return out.String()
