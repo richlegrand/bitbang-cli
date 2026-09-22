@@ -49,7 +49,7 @@ func TestSharingBlockSaysWhenTheShellIsPinned(t *testing.T) {
 	printSharingBlock(&b, serveConfig{
 		caps: capsOf(links.ScopeShell), shellArgv: []string{"/bin/login"},
 		shellMaxSessions: defaultShellMaxSessions,
-	}, nil)
+	}, nil, true)
 	if !strings.Contains(b.String(), "/bin/login only") {
 		t.Errorf("sharing block does not mark the shell as pinned:\n%s", b.String())
 	}

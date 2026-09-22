@@ -254,7 +254,12 @@ func capBarItems(x capContext) []capbar.Item {
 // Takes a writer so the exact wording can be pinned by a test: this block
 // is the listener's answer to "what did I just expose", and a slip in it
 // is user-visible with nothing else to catch it.
-func printSharingBlock(w io.Writer, cfg serveConfig, share *fileshare.FileShare) {
+//
+// The blank line closing the block separates it from what follows on a
+// terminal. In a journal every line carries its own timestamp and prefix,
+// so the separator is one more entry that says nothing -- gated on isTTY
+// like the banner, and for the same reason (#34).
+func printSharingBlock(w io.Writer, cfg serveConfig, share *fileshare.FileShare, isTTY bool) {
 	x := capContext{cfg: cfg, share: share}
 	fmt.Fprintln(w, "Sharing:")
 	for _, c := range capabilities {
@@ -263,5 +268,7 @@ func printSharingBlock(w io.Writer, cfg serveConfig, share *fileshare.FileShare)
 		}
 		c.Describe(w, x)
 	}
-	fmt.Fprintln(w)
+	if isTTY {
+		fmt.Fprintln(w)
+	}
 }

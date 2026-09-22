@@ -426,7 +426,7 @@ func startListener(cfg serveConfig) {
 
 	out := newDisplay(url, cfg.noqr)
 	out.ready()
-	printSharingBlock(os.Stdout, cfg, share)
+	printSharingBlock(os.Stdout, cfg, share, out.isTTY)
 
 	if notice, warning := exposureNotice(cfg, pinAuth.Required(), out.bold, out.reset); notice != "" {
 		// Warnings on stderr, the PIN line on stdout, as before: a script

@@ -122,7 +122,7 @@ func TestSharingBlock(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			printSharingBlock(&buf, c.cfg, c.share)
+			printSharingBlock(&buf, c.cfg, c.share, true)
 			got := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
 			if len(got) != len(c.want) {
 				t.Fatalf("got %d lines, want %d:\n%q", len(got), len(c.want), buf.String())
@@ -136,6 +136,18 @@ func TestSharingBlock(t *testing.T) {
 	}
 }
 
+// The blank line closing the block is a separator for a terminal. Off one it
+// is a journal entry with nothing in it, which is the last of the eight lines
+// #34 asked to lose.
+func TestSharingBlockSeparatorIsForTerminalsOnly(t *testing.T) {
+	cfg := serveConfig{caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions}
+	var b strings.Builder
+	printSharingBlock(&b, cfg, nil, false)
+	if strings.HasSuffix(b.String(), "\n\n") {
+		t.Errorf("the separator reached a journal:\n%q", b.String())
+	}
+}
+
 // A forward listener given targets must say what it can
 // actually reach. "unrestricted targets" on a restricted listener would be
 // worse than saying nothing.
@@ -145,7 +157,7 @@ func TestSharingBlockNamesAllowedForwards(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	printSharingBlock(&buf, cfg, nil)
+	printSharingBlock(&buf, cfg, nil, true)
 	got := buf.String()
 	if strings.Contains(got, "unrestricted") {
 		t.Errorf("sharing block says unrestricted on a restricted listener:\n%s", got)
@@ -164,11 +176,11 @@ func TestSharingBlockShowsMirrorDisabled(t *testing.T) {
 	var on, off strings.Builder
 	printSharingBlock(&on, serveConfig{
 		caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions,
-	}, nil)
+	}, nil, true)
 	printSharingBlock(&off, serveConfig{
 		caps: capsOf(links.ScopeShell), shellMaxSessions: defaultShellMaxSessions,
 		disableShellMirror: true,
-	}, nil)
+	}, nil, true)
 
 	if !strings.Contains(on.String(), "mirroring to console") {
 		t.Errorf("default should mirror:\n%s", on.String())
