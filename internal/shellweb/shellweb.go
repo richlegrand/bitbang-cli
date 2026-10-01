@@ -15,7 +15,7 @@
 // Launcher mode: when constructed with capbar.Item entries, the shared
 // strip (internal/capbar) is spliced into index.html at its CAP_BAR
 // marker. Anchor clicks in the dropdown postMessage `{type:
-// 'open_cap', path: '<path>'}` up to bootstrap.js, which composes
+// 'bb-open-cap', path: '<path>'}` up to bootstrap.js, which composes
 // the full URL (including the secret access code from the fragment)
 // and opens a new browser tab. Bootstrap.js never has to know about
 // caps, labels, or dropdown rendering -- the device controls all of it.

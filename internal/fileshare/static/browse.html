@@ -609,7 +609,7 @@
             const progressSize = document.getElementById('progress-size');
             const progressSpeed = document.getElementById('progress-speed');
 
-            if (type === 'upload_progress' && overlay.style.display !== 'none') {
+            if (type === 'uploadProgress' && overlay.style.display !== 'none') {
                 if (!uploadStartTime) uploadStartTime = Date.now();
 
                 const pct = (loaded / total) * 100;
@@ -619,10 +619,10 @@
                 const elapsed = (Date.now() - uploadStartTime) / 1000;
                 const speed = elapsed > 0 ? loaded / elapsed : 0;
                 progressSpeed.textContent = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
-            } else if (type === 'upload_complete') {
+            } else if (type === 'uploadComplete') {
                 // All chunks sent to device, waiting for response
                 uploadStartTime = null;
-            } else if (type === 'upload_success') {
+            } else if (type === 'uploadSuccess') {
                 // Device confirmed upload success
                 uploadSuccess = true;
             }

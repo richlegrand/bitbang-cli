@@ -860,7 +860,7 @@ const landingPageHTML = `<!DOCTYPE html>
             if (!target) return;
             target = target.replace(/^https?:\/\//, '');
             target = target.replace(/\/$/, '');
-            window.parent.postMessage({ type: 'navigate', path: '/' + target }, '*');
+            window.parent.postMessage({ type: 'bb-navigate', path: '/' + target }, '*');
         }
     </script>
 </body>
