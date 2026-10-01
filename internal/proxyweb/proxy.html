@@ -89,7 +89,7 @@
         // owns the access code and the sandbox forbids navigating the top
         // frame from here, so ask it to move. Same message the cap bar sends.
         function bbOpen(target) {
-            parent.postMessage({type:'bb-open-cap', path:'/' + target + '/', newTab:false}, '*');
+            parent.postMessage({type:'open_cap', path:'/' + target + '/', newTab:false}, '*');
         }
     </script>
 </body>

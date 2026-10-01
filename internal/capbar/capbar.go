@@ -129,7 +129,7 @@ func Render(items []Item, style Style) string {
   menu.querySelectorAll('a').forEach(function(a){
     a.addEventListener('click', function(e){
       e.preventDefault();
-      parent.postMessage({type:'bb-open-cap', path: a.dataset.path}, '*');
+      parent.postMessage({type:'open_cap', path: a.dataset.path}, '*');
       menu.hidden = true;
     });
   });
