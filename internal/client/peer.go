@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
@@ -139,7 +140,22 @@ func newPeer(mode Mode, uid, code string, iceServers []webrtc.ICEServer, forceRe
 // Mode returns the verification posture this Peer was constructed with.
 func (p *Peer) Mode() Mode { return p.mode }
 
+// streamProtocolPrefix marks a media channel: a device declaring streams (a
+// camera's video and audio) opens one per stream beside the SWSP channel, with
+// a protocol of "bitbang-stream/<codec>". bootstrap.js dispatches on the same
+// prefix.
+const streamProtocolPrefix = "bitbang-stream/"
+
 func (p *Peer) onDataChannel(dc *webrtc.DataChannel) {
+	// Media channels are left alone. They carry nothing until the client
+	// subscribes on the SWSP channel, and this client subscribes to nothing.
+	// Adopting them is what this used to do -- every channel became p.DC and
+	// closed dcReady on open -- so the second channel to open panicked with
+	// "close of closed channel", the first time this client met an ESP32
+	// camera (2026-10-01).
+	if strings.HasPrefix(dc.Protocol(), streamProtocolPrefix) {
+		return
+	}
 	p.DC = dc
 
 	dc.OnOpen(func() {
