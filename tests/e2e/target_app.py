@@ -69,6 +69,18 @@ def sse():
             time.sleep(0.1)
     return Response(generate(), mimetype='text/event-stream')
 
+@app.route('/slow')
+def slow():
+    """A response that goes quiet mid-body for ?gap= seconds. Nothing reaches
+    the service worker during the gap, which is the condition under which a
+    browser stops an idle worker -- see test_long_responses.py."""
+    gap = float(request.args.get('gap', '45'))
+    def generate():
+        yield 'first\n'
+        time.sleep(gap)
+        yield 'last\n'
+    return Response(generate(), mimetype='text/plain')
+
 @app.route('/redirect-test')
 def redirect_test():
     return '', 302, {'Location': '/'}
