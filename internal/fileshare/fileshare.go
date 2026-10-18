@@ -17,7 +17,6 @@ import (
 
 	"embed"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -223,12 +222,36 @@ func (f *FileShare) listFiles(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// asAttachment marks a response as a file to save rather than a page to show.
+//
+// The pages hand a download to the browser's download manager, which saves it
+// as it arrives, rather than reading it into memory themselves -- a 32 GB file
+// read that way crashed the tab. That makes two headers load-bearing:
+//
+//   - Content-Disposition names the saved file now, not the page. %q quoting
+//     wrote a Go escape sequence in place of each non-ASCII character, which
+//     a browser saves literally; FormatMediaType writes the RFC 2231
+//     filename* form browsers decode.
+//   - Content-Type is octet-stream whatever the file is. The download is a
+//     navigation, and the service worker injects its shims into any navigation
+//     that answers text/html -- so a saved .html file would come out with
+//     script tags in front of it. Deployed workers do that, and new ones can
+//     still be talking to this listener, so the listener is where it stops.
+func asAttachment(w http.ResponseWriter, name string) {
+	cd := mime.FormatMediaType("attachment", map[string]string{"filename": name})
+	if cd == "" {
+		cd = "attachment"
+	}
+	w.Header().Set("Content-Disposition", cd)
+	w.Header().Set("Content-Type", "application/octet-stream")
+}
+
 func (f *FileShare) downloadSingle(w http.ResponseWriter, r *http.Request) {
 	if f.Mode != ModeSend {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", f.FileName))
+	asAttachment(w, f.FileName)
 	http.ServeFile(w, r, f.BasePath)
 }
 
@@ -248,7 +271,7 @@ func (f *FileShare) downloadFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(absPath)))
+	asAttachment(w, filepath.Base(absPath))
 	http.ServeFile(w, r, absPath)
 }
 

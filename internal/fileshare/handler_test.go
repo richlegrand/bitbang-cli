@@ -2,6 +2,7 @@ package fileshare
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -77,6 +78,75 @@ func TestDownloadServesFileContents(t *testing.T) {
 				t.Error("no Content-Disposition, so a browser will render rather than save")
 			}
 		})
+	}
+}
+
+// The pages hand downloads to the browser's download manager now, so the
+// headers are what decide how the file is saved. See asAttachment.
+func TestDownloadIsSavedAsTheFileItIs(t *testing.T) {
+	dir := t.TempDir()
+	// A semicolon ends a parameter unless the value is quoted. A double
+	// quote would test that harder, but Windows does not allow one in a
+	// filename and this runs there too.
+	files := map[string]string{
+		"page.html":       "<p>saved, not rendered</p>",
+		"caf\xc3\xa9.txt": "accented",
+		"notes; v2.txt":   "semicolon",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	share, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, body := range files {
+		t.Run(name, func(t *testing.T) {
+			rec := get(t, share, "/api/download", name)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d (%s)", rec.Code, rec.Body.String())
+			}
+			if got := rec.Body.String(); got != body {
+				t.Errorf("body = %q, want %q", got, body)
+			}
+			// text/html would get the service worker's shims spliced into
+			// the saved file.
+			if ct := rec.Header().Get("Content-Type"); ct != "application/octet-stream" {
+				t.Errorf("Content-Type = %q, want application/octet-stream", ct)
+			}
+			disp, params, err := mime.ParseMediaType(rec.Header().Get("Content-Disposition"))
+			if err != nil {
+				t.Fatalf("Content-Disposition %q does not parse: %v",
+					rec.Header().Get("Content-Disposition"), err)
+			}
+			if disp != "attachment" || params["filename"] != name {
+				t.Errorf("Content-Disposition = %s %v, want attachment with filename %q", disp, params, name)
+			}
+		})
+	}
+}
+
+// A browser resumes an interrupted download with a Range request. For a
+// file the size of the one that prompted this, that is the difference
+// between picking up where it stopped and starting over.
+func TestDownloadAnswersRange(t *testing.T) {
+	share, _ := newTestShare(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/download?path=hello.txt", nil)
+	req.Header.Set("Range", "bytes=9-")
+	rec := httptest.NewRecorder()
+	share.HTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", rec.Code)
+	}
+	if got := rec.Body.String(); got != "of hello" {
+		t.Errorf("body = %q, want the tail %q", got, "of hello")
+	}
+	if rec.Header().Get("Accept-Ranges") != "bytes" {
+		t.Error("no Accept-Ranges: bytes, so a browser will not try to resume")
 	}
 }
 

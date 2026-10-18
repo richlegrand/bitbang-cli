@@ -382,80 +382,56 @@
             return div.innerHTML;
         }
 
-        async function downloadFile(path, filename) {
-            const overlay = document.getElementById('progress-overlay');
-            const progressBar = document.getElementById('progress-bar');
-            const progressFilename = document.getElementById('progress-filename');
-            const progressSize = document.getElementById('progress-size');
-            const progressSpeed = document.getElementById('progress-speed');
-
-            try {
-                const res = await fetch('api/download?path=' + encodeURIComponent(path));
-                if (!res.ok) {
-                    throw new Error('Download failed');
-                }
-
-                // Get total size from Content-Length header
-                const totalSize = parseInt(res.headers.get('Content-Length') || '0', 10);
-
-                // Show progress overlay
-                progressFilename.textContent = filename;
-                progressBar.style.width = '0%';
-                progressSize.textContent = formatSize(0) + ' / ' + formatSize(totalSize);
-                progressSpeed.textContent = '-- MB/s';
-                overlay.style.display = 'flex';
-
-                // Stream the response with progress tracking
-                const reader = res.body.getReader();
-                const chunks = [];
-                let receivedSize = 0;
-                const startTime = Date.now();
-                let lastUpdate = 0;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    chunks.push(value);
-                    receivedSize += value.length;
-
-                    // Update progress (throttle to every 50ms for smoothness)
-                    const now = Date.now();
-                    if (now - lastUpdate > 50 || done) {
-                        lastUpdate = now;
-                        const elapsed = (now - startTime) / 1000;
-                        const speed = elapsed > 0 ? receivedSize / elapsed : 0;
-
-                        if (totalSize > 0) {
-                            const pct = (receivedSize / totalSize) * 100;
-                            progressBar.style.width = pct.toFixed(1) + '%';
-                        } else {
-                            // Unknown size - show indeterminate
-                            progressBar.style.width = '100%';
-                        }
-
-                        progressSize.textContent = formatSize(receivedSize) + ' / ' + (totalSize > 0 ? formatSize(totalSize) : '?');
-                        progressSpeed.textContent = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
-                    }
-                }
-
-                // Assemble blob and trigger download
-                const blob = new Blob(chunks);
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-
-            } catch (e) {
-                console.error('Download error:', e);
-                alert('Failed to download file');
-            } finally {
-                overlay.style.display = 'none';
+        // A URL the service worker routes to this device on sight.
+        //
+        // fetch() needs none of this: its request names the frame that made
+        // it, and the worker recorded which device that frame belongs to. A
+        // download is a navigation, which names no frame, and xhr-shim has
+        // stripped /__device__/<sid> from this page's URL -- so a relative
+        // link would leave the worker guessing, and with two devices open it
+        // can guess the other one. The prefix is what xhr-shim puts on an
+        // absolute fetch() path, for the same reason.
+        function deviceUrl(relative) {
+            const u = new URL(relative, location.href);
+            const sid = window.__bbSessionId;
+            if (sid && u.pathname.indexOf('/__device__/') !== 0) {
+                return '/__device__/' + sid + u.pathname + u.search;
             }
+            return u.pathname + u.search;
+        }
+
+        // The browser's download manager does the saving. This page used to
+        // read the response into memory and save it as a Blob at the end, so
+        // a file had to fit in the tab: a 32 GB one stalled near 2 GB and
+        // took Chrome down. The download manager writes as bytes arrive, and
+        // shows its own progress.
+        //
+        // By navigating a hidden frame, not with <a download>: Chromium
+        // sends a download-attribute request straight to the network,
+        // skipping the service worker, so it reached bitba.ng instead of the
+        // device and saved the server's page under the file's name. A
+        // navigation does go through the worker, and the listener's
+        // Content-Disposition: attachment turns it into a download. The
+        // frame is never removed while it might be one; a few empty frames
+        // cost nothing, and removing one could cancel what it started.
+        function downloadFile(path) {
+            const frame = document.createElement('iframe');
+            frame.hidden = true;
+            // A download leaves the frame empty. Anything rendered in it is
+            // the listener refusing -- a 404 for a file deleted since the
+            // listing -- and is what the old code reported with this alert.
+            frame.addEventListener('load', function() {
+                let text = '';
+                try {
+                    text = (frame.contentDocument.body.textContent || '').trim();
+                } catch (e) {}
+                if (text) {
+                    frame.remove();
+                    alert('Failed to download file: ' + text);
+                }
+            });
+            frame.src = deviceUrl('api/download?path=' + encodeURIComponent(path));
+            document.body.appendChild(frame);
         }
 
         async function loadInfo() {
@@ -531,7 +507,7 @@
                         if (entry.type === 'directory') {
                             loadDirectory(entryPath);
                         } else {
-                            downloadFile(entryPath, entry.name);
+                            downloadFile(entryPath);
                         }
                     };
 

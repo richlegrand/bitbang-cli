@@ -44,29 +44,6 @@
             color: #999;
         }
         .branding a { color: #666; }
-        .progress-container {
-            display: none;
-            margin-top: 1rem;
-        }
-        .progress-bar-bg {
-            background: #e9ecef;
-            border-radius: 8px;
-            height: 8px;
-            overflow: hidden;
-            margin-bottom: 0.5rem;
-        }
-        .progress-bar-fill {
-            background: #007bff;
-            height: 100%;
-            width: 0%;
-            transition: width 0.1s ease-out;
-        }
-        .progress-stats {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.875rem;
-            color: #666;
-        }
     </style>
 </head>
 <body>
@@ -74,96 +51,46 @@
         <div class="icon">{{ icon }}</div>
         <div class="filename">{{ filename }}</div>
         <div class="size" id="size-display">{{ size }}</div>
-        <a href="download" class="download-btn" id="download-btn">Download</a>
-        <div class="progress-container" id="progress-container">
-            <div class="progress-bar-bg">
-                <div class="progress-bar-fill" id="progress-bar"></div>
-            </div>
-            <div class="progress-stats">
-                <span id="progress-size">0 B / {{ size }}</span>
-                <span id="progress-speed">-- MB/s</span>
-            </div>
-        </div>
+        <a href="download" target="download-frame" class="download-btn" id="download-btn">Download</a>
+        <iframe name="download-frame" id="download-frame" hidden></iframe>
         <div class="branding">
             Shared via <a href="https://bitba.ng">BitBang</a><br>
             P2P &middot; Encrypted &middot; No account
         </div>
     </div>
     <script>
-        function formatSize(bytes) {
-            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            let i = 0;
-            while (bytes >= 1024 && i < units.length - 1) {
-                bytes /= 1024;
-                i++;
-            }
-            return (i > 0 ? bytes.toFixed(1) : bytes) + ' ' + units[i];
-        }
+        // The link is the download: the browser's download manager saves it
+        // as it arrives, under the name in Content-Disposition. This page
+        // used to read it into memory first, so a file had to fit in the tab.
+        //
+        // It navigates a hidden frame rather than using <a download>, which
+        // Chromium sends straight to the network, skipping the service worker
+        // -- so it reached bitba.ng instead of the device. A navigation goes
+        // through the worker, and Content-Disposition: attachment makes it a
+        // download.
+        //
+        // The href gets the /__device__/<sid> prefix that xhr-shim puts on
+        // fetch() paths, because a navigation names no frame the service
+        // worker could look its device up by. Without script the bare
+        // "download" still works, with the worker inferring the device --
+        // which is right unless two are open.
+        (function() {
+            const sid = window.__bbSessionId;
+            if (!sid) return;
+            const u = new URL('download', location.href);
+            if (u.pathname.indexOf('/__device__/') === 0) return;
+            document.getElementById('download-btn').href =
+                '/__device__/' + sid + u.pathname + u.search;
+        })();
 
-        document.getElementById('download-btn').addEventListener('click', async function(e) {
-            e.preventDefault();
-            const btn = this;
-            const progressContainer = document.getElementById('progress-container');
-            const progressBar = document.getElementById('progress-bar');
-            const progressSize = document.getElementById('progress-size');
-            const progressSpeed = document.getElementById('progress-speed');
-
-            btn.textContent = 'Downloading...';
-            btn.disabled = true;
-            progressContainer.style.display = 'block';
-            progressBar.style.width = '0%';
-
+        // A download leaves the frame empty; a page in it is the listener
+        // refusing, which would otherwise be invisible.
+        document.getElementById('download-frame').addEventListener('load', function() {
+            let text = '';
             try {
-                const res = await fetch('download');
-                if (!res.ok) throw new Error('Download failed');
-
-                const totalSize = parseInt(res.headers.get('Content-Length') || '0', 10);
-                const reader = res.body.getReader();
-                const chunks = [];
-                let receivedSize = 0;
-                const startTime = Date.now();
-                let lastUpdate = 0;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    chunks.push(value);
-                    receivedSize += value.length;
-
-                    const now = Date.now();
-                    if (now - lastUpdate > 50) {
-                        lastUpdate = now;
-                        const elapsed = (now - startTime) / 1000;
-                        const speed = elapsed > 0 ? receivedSize / elapsed : 0;
-
-                        if (totalSize > 0) {
-                            progressBar.style.width = ((receivedSize / totalSize) * 100).toFixed(1) + '%';
-                        }
-                        progressSize.textContent = formatSize(receivedSize) + ' / ' + (totalSize > 0 ? formatSize(totalSize) : '?');
-                        progressSpeed.textContent = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
-                    }
-                }
-
-                const blob = new Blob(chunks);
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = '{{ filename }}';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-
-                btn.textContent = 'Download';
-                btn.disabled = false;
-                progressContainer.style.display = 'none';
-            } catch (err) {
-                btn.textContent = 'Download failed';
-                btn.disabled = false;
-                progressContainer.style.display = 'none';
-                setTimeout(() => btn.textContent = 'Download', 2000);
-            }
+                text = (this.contentDocument.body.textContent || '').trim();
+            } catch (e) {}
+            if (text) alert('Failed to download file: ' + text);
         });
     </script>
 </body>
