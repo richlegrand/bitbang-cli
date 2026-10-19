@@ -54,6 +54,7 @@ Sharing entails simply giving someone a unique URL or QR code that gives them ac
 
 - [Share files without uploading them anywhere](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#share-files-without-uploading-them-anywhere)
 - [Show someone your project](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-your-project)
+- [Show someone the error you are stuck on](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#show-someone-the-error-you-are-stuck-on)
 - [Give someone access that expires](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#give-someone-access-that-expires)
 - [Check your agent session from your phone (Claude Code, tmux)](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#check-your-agent-session-from-your-phone-claude-code-tmux)
 - [Fix someone else's router](https://github.com/richlegrand/bitbang/blob/main/cookbook.md#fix-someone-elses-router)
