@@ -81,7 +81,17 @@ def test_session_negotiates_v4(proxy_url, browser_context):
         assert version == 4, f'session negotiated v{version}'
 
 
-def test_a_reader_that_stops_stops_the_target(proxy_url, browser_context):
+def test_a_reader_that_stops_stops_the_target(proxy_url, browser_context, request):
+    if browser_context.browser.browser_type.name == 'webkit':
+        # Measured 2026-10-19: the target handed out 620 MiB while the page
+        # read 119 MiB. WebKit pulls a service worker's response stream as
+        # fast as it arrives, whatever the page's reader does, and the worker
+        # has nothing to see the page by -- so in Safari a page's fetch()
+        # reader is as unbounded as it was under v3. A download to disk is
+        # still bounded, by the disk. Strict, so this says so if WebKit ever
+        # starts pushing back.
+        request.applymarker(pytest.mark.xfail(
+            strict=True, reason='WebKit reads a service worker response ahead without limit'))
     page, frame, version = _open(browser_context, proxy_url)
     _need_v4(version)
 

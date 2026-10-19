@@ -375,8 +375,14 @@ def proxy_url(target_app, listener):
 
 @pytest.fixture(scope='session')
 def browser_context(playwright, proxy_url):
-    """Create a persistent browser context for the test session."""
-    browser = playwright.chromium.launch(headless=True)
+    """Create a persistent browser context for the test session.
+
+    Chromium unless BITBANG_ENGINE names another Playwright engine:
+    BITBANG_ENGINE=webkit runs the suite in Safari's engine, which is the
+    nearest this can get to iPhones. Firefox has firefox_context as well,
+    for the tests that are about Firefox."""
+    engine = os.environ.get('BITBANG_ENGINE', 'chromium')
+    browser = getattr(playwright, engine).launch(headless=True)
     context = browser.new_context()
     yield context
     context.close()
