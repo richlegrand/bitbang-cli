@@ -3,6 +3,7 @@ Runs on localhost:18080. BitBangProxy proxies requests to this."""
 
 from flask import Flask, request, make_response, Response
 from flask_sock import Sock
+import hashlib
 import json
 import time
 
@@ -80,6 +81,53 @@ def slow():
         time.sleep(gap)
         yield 'last\n'
     return Response(generate(), mimetype='text/plain')
+
+# What each /big stream has handed to the server so far, by id, for
+# test_flow_control.py. The server writes each chunk to its socket before the
+# generator resumes, so 'yielded' is what has left this process: with flow
+# control, a reader that stops makes the listener stop reading, TCP pushes
+# back, and this stops growing.
+_streams = {}
+
+
+@app.route('/big')
+def big():
+    state = {'yielded': 0, 'finished': False, 'closed': False}
+    _streams[request.args['id']] = state
+    total = int(request.args.get('mb', '500')) * 1024 * 1024
+    chunk = b'\0' * 65536
+
+    def generate():
+        try:
+            while state['yielded'] < total:
+                yield chunk
+                state['yielded'] += len(chunk)
+            state['finished'] = True
+        finally:
+            # Closed early: the far end went away and the server noticed.
+            if not state['finished']:
+                state['closed'] = True
+    return Response(generate(), mimetype='application/octet-stream')
+
+
+@app.route('/stats')
+def stats():
+    return json.dumps(_streams.get(request.args['id'], {}))
+
+
+@app.route('/api/digest', methods=['POST'])
+def digest():
+    """Length and SHA-256 of the request body, read as it arrives."""
+    h = hashlib.sha256()
+    n = 0
+    while True:
+        block = request.stream.read(65536)
+        if not block:
+            break
+        h.update(block)
+        n += len(block)
+    return json.dumps({'length': n, 'sha256': h.hexdigest()})
+
 
 @app.route('/redirect-test')
 def redirect_test():
