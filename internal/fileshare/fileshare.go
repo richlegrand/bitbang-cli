@@ -17,6 +17,7 @@ import (
 
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -228,22 +229,64 @@ func (f *FileShare) listFiles(w http.ResponseWriter, r *http.Request) {
 // as it arrives, rather than reading it into memory themselves -- a 32 GB file
 // read that way crashed the tab. That makes two headers load-bearing:
 //
-//   - Content-Disposition names the saved file now, not the page. %q quoting
-//     wrote a Go escape sequence in place of each non-ASCII character, which
-//     a browser saves literally; FormatMediaType writes the RFC 2231
-//     filename* form browsers decode.
+//   - Content-Disposition names the saved file now, not the page. See
+//     contentDisposition.
 //   - Content-Type is octet-stream whatever the file is. The download is a
 //     navigation, and the service worker injects its shims into any navigation
 //     that answers text/html -- so a saved .html file would come out with
 //     script tags in front of it. Deployed workers do that, and new ones can
 //     still be talking to this listener, so the listener is where it stops.
 func asAttachment(w http.ResponseWriter, name string) {
-	cd := mime.FormatMediaType("attachment", map[string]string{"filename": name})
+	w.Header().Set("Content-Disposition", contentDisposition(name))
+	w.Header().Set("Content-Type", "application/octet-stream")
+}
+
+// contentDisposition names a download in both forms RFC 6266 describes: a
+// plain filename with anything outside printable ASCII replaced, and, when
+// that lost something, the exact name as RFC 5987 filename*.
+//
+// Both, not filename* alone, which is what mime.FormatMediaType writes for a
+// non-ASCII name. Given a lone filename* on a response from a service worker
+// -- every download here -- WebKit keeps the accented name but swaps the
+// extension for .html, so a .txt with an accent in its name is saved as
+// .html. It reads the same header correctly straight from a server, and reads
+// filename* correctly through the worker too once a plain filename sits
+// beside it.
+// Chromium and Firefox are happy either way. (%q, before that, wrote Go
+// escapes, which every browser saved literally.)
+func contentDisposition(name string) string {
+	plain := strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return '_'
+		}
+		return r
+	}, name)
+	cd := mime.FormatMediaType("attachment", map[string]string{"filename": plain})
 	if cd == "" {
 		cd = "attachment"
 	}
-	w.Header().Set("Content-Disposition", cd)
-	w.Header().Set("Content-Type", "application/octet-stream")
+	if plain != name {
+		cd += "; filename*=UTF-8''" + rfc5987Escape(name)
+	}
+	return cd
+}
+
+// rfc5987Escape percent-encodes every byte that is not an RFC 5987
+// attr-char. url.PathEscape is close but leaves ' ( ) * , ; = : @ alone, and
+// a bare ' or ; would end the value early.
+func rfc5987Escape(s string) string {
+	const attrChar = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			strings.IndexByte(attrChar, c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }
 
 func (f *FileShare) downloadSingle(w http.ResponseWriter, r *http.Request) {

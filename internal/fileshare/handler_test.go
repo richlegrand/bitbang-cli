@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,6 +127,34 @@ func TestDownloadIsSavedAsTheFileItIs(t *testing.T) {
 				t.Errorf("Content-Disposition = %s %v, want attachment with filename %q", disp, params, name)
 			}
 		})
+	}
+}
+
+// WebKit misnames a download from a service worker unless a plain filename
+// sits beside filename* (see contentDisposition). Names here never touch a
+// filesystem, so they can hold what Windows would refuse.
+func TestContentDispositionCarriesBothForms(t *testing.T) {
+	for _, name := range []string{
+		"caf\xc3\xa9.txt",
+		"caf\xc3\xa9's; v2 (1).txt", // ' and ; would end an unescaped filename*
+		"\xe6\x97\xa5\xe6\x9c\xac.pdf",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cd := contentDisposition(name)
+			if !strings.Contains(cd, "filename=") || !strings.Contains(cd, "filename*=UTF-8''") {
+				t.Fatalf("%q lacks one of the two forms", cd)
+			}
+			_, params, err := mime.ParseMediaType(cd)
+			if err != nil {
+				t.Fatalf("%q does not parse: %v", cd, err)
+			}
+			if params["filename"] != name {
+				t.Errorf("%q decodes to %q, want %q", cd, params["filename"], name)
+			}
+		})
+	}
+	if cd := contentDisposition("hello.txt"); strings.Contains(cd, "filename*") {
+		t.Errorf("an ASCII name needs only the plain form, got %q", cd)
 	}
 }
 
