@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -198,12 +201,62 @@ func makePINPrompt(suppliedPIN string) func(retry int) (string, error) {
 			return suppliedPIN, nil
 		}
 		fmt.Fprint(os.Stderr, "PIN: ")
-		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fd := int(os.Stdin.Fd())
+		unguard := guardTerminal(fd)
+		b, err := term.ReadPassword(fd)
+		unguard()
 		fmt.Fprintln(os.Stderr) // term.ReadPassword swallows the newline
 		if err != nil {
 			return "", err
 		}
 		return string(b), nil
+	}
+}
+
+// guardTerminal keeps a signal from leaving the terminal with echo off
+// while we are prompting for a PIN.
+//
+// term.ReadPassword clears ECHO and puts the old termios back from a
+// deferred call. A process killed by a signal never runs its defers, and
+// at the PIN prompt nothing has registered for SIGINT yet -- connect does
+// that later, around raw mode -- so Ctrl-C took the default disposition
+// and killed us inside read(2). The user got back a shell that no longer
+// echoed what they typed. ISIG is still on during the prompt, which is
+// what makes Ctrl-C a signal here rather than an input byte.
+//
+// Same arrangement as setupInteractive, for the same reason: the signal
+// path has to call os.Exit, which skips defers, so restoring has to
+// happen before it.
+//
+// The returned function stops the guard and must be called on every path
+// out of the prompt.
+func guardTerminal(fd int) func() {
+	oldState, err := term.GetState(fd)
+	if err != nil {
+		return func() {} // not a terminal, nothing to put back
+	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case sig := <-sigCh:
+			_ = term.Restore(fd, oldState)
+			fmt.Fprintln(os.Stderr) // finish the "PIN: " line
+			code := 130             // 128 + SIGINT, if we can't tell
+			if s, ok := sig.(syscall.Signal); ok {
+				code = 128 + int(s)
+			}
+			os.Exit(code)
+		case <-stop:
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			signal.Stop(sigCh)
+			close(stop)
+		})
 	}
 }
 
