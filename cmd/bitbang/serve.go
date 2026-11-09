@@ -111,6 +111,7 @@ type serveConfig struct {
 // all four.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	homeFlag(fs)
 	var cfg serveConfig
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)

@@ -107,6 +107,7 @@ func parseConnectOptions(args []string, output io.Writer) (connectOptions, error
 	var opts connectOptions
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	fs.SetOutput(output)
+	homeFlag(fs)
 	fs.BoolVar(&opts.verbose, "v", false, "Verbose logging")
 	fs.DurationVar(&opts.timeout, "timeout", 30*time.Second, "Dial timeout")
 	fs.StringVar(&opts.pin, "pin", "", "PIN (skips the interactive prompt)")

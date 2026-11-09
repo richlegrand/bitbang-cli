@@ -69,6 +69,7 @@ func linkFlags(name string, args []string) (string, []string) {
 
 func linkFlagsFull(name string, args []string) (string, string, []string) {
 	fs := flag.NewFlagSet("link "+name, flag.ExitOnError)
+	homeFlag(fs)
 	program := fs.String("program", "bitbang", "which listener's link table")
 	server := fs.String("server", defaultServer, "Signaling server hostname")
 	fs.Parse(reorderArgs(fs, args))
