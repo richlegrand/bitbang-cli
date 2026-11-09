@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,12 +16,14 @@ func TestHomeNoticeAlwaysNamesTheDirectory(t *testing.T) {
 	for _, k := range []string{"BITBANG_HOME", "STATE_DIRECTORY", "XDG_STATE_HOME"} {
 		t.Setenv(k, "")
 	}
+	// Both, because os.UserHomeDir reads USERPROFILE on Windows.
 	t.Setenv("HOME", "/home/u")
+	t.Setenv("USERPROFILE", "/home/u")
 	bbhome.Set("")
 	t.Cleanup(func() { bbhome.Set("") })
 
 	got := d.homeNotice()
-	if !strings.Contains(got, "/home/u/.bitbang") {
+	if !strings.Contains(got, filepath.Join("/home/u", ".bitbang")) {
 		t.Errorf("notice = %q, want the default directory named", got)
 	}
 	if strings.Contains(got, "HOME") {
@@ -29,7 +32,7 @@ func TestHomeNoticeAlwaysNamesTheDirectory(t *testing.T) {
 
 	t.Setenv("STATE_DIRECTORY", "/var/lib/bitbang")
 	got = d.homeNotice()
-	if !strings.Contains(got, "/var/lib/bitbang") {
+	if !strings.Contains(got, filepath.FromSlash("/var/lib/bitbang")) {
 		t.Errorf("notice = %q, want the directory in it", got)
 	}
 	if !strings.Contains(got, "STATE_DIRECTORY") {

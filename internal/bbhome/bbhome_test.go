@@ -24,7 +24,7 @@ func TestResolveOrder(t *testing.T) {
 				"BITBANG_HOME": "/env", "STATE_DIRECTORY": "/state",
 				"XDG_STATE_HOME": "/xdg", "HOME": "/home/u",
 			},
-			want: "/flag", wantSrc: SourceFlag,
+			want: filepath.FromSlash("/flag"), wantSrc: SourceFlag,
 		},
 		{
 			name: "BITBANG_HOME beats the rest",
@@ -32,7 +32,7 @@ func TestResolveOrder(t *testing.T) {
 				"BITBANG_HOME": "/env", "STATE_DIRECTORY": "/state",
 				"XDG_STATE_HOME": "/xdg", "HOME": "/home/u",
 			},
-			want: "/env", wantSrc: SourceEnv,
+			want: filepath.FromSlash("/env"), wantSrc: SourceEnv,
 		},
 		{
 			name: "systemd's STATE_DIRECTORY is used as given",
@@ -40,7 +40,7 @@ func TestResolveOrder(t *testing.T) {
 				"STATE_DIRECTORY": "/var/lib/bitbang",
 				"XDG_STATE_HOME":  "/xdg", "HOME": "/home/u",
 			},
-			want: "/var/lib/bitbang", wantSrc: SourceSystemd,
+			want: filepath.FromSlash("/var/lib/bitbang"), wantSrc: SourceSystemd,
 		},
 		{
 			name: "several state directories: the first is the unit's own",
@@ -48,7 +48,7 @@ func TestResolveOrder(t *testing.T) {
 				"STATE_DIRECTORY": "/var/lib/bitbang:/var/lib/other",
 				"HOME":            "/home/u",
 			},
-			want: "/var/lib/bitbang", wantSrc: SourceSystemd,
+			want: filepath.FromSlash("/var/lib/bitbang"), wantSrc: SourceSystemd,
 		},
 		{
 			name: "XDG_STATE_HOME is a parent, so we take a subdirectory",
@@ -63,7 +63,7 @@ func TestResolveOrder(t *testing.T) {
 		{
 			name: "a trailing slash does not survive",
 			env:  map[string]string{"BITBANG_HOME": "/env/dir/"},
-			want: "/env/dir", wantSrc: SourceEnv,
+			want: filepath.FromSlash("/env/dir"), wantSrc: SourceEnv,
 		},
 		{
 			name: "an empty STATE_DIRECTORY is skipped, not obeyed",
@@ -75,6 +75,11 @@ func TestResolveOrder(t *testing.T) {
 			clearEnv(t)
 			for k, v := range tc.env {
 				t.Setenv(k, v)
+			}
+			// os.UserHomeDir reads USERPROFILE on Windows, so a case that
+			// expects the home rung has to set both or it only tests unix.
+			if v, ok := tc.env["HOME"]; ok {
+				t.Setenv("USERPROFILE", v)
 			}
 			got, src, err := resolve(tc.override)
 			if err != nil {
@@ -109,6 +114,7 @@ func TestResolveRefusesRatherThanGuessing(t *testing.T) {
 func TestSetOverridesTheEnvironment(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("HOME", "/home/u")
+	t.Setenv("USERPROFILE", "/home/u")
 	t.Cleanup(func() { Set("") })
 
 	Set("/explicit")
@@ -116,8 +122,8 @@ func TestSetOverridesTheEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Root: %v", err)
 	}
-	if got != "/explicit" {
-		t.Errorf("Root = %q, want /explicit", got)
+	if want := filepath.FromSlash("/explicit"); got != want {
+		t.Errorf("Root = %q, want %q", got, want)
 	}
 }
 
@@ -130,11 +136,13 @@ func TestRootFollowsAChangedHome(t *testing.T) {
 	Set("")
 
 	t.Setenv("HOME", "/home/first")
+	t.Setenv("USERPROFILE", "/home/first")
 	first, err := Root()
 	if err != nil {
 		t.Fatalf("Root: %v", err)
 	}
 	t.Setenv("HOME", "/home/second")
+	t.Setenv("USERPROFILE", "/home/second")
 	second, err := Root()
 	if err != nil {
 		t.Fatalf("Root: %v", err)
