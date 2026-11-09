@@ -346,7 +346,11 @@ func startListener(cfg serveConfig) {
 	// per UID). Skipped for ephemeral identities (random UID, no collision).
 	// The OS releases the lock on exit; a same-process reconnect is unaffected.
 	if !cfg.ephemeral {
-		lock, holderPID, lockErr := acquireIdentityLock(identity.Dir(program))
+		idDir, dirErr := identity.Dir(program)
+		if dirErr != nil {
+			fail("serve: %v", dirErr)
+		}
+		lock, holderPID, lockErr := acquireIdentityLock(idDir)
 		if lockErr == errIdentityBusy {
 			who := ""
 			if holderPID > 0 {
