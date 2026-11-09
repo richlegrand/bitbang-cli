@@ -57,6 +57,18 @@ func Set(dir string) {
 	override = dir
 }
 
+// Source names the rung of the ladder an answer came from, so the listener
+// can say which one won. SourceHome is the default and the quiet case.
+type Source string
+
+const (
+	SourceFlag    Source = "-home"
+	SourceEnv     Source = "BITBANG_HOME"
+	SourceSystemd Source = "STATE_DIRECTORY"
+	SourceXDG     Source = "XDG_STATE_HOME"
+	SourceHome    Source = "HOME"
+)
+
 // Root returns the directory BitBang keeps its files in.
 //
 // Resolved on every call rather than cached. The cost is a few getenv calls;
@@ -66,20 +78,28 @@ func Set(dir string) {
 // test after it -- and one of them went looking in the developer's real
 // device table instead of its own.
 func Root() (string, error) {
+	dir, _, err := Resolve()
+	return dir, err
+}
+
+// Resolve is Root plus where the answer came from. With six ways to choose
+// the directory, a listener that says which one it used saves the next person
+// working out why its files are not where they expected.
+func Resolve() (string, Source, error) {
 	mu.Lock()
 	o := override
 	mu.Unlock()
 	return resolve(o)
 }
 
-// resolve is Root's body, split out so it can be tested without the
-// package-level memo.
-func resolve(override string) (string, error) {
+// resolve is Resolve's body, split out so a test can pass an override
+// without touching the package-level one.
+func resolve(override string) (string, Source, error) {
 	if override != "" {
-		return filepath.Clean(override), nil
+		return filepath.Clean(override), SourceFlag, nil
 	}
 	if v := os.Getenv("BITBANG_HOME"); v != "" {
-		return filepath.Clean(v), nil
+		return filepath.Clean(v), SourceEnv, nil
 	}
 	// systemd allows several state directories, colon-separated, in which
 	// case the first is the one the unit asked for.
@@ -88,16 +108,16 @@ func resolve(override string) (string, error) {
 			v = v[:i]
 		}
 		if v != "" {
-			return filepath.Clean(v), nil
+			return filepath.Clean(v), SourceSystemd, nil
 		}
 	}
 	// XDG_STATE_HOME is a parent shared with other programs, so we take a
 	// subdirectory of it. Undotted, because it is not a dotfile location.
 	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
-		return filepath.Join(filepath.Clean(v), "bitbang"), nil
+		return filepath.Join(filepath.Clean(v), "bitbang"), SourceXDG, nil
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".bitbang"), nil
+		return filepath.Join(home, ".bitbang"), SourceHome, nil
 	}
-	return "", ErrNoHome
+	return "", "", ErrNoHome
 }

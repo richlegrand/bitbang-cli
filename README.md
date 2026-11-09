@@ -197,6 +197,60 @@ and the holder is told why, rather than going quiet. And an expired code is
 retired rather than paused -- renewing an entry mints a new one, so the URL you
 already sent stays dead.
 
+### Where BitBang keeps its files
+
+Everything BitBang stores about itself lives in one directory: the identity
+keypair that fixes your URL, the link table, the saved-device table `connect`
+and `cp` read, and share state. By default that's `~/.bitbang`.
+
+A service often can't use `~`. `-home` sets the directory, and `BITBANG_HOME`
+does the same without repeating the flag on every command:
+
+```
+bitbang serve shell -home /var/lib/bitbang
+BITBANG_HOME=/var/lib/bitbang bitbang link ls
+```
+
+The flag is on every command rather than just `serve`, because the directory
+isn't serve's -- forgetting it once on `bitbang link` would edit a different
+table.
+
+The full order, first match wins:
+
+| Set | Directory used |
+|---|---|
+| `-home <dir>` | exactly that |
+| `$BITBANG_HOME` | exactly that |
+| `$STATE_DIRECTORY` | exactly that -- systemd sets it from `StateDirectory=`, so a unit needs nothing else |
+| `$XDG_STATE_HOME` | `$XDG_STATE_HOME/bitbang` |
+| `$HOME` | `$HOME/.bitbang` |
+| none of them | nothing: BitBang stops and says so |
+
+The first three name the directory itself; the last two name a parent it hangs
+off.
+
+That last row matters on a box where the service user has no home. Earlier
+versions fell back to the working directory, so a listener started without
+`HOME` wrote its keypair wherever it happened to start -- `/` for an init
+script. It now refuses rather than putting a private key somewhere nobody
+chose.
+
+The listener names the directory at startup, so you never have to work out
+which of these won:
+
+```
+Home: /home/you/.bitbang
+Home: /var/lib/bitbang (STATE_DIRECTORY)
+```
+
+So a systemd unit needs no BitBang-specific configuration for this at all:
+
+```ini
+[Service]
+StateDirectory=bitbang
+ExecStart=/usr/local/bin/bitbang serve shell
+```
+
 ### Pairing with a 6-digit code
 
 When you can't paste a URL or scan a QR code, such as when you're on the phone, or within yelling distance, `bitbang serve` also prints a short **pairing code**. The other party opens `bitba.ng/<code>` (or runs `bitbang connect <code>`), their screen shows a second 6-digit number, and they read *that* one back to you. You type it in to approve. A machine-in-the-middle can't make the two numbers match, and pairing saves the device connection credentials for next time, e.g. `bitbang connect nas1`.  If you know [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole), the shape is similar -- a spoken code that securely introduces two machines.

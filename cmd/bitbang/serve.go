@@ -431,6 +431,7 @@ func startListener(cfg serveConfig) {
 
 	out := newDisplay(url, cfg.noqr)
 	out.ready()
+	fmt.Print(out.homeNotice())
 	printSharingBlock(os.Stdout, cfg, share, out.isTTY)
 
 	if notice, warning := exposureNotice(cfg, pinAuth.Required(), out.bold, out.reset); notice != "" {

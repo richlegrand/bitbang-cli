@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/term"
+
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 )
 
 // display is the listener's startup presentation: the logo, the QR code,
@@ -112,6 +114,28 @@ func (b display) readyBlock() string {
 	}
 	fmt.Fprintf(&out, "URL: %s%s%s\n", b.bold, b.url, b.reset)
 	return out.String()
+}
+
+// homeNotice is the one line saying which directory the listener keeps its
+// files in: the identity, the link table, the device table, share state.
+//
+// Always printed, including for the default -- somebody running this for the
+// first time has the same question as somebody who configured it, and #41
+// started with an operator not knowing where his files had gone. It costs one
+// line once: this is called at startup and deliberately not from ready(),
+// which reprints on every reconnect, so it does not undo #34.
+//
+// The source is named only when it is not the plain home directory. "(HOME)"
+// after a path under ~ says nothing the path did not.
+func (b display) homeNotice() string {
+	dir, src, err := bbhome.Resolve()
+	if err != nil {
+		return ""
+	}
+	if src == bbhome.SourceHome {
+		return fmt.Sprintf("Home: %s%s%s\n", b.bold, dir, b.reset)
+	}
+	return fmt.Sprintf("Home: %s%s%s (%s)\n", b.bold, dir, b.reset, src)
 }
 
 // printPairCode renders the issued pairing code on its own line —

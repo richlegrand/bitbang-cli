@@ -15,6 +15,7 @@ func TestResolveOrder(t *testing.T) {
 		override string
 		env      map[string]string
 		want     string
+		wantSrc  Source
 	}{
 		{
 			name:     "the flag beats everything",
@@ -23,7 +24,7 @@ func TestResolveOrder(t *testing.T) {
 				"BITBANG_HOME": "/env", "STATE_DIRECTORY": "/state",
 				"XDG_STATE_HOME": "/xdg", "HOME": "/home/u",
 			},
-			want: "/flag",
+			want: "/flag", wantSrc: SourceFlag,
 		},
 		{
 			name: "BITBANG_HOME beats the rest",
@@ -31,7 +32,7 @@ func TestResolveOrder(t *testing.T) {
 				"BITBANG_HOME": "/env", "STATE_DIRECTORY": "/state",
 				"XDG_STATE_HOME": "/xdg", "HOME": "/home/u",
 			},
-			want: "/env",
+			want: "/env", wantSrc: SourceEnv,
 		},
 		{
 			name: "systemd's STATE_DIRECTORY is used as given",
@@ -39,7 +40,7 @@ func TestResolveOrder(t *testing.T) {
 				"STATE_DIRECTORY": "/var/lib/bitbang",
 				"XDG_STATE_HOME":  "/xdg", "HOME": "/home/u",
 			},
-			want: "/var/lib/bitbang",
+			want: "/var/lib/bitbang", wantSrc: SourceSystemd,
 		},
 		{
 			name: "several state directories: the first is the unit's own",
@@ -47,27 +48,27 @@ func TestResolveOrder(t *testing.T) {
 				"STATE_DIRECTORY": "/var/lib/bitbang:/var/lib/other",
 				"HOME":            "/home/u",
 			},
-			want: "/var/lib/bitbang",
+			want: "/var/lib/bitbang", wantSrc: SourceSystemd,
 		},
 		{
 			name: "XDG_STATE_HOME is a parent, so we take a subdirectory",
 			env:  map[string]string{"XDG_STATE_HOME": "/xdg/state", "HOME": "/home/u"},
-			want: filepath.Join("/xdg/state", "bitbang"),
+			want: filepath.Join("/xdg/state", "bitbang"), wantSrc: SourceXDG,
 		},
 		{
 			name: "HOME is a parent too, and keeps the dot",
 			env:  map[string]string{"HOME": "/home/u"},
-			want: filepath.Join("/home/u", ".bitbang"),
+			want: filepath.Join("/home/u", ".bitbang"), wantSrc: SourceHome,
 		},
 		{
 			name: "a trailing slash does not survive",
 			env:  map[string]string{"BITBANG_HOME": "/env/dir/"},
-			want: "/env/dir",
+			want: "/env/dir", wantSrc: SourceEnv,
 		},
 		{
 			name: "an empty STATE_DIRECTORY is skipped, not obeyed",
 			env:  map[string]string{"STATE_DIRECTORY": "", "HOME": "/home/u"},
-			want: filepath.Join("/home/u", ".bitbang"),
+			want: filepath.Join("/home/u", ".bitbang"), wantSrc: SourceHome,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,12 +76,15 @@ func TestResolveOrder(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			got, err := resolve(tc.override)
+			got, src, err := resolve(tc.override)
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
 			if got != tc.want {
 				t.Errorf("resolve = %q, want %q", got, tc.want)
+			}
+			if src != tc.wantSrc {
+				t.Errorf("source = %q, want %q", src, tc.wantSrc)
 			}
 		})
 	}
@@ -92,7 +96,7 @@ func TestResolveOrder(t *testing.T) {
 // to refuse instead.
 func TestResolveRefusesRatherThanGuessing(t *testing.T) {
 	clearEnv(t)
-	got, err := resolve("")
+	got, _, err := resolve("")
 	if !errors.Is(err, ErrNoHome) {
 		t.Fatalf("resolve err = %v, want ErrNoHome", err)
 	}

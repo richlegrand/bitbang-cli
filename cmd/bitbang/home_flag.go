@@ -19,9 +19,11 @@ import (
 // any command body can ask bbhome where to look. There is nothing to thread
 // through and no order to get wrong.
 func homeFlag(fs *flag.FlagSet) {
+	// The backquoted word is what flag prints as the operand name, so this
+	// renders as `-home directory` rather than Func's default `-home value`.
 	fs.Func("home",
-		"Directory for BitBang's own files -- identity, links, devices, shares "+
-			"(default ~/.bitbang; also BITBANG_HOME)",
+		"`directory` for BitBang's own files -- identity, links, devices, "+
+			"shares (default ~/.bitbang; also BITBANG_HOME)",
 		func(v string) error {
 			if v == "" {
 				return errors.New("needs a directory")
