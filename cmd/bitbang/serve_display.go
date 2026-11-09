@@ -45,12 +45,11 @@ func newDisplay(url string, noqr bool) display {
 // screen recording. On a narrow TTY it falls back to the banner stacked
 // above the QR.
 //
-// Off a terminal there is no banner at all, and no QR: only the version line
-// and the URL, with the access code cut off the end of it. The logo is for a
-// person looking at a screen, and this block is reprinted on every reconnect
-// -- so a listener running under systemd or in a container was putting six
-// lines of art into its journal each time, which is what #34 was about, and
-// a working credential each time, which is what #49 was about.
+// Off a terminal there is no banner at all, only the version line and the
+// URL. The logo is for a person looking at a screen, and this block is
+// reprinted on every reconnect -- so a listener running under systemd or in
+// a container was putting six lines of art into its journal each time,
+// which is what #34 was about.
 func (b display) ready() {
 	fmt.Print(b.readyBlock())
 }
@@ -59,21 +58,9 @@ func (b display) ready() {
 // can be asserted without capturing stdout.
 func (b display) readyBlock() string {
 	var out strings.Builder
-	// Off a terminal the URL loses its fragment, and the QR goes with it.
-	// Everything after `#` is the access code, and a fragment is never sent
-	// in an HTTP request -- which is the whole reason the code lives there,
-	// and then the listener wrote it into a journal systemd is happy to ship
-	// somewhere else (#49). The QR encodes the same URL, so dropping only the
-	// text would move the credential into pixels rather than remove it, and a
-	// QR is for a camera pointed at a screen in any case.
-	url := b.url
 	qr := ""
-	if b.isTTY {
-		if !b.noqr {
-			qr = smallQR(url)
-		}
-	} else {
-		url = withoutFragment(url)
+	if !b.noqr {
+		qr = smallQR(b.url)
 	}
 	var bannerLines []string
 	if b.isTTY {
@@ -123,18 +110,8 @@ func (b display) readyBlock() string {
 			fmt.Fprint(&out, qr)
 		}
 	}
-	fmt.Fprintf(&out, "URL: %s%s%s\n", b.bold, url, b.reset)
+	fmt.Fprintf(&out, "URL: %s%s%s\n", b.bold, b.url, b.reset)
 	return out.String()
-}
-
-// withoutFragment cuts the `#...` off a URL. Not net/url, because this is a
-// URL we composed ourselves: a parse-and-reprint could normalize something
-// and hand the operator a line that differs from the one a terminal shows.
-func withoutFragment(u string) string {
-	if i := strings.IndexByte(u, '#'); i >= 0 {
-		return u[:i]
-	}
-	return u
 }
 
 // printPairCode renders the issued pairing code on its own line —
