@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -256,7 +257,11 @@ func (p *Peer) HandleOffer(msg Message) (string, string, error) {
 	p.verifyNonce = nonce
 	p.mu.Unlock()
 
-	encrypted, err := encryptVerifyPayload(p.devicePubkey, fp, nonce, p.code)
+	// The device's challenge, if it sent one: the payload then answers it,
+	// and is good for this connection only. An older device sends none and
+	// gets the older payload.
+	challenge, _ := msg["challenge"].(string)
+	encrypted, err := encryptVerifyPayload(p.devicePubkey, fp, nonce, p.code, challenge)
 	if err != nil {
 		return "", "", fmt.Errorf("encrypt verify payload: %w", err)
 	}
@@ -348,18 +353,44 @@ func uidFromPubkeyDER(der []byte) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:16])
 }
 
-// encryptVerifyPayload RSA-OAEP-encrypts {fingerprint, nonce, code} with
-// the device's public key. JSON shape and field names match exactly what
-// peer/connection.go (HandleAnswer) expects to decrypt.
-func encryptVerifyPayload(pubkey *rsa.PublicKey, fingerprint string, nonce []byte, code string) (string, error) {
-	payload := struct {
-		Fingerprint string `json:"fingerprint"`
-		Nonce       string `json:"nonce"`
-		Code        string `json:"code,omitempty"`
-	}{
-		Fingerprint: fingerprint,
-		Nonce:       base64.StdEncoding.EncodeToString(nonce),
-		Code:        code,
+// encryptVerifyPayload RSA-OAEP-encrypts the verify payload with the device's
+// public key. JSON shape and field names match exactly what
+// peer/connection.go (HandleAnswer) expects to decrypt, and what bitba.ng's
+// page sends (encryptVerifyPayload in bootstrap.js):
+//
+//	{fp, nonce, code, challenge}  when the offer carried a challenge. fp is
+//	                              the fingerprint's 32 bytes in base64:
+//	                              RSA-2048 OAEP takes at most 190 bytes, and
+//	                              the SDP spelling plus a challenge is 208.
+//	{fingerprint, nonce, code}    when it didn't (an older device).
+func encryptVerifyPayload(pubkey *rsa.PublicKey, fingerprint string, nonce []byte, code, challenge string) (string, error) {
+	var payload any
+	if challenge != "" {
+		fp, err := hex.DecodeString(strings.ReplaceAll(fingerprint, ":", ""))
+		if err != nil || len(fp) != sha256.Size {
+			return "", fmt.Errorf("fingerprint %q is not a sha-256 one", fingerprint)
+		}
+		payload = struct {
+			Fp        string `json:"fp"`
+			Nonce     string `json:"nonce"`
+			Code      string `json:"code,omitempty"`
+			Challenge string `json:"challenge"`
+		}{
+			Fp:        base64.StdEncoding.EncodeToString(fp),
+			Nonce:     base64.StdEncoding.EncodeToString(nonce),
+			Code:      code,
+			Challenge: challenge,
+		}
+	} else {
+		payload = struct {
+			Fingerprint string `json:"fingerprint"`
+			Nonce       string `json:"nonce"`
+			Code        string `json:"code,omitempty"`
+		}{
+			Fingerprint: fingerprint,
+			Nonce:       base64.StdEncoding.EncodeToString(nonce),
+			Code:        code,
+		}
 	}
 	plain, err := json.Marshal(payload)
 	if err != nil {
