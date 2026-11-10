@@ -1,12 +1,13 @@
 """Test redirect handling through the proxy."""
 
+from .frames import device_frame
 
 def test_same_host_redirect(proxy_url, browser_context):
     """Same-host 302 redirect is passed to browser and resolved correctly."""
     page = browser_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
 
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=15000)
 
     # /redirect-test returns 302 -> /

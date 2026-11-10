@@ -1,11 +1,14 @@
 """Browser-to-shell input regression test.
 
 This intentionally exercises the complete browser path: xterm.js, the injected
-WebSocket shim, bootstrap.js, WebRTC/SWSP, and the listener's PTY implementation.
+WebSocket shim, the connection frame (connection.js), WebRTC/SWSP, and the
+listener's PTY implementation.
 """
 
 import pytest
 from playwright.sync_api import expect
+
+from .frames import device_frame
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +28,7 @@ def test_browser_keystrokes_reach_shell(shell_url, playwright):
     page = browser.new_page()
     try:
         page.goto(shell_url, wait_until="domcontentloaded", timeout=30_000)
-        terminal = page.frame_locator("#device-frame").locator("#terminal")
+        terminal = device_frame(page).locator("#terminal")
         textarea = terminal.locator("textarea.xterm-helper-textarea")
         expect(textarea).to_be_attached(timeout=30_000)
         textarea.focus()
@@ -51,7 +54,7 @@ def test_terminal_clears_the_cap_bar(listener, test_server, browser_context,
     l = listener('serve', '-server', test_server, home=home)
     page = browser_context.new_page()
     page.goto(l.url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#bb-cap-bar').wait_for(timeout=20000)
     frame.locator('#terminal').wait_for(timeout=20000)
 

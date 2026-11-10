@@ -14,6 +14,8 @@ the fix is deployed -- which is the point of having them.
 import json
 import os
 
+from .frames import device_frame
+
 
 def test_firefox_really_lacks_request_streams(proxy_url, firefox_context):
     """The premise of this module, asserted rather than assumed.
@@ -24,7 +26,7 @@ def test_firefox_really_lacks_request_streams(proxy_url, firefox_context):
     """
     page = firefox_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=30000)
 
     streams = frame.locator('body').evaluate(
@@ -41,7 +43,7 @@ def test_json_post_body_arrives(proxy_url, firefox_context):
     answered 400, which reads as bad credentials rather than a lost body."""
     page = firefox_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=30000)
 
     result = frame.locator('body').evaluate('''() => {
@@ -60,7 +62,7 @@ def test_binary_post_body_arrives_byte_exact(proxy_url, firefox_context):
     rather than bytes would truncate exactly here."""
     page = firefox_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=30000)
 
     payload = {'pw': 'sécret-🔑-' + 'x' * 500}
@@ -87,7 +89,7 @@ def test_file_upload_is_not_silently_empty(listener, test_server, firefox_contex
 
     page = firefox_context.new_page()
     page.goto(url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=30000)
 
     content = 'upload-through-firefox-' + 'y' * 300

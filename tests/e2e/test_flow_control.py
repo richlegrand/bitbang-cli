@@ -26,6 +26,8 @@ import urllib.request
 
 import pytest
 
+from .frames import device_frame
+
 TARGET = 'http://localhost:18080'
 
 # How far ahead of a stopped reader the target may get. Not small: Chromium
@@ -45,13 +47,14 @@ def _stats(stream_id):
 
 def _open(context, proxy_url):
     """The proxied page, and the SWSP version its session negotiated. The
-    page's console is kept on page.bb_console: bootstrap.js logs every 50 MB
-    a response brings in, which says how far a stream got past the device."""
+    page's console is kept on page.bb_console: the connection frame
+    (connection.js; bootstrap.js in the older runtime) logs every 50 MB a
+    response brings in, which says how far a stream got past the device."""
     page = context.new_page()
     page.bb_console = []
     page.on('console', lambda m: page.bb_console.append(m.text))
     page.goto(proxy_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=30000)
     ready = [v for t in page.bb_console for v in re.findall(r'Device ready \(SWSP v(\d+)\)', t)]
     version = int(ready[-1]) if ready else 0
@@ -59,10 +62,10 @@ def _open(context, proxy_url):
 
 
 def _arrived(page):
-    """The last 'Download: N MB' bootstrap.js logged, or a note that it never
-    logged one (fewer than 50 MB reached it)."""
+    """The last 'Download: N MB' the connection frame logged, or a note that it
+    never logged one (fewer than 50 MB reached it)."""
     lines = [t for t in page.bb_console if t.startswith('Download:')]
-    return lines[-1] if lines else 'under 50 MB reached bootstrap.js'
+    return lines[-1] if lines else 'under 50 MB reached the connection frame'
 
 
 def _need_v4(version):

@@ -1,9 +1,10 @@
 """A response that outlives the service worker's idle timeout.
 
 Every proxied response is streamed by the service worker, but its bytes reach
-the worker from bootstrap.js over a MessagePort, and port traffic is not an
-event: as far as the browser can tell, a worker relaying a download is idle.
-bootstrap.js now sends the worker a keepalive message while a request is open.
+the worker from the page holding the connection (connection.js; bootstrap.js
+in the older runtime) over a MessagePort, and port traffic is not an event: as
+far as the browser can tell, a worker relaying a download is idle. That page
+now sends the worker a keepalive message while a request is open.
 
 The response here goes quiet for 45 seconds, so nothing at all reaches the
 worker for longer than an idle timeout. That is the condition the keepalive's
@@ -16,13 +17,15 @@ in 2017 no longer applies to a streaming worker. Firefox stopped it inside 45
 s, and the response did not fail -- it ended, short, as if complete. That is
 the case these tests exist for.
 
-Runs against the deployed sw.js and bootstrap.js, so the Firefox test fails
-against a server without the keepalive.
+Runs against the deployed browser runtime, so the Firefox test fails against a
+server without the keepalive.
 """
 
 import os
 
 import pytest
+
+from .frames import device_frame
 
 
 GAP_SECONDS = 45
@@ -34,7 +37,7 @@ LONG_GAP_SECONDS = int(os.environ.get('BITBANG_LONG_GAP', '0'))
 def _survives_gap(context, proxy_url, gap):
     page = context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=30000)
 
     body = frame.locator('body').evaluate(

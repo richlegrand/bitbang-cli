@@ -15,6 +15,8 @@ import os
 import pytest
 from playwright.sync_api import expect
 
+from .frames import connection_frame, device_frame
+
 
 @pytest.fixture(scope='module')
 def scoped(listener, test_server, target_app, tmp_path_factory):
@@ -43,7 +45,7 @@ def test_scoped_link_renders_its_own_ui(scoped, browser_context):
     _, urls = scoped
     page = browser_context.new_page()
     page.goto(urls['contractor'], wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=20000)
     assert 'notes.txt' in frame.locator('body').inner_text()
     page.close()
@@ -56,7 +58,7 @@ def test_scoped_link_cannot_reach_a_lan_host(scoped, browser_context, target_app
     _, urls = scoped
     page = browser_context.new_page()
     page.goto(f"{urls['contractor']}/{target_app}/", wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=20000)
     body = frame.locator('body').inner_text()
     assert 'Hello from Proxy Target' not in body, (
@@ -77,7 +79,7 @@ def test_unscoped_link_can_reach_a_lan_host(scoped, browser_context, target_app)
     _, urls = scoped
     page = browser_context.new_page()
     page.goto(f"{urls['owner']}/{target_app}/", wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     heading = frame.locator('#heading')
     heading.wait_for(timeout=20000)
     assert heading.text_content() == 'Hello from Proxy Target'
@@ -95,7 +97,8 @@ def test_revoking_a_link_closes_the_browser_session(pty_listener, test_server,
 
     The saying-why half is easy to get wrong invisibly. The device iframe
     is position:fixed, full viewport and opaque, so a message printed into
-    #connection-ui underneath it cannot be seen; and the channel closing
+    #connection-ui underneath it (the connection frame's, which holds the
+    session) cannot be seen; and the channel closing
     behind the message routes into the reconnect loop, which would leave
     "Reconnecting..." on screen for a session that ended on purpose. So
     assert what the user actually ends up looking at.
@@ -109,14 +112,14 @@ def test_revoking_a_link_closes_the_browser_session(pty_listener, test_server,
 
     page = browser_context.new_page()
     page.goto(l.link_url('contractor'), wait_until='networkidle')
-    page.frame_locator('#device-frame').locator('body').wait_for(timeout=20000)
+    device_frame(page).locator('body').wait_for(timeout=20000)
 
     l.open_console()
     l.command('rm contractor', 'removed "contractor"')
 
-    ui = page.locator('#connection-ui')
+    ui = connection_frame(page).locator('#connection-ui')
     expect(ui).to_contain_text('this link was revoked', timeout=30000)
-    expect(page.locator('#bb-reload-btn')).to_be_visible()
+    expect(connection_frame(page).locator('#bb-reload-btn')).to_be_visible()
 
 
 # A forward-only link authorizes fine and has nothing to render: TCP
@@ -131,7 +134,7 @@ def test_forward_only_link_explains_itself(listener, test_server,
 
     page = browser_context.new_page()
     page.goto(urls['fwdonly'], wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=20000)
     text = frame.locator('body').inner_text()
 
@@ -169,7 +172,7 @@ def test_multi_cap_link_without_shell_gets_the_cap_bar(listener, test_server,
 
     page = browser_context.new_page()
     page.goto(urls['filesproxy'], wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#bb-cap-bar').wait_for(timeout=20000)
 
     items = frame.locator('#bb-cap-bar nav a')
@@ -215,7 +218,7 @@ def test_single_cap_link_has_no_cap_bar(listener, test_server, browser_context,
 
     page = browser_context.new_page()
     page.goto(urls['filesonly'], wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator("text=notes.txt").wait_for(timeout=20000)
     assert frame.locator('#bb-cap-bar').count() == 0
     assert frame.locator('body').get_attribute('class') in (None, '')
@@ -235,7 +238,7 @@ def test_proxy_page_clears_the_caret_without_dropping(listener, test_server,
 
     page = browser_context.new_page()
     page.goto(urls['filesproxy'].rstrip('/') + '/proxy/', wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('label[for="target"]').wait_for(timeout=20000)
 
     bar = frame.locator('#bb-cap-bar').bounding_box()
@@ -264,7 +267,7 @@ def test_serve_forward_listener_has_no_browser_page(listener, test_server,
 
     page = browser_context.new_page()
     page.goto(l.url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=20000)
     text = frame.locator('body').inner_text()
     assert '404' not in text, f'still a bare 404:\n{text[:200]}'
