@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 )
 
 // AuthDomain is the domain separation tag prepended to challenge nonces before
@@ -75,7 +77,10 @@ func Load(programName string, ephemeral bool) (*Identity, error) {
 		return generate()
 	}
 
-	dir := identityDir(programName)
+	dir, err := identityDir(programName)
+	if err != nil {
+		return nil, err
+	}
 	path := filepath.Join(dir, "identity.pem")
 
 	// Try to load existing
@@ -244,15 +249,20 @@ func toPEM(key *rsa.PrivateKey, code string) ([]byte, error) {
 	return out, nil
 }
 
-func identityDir(programName string) string {
-	home, err := os.UserHomeDir()
+func identityDir(programName string) (string, error) {
+	root, err := bbhome.Root()
 	if err != nil {
-		home = "."
+		return "", err
 	}
-	return filepath.Join(home, ".bitbang", programName)
+	return filepath.Join(root, programName), nil
 }
 
 // Dir returns the on-disk directory for a program's identity
-// (~/.bitbang/<programName>/). Exported so callers can place sibling files
-// (e.g. a per-identity process lock) next to the keypair.
-func Dir(programName string) string { return identityDir(programName) }
+// (<bitbang home>/<programName>/, by default ~/.bitbang/<programName>/).
+// Exported so callers can place sibling files (e.g. a per-identity process
+// lock) next to the keypair.
+//
+// It returns an error rather than guessing. This used to fall back to "." when
+// there was no home directory, which meant a service started without HOME
+// wrote its keypair relative to its working directory -- see bbhome.
+func Dir(programName string) (string, error) { return identityDir(programName) }

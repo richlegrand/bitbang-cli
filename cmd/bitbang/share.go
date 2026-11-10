@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 	"github.com/richlegrand/bitbang-cli/internal/share"
 )
 
@@ -113,6 +114,7 @@ func dispatchShare(args []string) {
 
 func parseShareFlags(name string, args []string) shareConfig {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	homeFlag(fs)
 	var cfg shareConfig
 	registerShareFlags(fs, &cfg)
 	fs.Parse(reorderArgs(fs, args))
@@ -773,6 +775,13 @@ func startShare(st *shareTarget) {
 		"-ttl-seconds", strconv.Itoa(int(ttl / time.Second)),
 		"-max-viewers", strconv.Itoa(st.cfg.maxViewers),
 	}
+	// The worker runs in a tmux pane, so its environment is the tmux
+	// server's rather than ours -- BITBANG_HOME would not reach it, and even
+	// HOME can differ. Pass the directory we resolved so the worker loads the
+	// same identity this process did, whatever the pane's environment says.
+	if root, rootErr := bbhome.Root(); rootErr == nil {
+		workerArgv = append(workerArgv, "-home", root)
+	}
 	if st.target.Socket != "" {
 		workerArgv = append(workerArgv, "-socket", st.target.Socket)
 	}
@@ -1053,6 +1062,7 @@ func printShareURLs(s *share.State) {
 // internal/share owns the listener lifecycle.
 func runShareWorker(args []string) {
 	fs := flag.NewFlagSet("share "+workerSubcommand, flag.ExitOnError)
+	homeFlag(fs)
 	var (
 		sessionID   = fs.String("session", "", "target tmux session id")
 		sessionName = fs.String("session-name", "", "target session display name")

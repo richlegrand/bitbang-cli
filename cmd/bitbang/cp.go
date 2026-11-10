@@ -37,6 +37,7 @@ import (
 // (the "://" of the scheme).
 func runCp(args []string) {
 	fs := flag.NewFlagSet("cp", flag.ExitOnError)
+	homeFlag(fs)
 	verbose := fs.Bool("v", false, "Verbose logging")
 	timeout := fs.Duration("timeout", 30*time.Second, "Dial timeout")
 	pin := fs.String("pin", "", "PIN (skips the interactive prompt)")

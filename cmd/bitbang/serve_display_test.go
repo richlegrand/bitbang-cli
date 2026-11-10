@@ -1,9 +1,44 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 )
+
+// The directory is always named, default or not -- a first-time user has the
+// same question as an operator who configured it. Only the reason is
+// conditional: "(HOME)" after a path under ~ adds nothing.
+func TestHomeNoticeAlwaysNamesTheDirectory(t *testing.T) {
+	d := display{url: "https://bitba.ng/UID#CODE", isTTY: false, width: 100}
+	for _, k := range []string{"BITBANG_HOME", "STATE_DIRECTORY", "XDG_STATE_HOME"} {
+		t.Setenv(k, "")
+	}
+	// Both, because os.UserHomeDir reads USERPROFILE on Windows.
+	t.Setenv("HOME", "/home/u")
+	t.Setenv("USERPROFILE", "/home/u")
+	bbhome.Set("")
+	t.Cleanup(func() { bbhome.Set("") })
+
+	got := d.homeNotice()
+	if !strings.Contains(got, filepath.Join("/home/u", ".bitbang")) {
+		t.Errorf("notice = %q, want the default directory named", got)
+	}
+	if strings.Contains(got, "HOME") {
+		t.Errorf("notice = %q, want no source for the plain default", got)
+	}
+
+	t.Setenv("STATE_DIRECTORY", "/var/lib/bitbang")
+	got = d.homeNotice()
+	if !strings.Contains(got, filepath.FromSlash("/var/lib/bitbang")) {
+		t.Errorf("notice = %q, want the directory in it", got)
+	}
+	if !strings.Contains(got, "STATE_DIRECTORY") {
+		t.Errorf("notice = %q, want the source that won in it", got)
+	}
+}
 
 // -noqr leaves the banner and the URL and drops the QR block. A listener
 // run as a daemon reprints this on every reconnect, so eighteen lines of

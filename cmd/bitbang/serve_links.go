@@ -49,7 +49,11 @@ func newLinkState(program string, offered grant.Spec, code string, ephemeral boo
 		readOnly: ephemeral,
 	}
 	if !ephemeral {
-		ls.path = filepath.Join(identity.Dir(program), links.Filename)
+		dir, err := identity.Dir(program)
+		if err != nil {
+			return nil, err
+		}
+		ls.path = filepath.Join(dir, links.Filename)
 	}
 	if err := ls.reload(); err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 	"github.com/richlegrand/bitbang-cli/internal/grant"
 	"github.com/richlegrand/bitbang-cli/internal/identity"
 	"github.com/richlegrand/bitbang-cli/internal/links"
@@ -68,14 +69,22 @@ func linkFlags(name string, args []string) (string, []string) {
 
 func linkFlagsFull(name string, args []string) (string, string, []string) {
 	fs := flag.NewFlagSet("link "+name, flag.ExitOnError)
+	homeFlag(fs)
 	program := fs.String("program", "bitbang", "which listener's link table")
 	server := fs.String("server", defaultServer, "Signaling server hostname")
 	fs.Parse(reorderArgs(fs, args))
 	return *program, *server, fs.Args()
 }
 
+// linkPath exits rather than returning an error. Every `link` subcommand
+// needs this path, so a home directory we cannot resolve ends all of them,
+// and bbhome's message already says what to do about it.
 func linkPath(program string) string {
-	return filepath.Join(identity.Dir(program), links.Filename)
+	dir, err := identity.Dir(program)
+	if err != nil {
+		fail("bitbang link: %v", err)
+	}
+	return filepath.Join(dir, links.Filename)
 }
 
 // loadForEdit reads the table for a command that will write it back. The
@@ -264,7 +273,11 @@ func runLinkQR(args []string) {
 	}
 	label := rest[0]
 
-	idPath := filepath.Join(identity.Dir(program), "identity.pem")
+	idDir, err := identity.Dir(program)
+	if err != nil {
+		fail("bitbang link: %v", err)
+	}
+	idPath := filepath.Join(idDir, "identity.pem")
 	if _, err := os.Stat(idPath); err != nil {
 		fmt.Fprintf(os.Stderr, "No identity for program %q yet; run the listener once first.\n", program)
 		os.Exit(1)
@@ -304,7 +317,10 @@ func runLinkQR(args []string) {
 // programsWithTables lists the programs that have a links.json, so a
 // user who guessed the wrong --program can see the real names.
 func programsWithTables() []string {
-	root := filepath.Dir(identity.Dir("bitbang"))
+	root, err := bbhome.Root()
+	if err != nil {
+		return nil
+	}
 	dirs, err := os.ReadDir(root)
 	if err != nil {
 		return nil

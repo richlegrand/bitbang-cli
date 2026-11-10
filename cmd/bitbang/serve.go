@@ -111,6 +111,7 @@ type serveConfig struct {
 // all four.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	homeFlag(fs)
 	var cfg serveConfig
 	registerSharedFlags(fs, &cfg)
 	registerShellFlags(fs, &cfg)
@@ -346,7 +347,11 @@ func startListener(cfg serveConfig) {
 	// per UID). Skipped for ephemeral identities (random UID, no collision).
 	// The OS releases the lock on exit; a same-process reconnect is unaffected.
 	if !cfg.ephemeral {
-		lock, holderPID, lockErr := acquireIdentityLock(identity.Dir(program))
+		idDir, dirErr := identity.Dir(program)
+		if dirErr != nil {
+			fail("serve: %v", dirErr)
+		}
+		lock, holderPID, lockErr := acquireIdentityLock(idDir)
 		if lockErr == errIdentityBusy {
 			who := ""
 			if holderPID > 0 {
@@ -426,6 +431,7 @@ func startListener(cfg serveConfig) {
 
 	out := newDisplay(url, cfg.noqr)
 	out.ready()
+	fmt.Print(out.homeNotice())
 	printSharingBlock(os.Stdout, cfg, share, out.isTTY)
 
 	if notice, warning := exposureNotice(cfg, pinAuth.Required(), out.bold, out.reset); notice != "" {

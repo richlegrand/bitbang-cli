@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 )
 
 // The known-hosts table lives at ~/.bitbang/devices.json and remembers every
@@ -78,13 +80,7 @@ func looksLikeDeviceName(arg string) bool {
 
 // bitbangDir returns ~/.bitbang. The device table is shared across all program
 // names, so it does not live under identity's per-program directory.
-func bitbangDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return filepath.Join(home, ".bitbang"), nil
-}
+func bitbangDir() (string, error) { return bbhome.Root() }
 
 func devicesPath() (string, error) {
 	dir, err := bitbangDir()

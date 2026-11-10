@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/richlegrand/bitbang-cli/internal/bbhome"
 )
 
 // State is the on-disk record of a running share. The worker writes it
@@ -53,11 +55,11 @@ type State struct {
 
 // BaseDir is where per-share state directories live.
 func BaseDir() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := bbhome.Root()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".bitbang", "shares"), nil
+	return filepath.Join(root, "shares"), nil
 }
 
 // Dir returns the state directory for a target hash.
