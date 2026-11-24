@@ -114,10 +114,25 @@ def test_a_reader_that_stops_stops_the_target(proxy_url, browser_context, reques
         window.__slowReader = reader;  // keep it, unread
         return got;
     }''')
-    time.sleep(4)
-    first = _stats('slow')['yielded']
+    # Wait for the read-ahead to fill before judging. On a local path that
+    # takes a few seconds; across the internet it can take far longer -- in a
+    # full run against bitba.ng (2026-11-23) the target was still climbing at
+    # about 2.5 MiB/s, 24 MiB at 8 s and 49 MiB 10 s later, toward a bound it
+    # was allowed to reach. Settled is two samples 2 s apart that agree;
+    # whether it then stays put is what the assertions below check. Past the
+    # bound there is nothing to wait for: the assertion below has failed.
+    samples = [_stats('slow')['yielded']]
+    deadline = time.time() + 60
+    while time.time() < deadline and samples[-1] <= READ_AHEAD_BOUND:
+        time.sleep(2)
+        samples.append(_stats('slow')['yielded'])
+        if samples[-1] == samples[-2]:
+            break
+    first = samples[-1]
     time.sleep(10)
     second = _stats('slow')['yielded']
+    print(f'target yielded (MiB, every 2 s until settled): '
+          f'{[round(s / 2**20) for s in samples]}, then {second / 2**20:.0f} 10 s later')
     arrived = _arrived(page)
     page.close()
 
