@@ -1,16 +1,18 @@
-"""The messages a device page exchanges with bootstrap.js.
+"""The messages a device page exchanges with the browser runtime.
 
-A device page runs in a sandboxed iframe: it cannot move the top-level tab
-and never sees the access code, so it asks bootstrap.js, the top frame, by
-postMessage. And bootstrap.js reports upload progress back to it on a
-BroadcastChannel. Those names are an API between the server and this CLI,
+A device page runs in a sandboxed iframe, in an origin of its own: it cannot
+move the top-level tab and never sees the access code, so it asks by
+postMessage -- its parent, the connection frame, relays the request to
+bitba.ng's page, which holds the code. And the connection frame reports
+upload progress back to it on a BroadcastChannel. Those names are an API
+between the server and this CLI,
 and the two ship separately -- an installed CLI has to keep working against
 a new server. They were renamed on the server once (2026-09-30), the rest
 of this suite still passed, and the cap bar, the proxy page's Go button and
 the file browser's progress bar all silently stopped working.
 
-So each test drives the real control and checks for the effect only
-bootstrap.js can produce:
+So each test drives the real control and checks for the effect only the
+runtime can produce:
 
     bb-open-cap       cap-bar menu entry -> a new tab at /<uid>#<code><path>
     bb-open-cap       proxy page's Go    -> this tab moves to the target
@@ -21,6 +23,8 @@ bootstrap.js can produce:
 import os
 
 import pytest
+
+from .frames import device_frame, device_frame_element
 
 
 def code_of(url):
@@ -40,20 +44,20 @@ def serve_listener(listener, test_server, tmp_path_factory):
 def test_cap_bar_entry_opens_a_new_tab(serve_listener, browser_context):
     page = browser_context.new_page()
     page.goto(serve_listener.url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#bb-ham').click(timeout=20000)
 
     with page.expect_popup(timeout=15000) as popup_info:
         frame.locator('#bb-menu a', has_text='Proxy').click()
     popup = popup_info.value
 
-    # Only bootstrap.js knows the code, so a URL carrying it means the
+    # Only bitba.ng's page knows the code, so a URL carrying it means the
     # message was heard and acted on -- not just that a link was followed.
     code = code_of(serve_listener.url)
     assert popup.url.endswith('#' + code + '/proxy/'), popup.url
 
     # And the tab it opened is a working session showing that page.
-    popup.frame_locator('#device-frame').locator('#target').wait_for(timeout=30000)
+    device_frame(popup).locator('#target').wait_for(timeout=30000)
     popup.close()
     page.close()
 
@@ -61,7 +65,7 @@ def test_cap_bar_entry_opens_a_new_tab(serve_listener, browser_context):
 def test_proxy_go_moves_this_tab(serve_listener, target_app, browser_context):
     page = browser_context.new_page()
     page.goto(serve_listener.url + '/proxy/', wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#target').fill(target_app, timeout=30000)
     frame.locator('button', has_text='Go').click()
 
@@ -69,7 +73,7 @@ def test_proxy_go_moves_this_tab(serve_listener, target_app, browser_context):
     page.wait_for_url('**#' + code + '/' + target_app + '/', timeout=15000)
 
     # The tab came back up as a session on the target app.
-    heading = page.frame_locator('#device-frame').locator('#heading')
+    heading = device_frame(page).locator('#heading')
     heading.wait_for(timeout=30000)
     assert heading.text_content() == 'Hello from Proxy Target'
     page.close()
@@ -89,11 +93,10 @@ def test_upload_progress_reaches_the_file_browser(upload_listener, browser_conte
     l, shared = upload_listener
     page = browser_context.new_page()
     page.goto(l.url, wait_until='networkidle')
-    frame_el = page.frame_locator('#device-frame')
+    frame_el = device_frame(page)
     frame_el.locator('body[data-upload-enabled="1"]').wait_for(timeout=20000)
-    # From the element, not by URL: xhr-shim strips /__device__/<sid> out
-    # of the frame's address.
-    frame = page.locator('#device-frame').element_handle().content_frame()
+    # The Frame itself, from the element, for evaluate().
+    frame = device_frame_element(page).element_handle().content_frame()
 
     # Record, from inside the device page, what the progress channel
     # carried and what the page did with it. The page's own reaction is the

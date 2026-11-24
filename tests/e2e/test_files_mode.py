@@ -9,6 +9,8 @@ import os
 
 import pytest
 
+from .frames import device_frame
+
 
 @pytest.fixture(scope='module')
 def files_url(listener, test_server, tmp_path_factory):
@@ -24,7 +26,7 @@ def files_url(listener, test_server, tmp_path_factory):
 def test_file_browser_lists_the_share(files_url, browser_context):
     page = browser_context.new_page()
     page.goto(files_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=20000)
     assert 'hello.txt' in frame.locator('body').inner_text()
     page.close()
@@ -36,7 +38,7 @@ def test_file_contents_download(files_url, browser_context):
     is wired up."""
     page = browser_context.new_page()
     page.goto(files_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body').wait_for(timeout=20000)
     body = frame.locator('body').evaluate(
         "async () => (await fetch('api/download?path=hello.txt')).text()"
@@ -62,7 +64,7 @@ def test_no_upload_button_without_files_upload(files_url, browser_context):
     offering an upload that cannot happen. Reported as issue #37."""
     page = browser_context.new_page()
     page.goto(files_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     # body[data-upload-enabled] appears only once api/info has been
     # applied, so an absent button here means "the listener said no",
     # not "the page had not finished loading".
@@ -74,7 +76,7 @@ def test_no_upload_button_without_files_upload(files_url, browser_context):
 def test_upload_button_with_files_upload(upload_url, browser_context):
     page = browser_context.new_page()
     page.goto(upload_url, wait_until='networkidle')
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('body[data-upload-enabled="1"]').wait_for(timeout=20000)
     frame.locator('.upload-btn').wait_for(timeout=20000)
     assert frame.locator('.upload-btn').count() == 1

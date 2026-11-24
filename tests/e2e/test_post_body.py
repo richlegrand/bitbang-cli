@@ -2,13 +2,15 @@
 
 import json
 
+from .frames import device_frame
+
 
 def test_post_json_body(proxy_url, browser_context):
     """JSON POST body arrives at target through proxy."""
     page = browser_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
 
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=15000)
 
     result = frame.locator('body').evaluate('''() => {
@@ -29,7 +31,7 @@ def test_post_form_body(proxy_url, browser_context):
     page = browser_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
 
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=15000)
 
     result = frame.locator('body').evaluate('''() => {
@@ -49,7 +51,7 @@ def test_host_header_rewritten(proxy_url, browser_context):
     page = browser_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
 
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=15000)
 
     result = frame.locator('body').evaluate('''() => {

@@ -12,6 +12,8 @@ import time
 
 import pytest
 
+from .frames import device_frame
+
 # linkPoll in cmd/bitbang/serve_links.go is one minute, so a link that
 # lapses shortly after it is used takes up to that long to be noticed.
 POLL_SECONDS = 60
@@ -76,7 +78,7 @@ def test_expiry_closes_a_session_already_open(expiring, browser_context):
 
     page = browser_context.new_page()
     page.goto(urls['shortlived'], wait_until='networkidle')
-    page.frame_locator('#device-frame').locator("text=hello.txt").wait_for(timeout=30000)
+    device_frame(page).locator("text=hello.txt").wait_for(timeout=30000)
 
     # Live now. Wait out the expiry plus a full poll interval.
     time.sleep(45 + POLL_SECONDS + 15)

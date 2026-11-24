@@ -17,9 +17,11 @@ package peer
 import (
 	"io"
 
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -142,6 +144,11 @@ type Connection struct {
 	// We hash it and send hash(nonce) on stream 0 once the DC opens, proving
 	// to the browser that we hold the private key for this UID's pubkey.
 	nonce []byte
+	// challenge is the 16 random bytes this connection's offer carried. A
+	// payload that names it is good for this connection only; HandleAnswer
+	// clears it once used, so a second answer can't reuse it either. Nil in
+	// pair mode, whose offer carries none.
+	challenge []byte
 	// verifyFailed is set true if HandleAnswer detects a fingerprint
 	// mismatch (or any other reason to reject). The OnOpen callback checks
 	// this before sending the nonce-hash frame; on failure it closes the
@@ -376,12 +383,27 @@ func setupConnection(s connSetup) (*Connection, error) {
 	// internal/client) buffer remote candidates that arrive before
 	// setRemoteDescription finishes, so the candidate stream is safe to
 	// start before the offer has even been processed.
-	s.sig.Send(signaling.Message{
+	offerMsg := signaling.Message{
 		"type":      "offer",
 		"client_id": s.clientID,
 		"sdp":       pc.LocalDescription().SDP,
 		"streams":   map[string]interface{}{},
-	})
+	}
+	// The device challenge (bitbang-docs/device-origins.md): fresh for every
+	// offer, so the payload that answers it is good for this connection
+	// only. Not in pair mode, which carries no encrypted payload at all.
+	if !s.pairingMode {
+		challenge := make([]byte, ChallengeLen)
+		if _, err := rand.Read(challenge); err != nil {
+			pc.Close()
+			return nil, fmt.Errorf("challenge: %w", err)
+		}
+		conn.mu.Lock()
+		conn.challenge = challenge
+		conn.mu.Unlock()
+		offerMsg["challenge"] = base64.StdEncoding.EncodeToString(challenge)
+	}
+	s.sig.Send(offerMsg)
 
 	return conn, nil
 }
@@ -491,9 +513,10 @@ func handleRequestOnOpen(conn *Connection, dc *webrtc.DataChannel) {
 // runs the bidirectional-verify decrypt step.
 //
 // encryptedRequestB64 is the base64 ciphertext the browser sent alongside its
-// SDP — RSA-OAEP/SHA-256 of {fingerprint, nonce} encrypted to this device's
-// public key. We decrypt, confirm the fingerprint claim matches the
-// fingerprint in the SDP, and stash the nonce so it can be hashed and
+// SDP — RSA-OAEP/SHA-256 of the verify payload (verifyRequest) encrypted to
+// this device's public key. We decrypt, check the code, confirm the payload
+// is bound to this connection -- the fingerprint in the SDP, and the
+// challenge this connection's offer issued -- and stash the nonce so it can be hashed and
 // returned on stream 0 the moment the data channel opens. On any failure
 // (missing payload, decrypt error, fingerprint mismatch) we mark the
 // connection as verify-failed; the OnOpen callback will then close without
@@ -527,11 +550,14 @@ func (c *Connection) HandleAnswer(sdp, encryptedRequestB64 string) error {
 		return fmt.Errorf("decrypt encrypted_request: %w", err)
 	}
 
-	var req struct {
-		Fingerprint string `json:"fingerprint"`
-		Nonce       string `json:"nonce"`
-		Code        string `json:"code"`
-	}
+	// The challenge is spent by this answer whatever happens to it: taken
+	// out before anything can fail, so no second answer can name it.
+	c.mu.Lock()
+	issued := c.challenge
+	c.challenge = nil
+	c.mu.Unlock()
+
+	var req verifyRequest
 	if err := json.Unmarshal(plaintext, &req); err != nil {
 		c.markVerifyFailed()
 		return fmt.Errorf("parse encrypted_request: %w", err)
@@ -569,14 +595,15 @@ func (c *Connection) HandleAnswer(sdp, encryptedRequestB64 string) error {
 		return fmt.Errorf("decode nonce: %w", err)
 	}
 
-	actual := extractFingerprint(sdp)
-	if actual == "" {
+	// Bound to this connection: the answer's own fingerprint, and the
+	// challenge this connection's offer issued. The fingerprint in the SDP
+	// is the one pion's DTLS then holds the connection to.
+	switch err := req.checkBinding(extractFingerprint(sdp), issued); {
+	case errors.Is(err, errReplayable):
+		log.Printf("%s answered without the challenge (an older connector); its payload is replayable", c.ClientID)
+	case err != nil:
 		c.markVerifyFailed()
-		return fmt.Errorf("no sha-256 fingerprint in answer SDP")
-	}
-	if !fingerprintsEqual(actual, req.Fingerprint) {
-		c.markVerifyFailed()
-		return fmt.Errorf("DTLS fingerprint mismatch (browser claimed %s, SDP has %s) — possible rogue relay", req.Fingerprint, actual)
+		return err
 	}
 
 	c.mu.Lock()

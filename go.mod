@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/creack/pty v1.1.24
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/pion/logging v0.2.4
 	github.com/pion/mdns/v2 v2.1.0
 	github.com/pion/turn/v4 v4.1.4

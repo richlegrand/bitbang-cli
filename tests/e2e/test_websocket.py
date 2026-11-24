@@ -1,12 +1,13 @@
 """Test WebSocket echo through the proxy (ws-shim.js)."""
 
+from .frames import device_frame
 
 def test_websocket_echo(proxy_url, browser_context):
     """WebSocket messages round-trip through the proxy via ws-shim."""
     page = browser_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
 
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=15000)
 
     # Open a WebSocket, send a message, verify the echo
@@ -36,7 +37,7 @@ def test_websocket_multiple_messages(proxy_url, browser_context):
     page = browser_context.new_page()
     page.goto(proxy_url, wait_until='networkidle')
 
-    frame = page.frame_locator('#device-frame')
+    frame = device_frame(page)
     frame.locator('#heading').wait_for(timeout=15000)
 
     result = frame.locator('body').evaluate('''() => {
